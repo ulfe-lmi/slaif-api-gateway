@@ -2588,3 +2588,140 @@ suppressed by the `{% if demo_admin %}` template branch itself,
 which renders the fixed "NOT available to this copy" line instead
 of the normal "shown as" line. This section states the mechanism
 correctly; it is a documentation correction, not a runtime change.
+
+
+## Key calibration / clone read pages (objective 224-q)
+
+224-q (same PR #383) opens THREE more existing admin GUI paths as
+demo-only exact GETs, admitted in the central gate by exact shape
+only: `/admin/keys/<canonical-uuid>/calibration`,
+`/admin/keys/<canonical-uuid>/clone` and
+`/admin/keys/<canonical-uuid>/clone/receipts`, where the ID must be a
+lowercase dashed 8-4-4-4-12 UUID and the suffix exact, with no extra
+path components. Malformed, uppercase, undashed or source-like IDs
+and every near miss (extra segments, trailing slashes, the
+`summary.json`/`configuration.json` attachment GETs, and every
+`preview`/`create-template`/`review`/`apply` subpath) stay 404 BEFORE
+routing; every unsafe `/admin` method remains the unchanged pre-body
+quiet 204 cut. The NORMAL read-only handlers, routes and normal-admin
+template output are unchanged - the gate stores the verified
+request-local copy sessionmaker and the fictional admin context on
+`request.state`, and the normal handlers use them exactly as they do
+for every other admitted DB-backed section (the request-local copy
+binding is the only copy a demo request may use; a demo request
+without it fails closed).
+
+The three GETs are read-only by construction and were verified
+against the copied rows only: the calibration form GET loads the
+copied key detail and fixed form defaults; the clone form GET loads
+the copied key detail, runs the existing pure `build_plan` eligibility
+probe (which mutates nothing and writes no audit row) and the
+SELECT-only owner/cohort record choices; the receipts GET loads the
+copied key detail and, only with a present `operation` selector, the
+explicitly read-only receipt projection (no lock, no clone, no
+audit, no redisplayed plaintext). Copied key/owner/cohort/receipt
+rows are the only dynamic data; no source DB, provider, mail, Redis,
+file custody or background job is reached, and the demo process
+intentionally carries no live configuration (the fixed neutral
+display settings are the only settings in the process).
+
+Narrow `{% if demo_admin %}` template notes (the demo banner stays
+visible and every response is `private, no-store`):
+
+* the key detail page now shows the three admitted read links in
+  demo mode (calibration for trusted-calibration keys; clone and
+  clone receipts for any key detail) with a demo note that those
+  pages are read-only views of data frozen at snapshot time and that
+  their forms are illustrative; the non-admitted action links
+  (Codex compatibility, replay maintenance, the configuration JSON
+  download) stay hidden in demo mode;
+* the calibration form states that the source key data is a copy
+  frozen at snapshot time and that the preview form is ILLUSTRATIVE -
+  submitting has NO effect (no calibration preview, key template,
+  participant key, route, or pricing is created) and no live
+  configuration is read;
+* the clone form states that the source key and owner/cohort choices
+  are copied rows frozen at snapshot time (their timestamps, limits
+  and statuses are as captured in that snapshot) and that the
+  eligibility line is COMPUTED FOR THIS COPIED SNAPSHOT AT VIEW TIME
+  from those frozen rows only - not a live operational eligibility
+  decision; the form is illustrative and submitting has NO effect;
+* the receipts page states that any outcome is HISTORICAL, recovered
+  from the copy's receipt rows, and that a not-found or unknown
+  outcome never implies anything about source operations outside the
+  snapshot; the normal guidance that suggests retrying a reviewed
+  plan, resubmitting a delivery or rotating a key is suppressed in
+  demo mode (kept verbatim for normal renders).
+
+**Sanitizer limitation (224-q).** Clone receipts live in the
+`metadata` column of `gateway_keys`, and the current 222 sanitizer
+maps that column to an empty value (J0). A real worker-built demo
+copy therefore carries NO historical clone receipts, and the
+receipts page on a real snapshot always renders the honest
+not-found/help state (never implying anything about source
+operations outside the snapshot). The 224-q receipts evidence
+(mocked-ASGI fake projections plus the target-only owned-PG
+insertion) proves route/gate/query-law transport and the honesty of
+the not-found state only - NOT receipt availability in a real
+snapshot. A bounded sanitizer projection repair that preserves
+sanitized clone receipts is a separately ordered follow-up and is
+required before objective 224 can be complete.
+
+A copied key may be unsupported for calibration or cloning: the
+existing safe refusal / eligibility warning renders instead of a
+false success. Query handling stays bounded at the gate (raw bytes,
+no percent-decode): the calibration and clone form GETs define NO
+query parameters in demo and refuse ANY query string with the fixed
+default-denied 404 BEFORE session resolution, routing or echo; the
+receipts GET accepts zero parameters or exactly ONE raw
+`operation=<value>` selector, with the whole raw query checked
+against a small byte ceiling before any split and the value bounded
+at 64 bytes - duplicates, extra or unknown parameters and overlong
+or credential-shaped values refuse (the handler additionally
+redacts recognized credential shapes and never uses them as
+authority). No plaintext key material, one-time secret, original
+source ID, raw metadata or unmasked personal identity is exposed.
+
+### Evidence (224-q)
+
+* Focused unit (mocked ASGI / template-level, no database; the new
+  `test_q_*` tests in `test_demo_web.py` and
+  `test_admin_key_actions_templates.py` passed, exit 0): the three
+  exact shapes admitted (no-session entry redirect) and every
+  near-miss/malformed ID/subpath 404; the closed-set inventory
+  updated with the three admitted GETs; the query law through ASGI
+  with a verified session (calibration/clone ANY query fixed 404;
+  receipts zero or exactly one bounded `operation` admitted, proven
+  by the handler-rendered page; duplicate/extra/unknown/overlong
+  refused; the raw `?` byte form httpx would normalize away refused
+  via a raw ASGI scope; oversized whole-query beyond the raw ceiling
+  refused before any split); every unsafe method on the page paths
+  and the preview/create-template/review/apply subpaths the quiet
+  204 cut with a 200 KB body never parsed (anonymous POST 404);
+  zero-active 404; the demo key-detail rendering (admitted read
+  links + demo note; non-admitted links hidden) and the normal
+  rendering unchanged; the calibration demo banner and the existing
+  safe 400 refusal for non-trusted copied keys; the clone form demo
+  banner with the AT-VIEW-TIME eligibility label; the receipts demo
+  banner and the honest created / not-found / projection-error
+  outcomes with the retry guidance suppressed in demo and preserved
+  in normal renders.
+* Owned PostgreSQL/browser fixture (owned PG16 source/target, real
+  worker snapshot, real Chromium; target-side insertion of TWO
+  test-only key rows into copy A - labeled transport-only evidence,
+  NOT 223/222 source capture; the configured-file installed proof
+  remains objective 225): the base-key clone/receipts pages render
+  with the demo banner; the calibration page is purpose-gated
+  (200 banner for a trusted-calibration copied key, the existing
+  safe 400 refusal otherwise); the gate query law (404s for
+  unexpected, duplicate and overlong selectors); the two inserted
+  rows render positively in session A (trusted key detail link +
+  calibration page with the frozen/illustrative banner; standard key
+  clone form with the AT-VIEW-TIME label; receipts help page and the
+  honest not-found for an absent operation) with no copy name,
+  reader role or DSN fragment; session B (its own copy, no inserted
+  rows) gets honest handler-level 404s (copy isolation); POST on the
+  page paths the quiet 204 cut; exact-ID cleanup re-proven by
+  404s; the whole phase leaves source and both copies' counts
+  unchanged; the real-Chromium key detail shows the admitted read
+  links and the receipts page renders the honest help/banner state.

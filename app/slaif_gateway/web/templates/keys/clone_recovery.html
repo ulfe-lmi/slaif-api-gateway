@@ -16,6 +16,16 @@
     </div>
   </header>
 
+  {% if demo_admin %}
+  <div class="admin-flash" role="status">
+    <strong>Sanitized demo snapshot display:</strong> any outcome
+    here is HISTORICAL, recovered from this copy's receipt rows - a
+    not-found or unknown outcome never implies anything about source
+    operations outside this snapshot, and no retry, resubmit, or
+    rotation action is available from this demo page.
+  </div>
+  {% endif %}
+
   <section class="action-panel" aria-labelledby="recovery-form-heading">
     <h2 id="recovery-form-heading">Operation</h2>
     <form method="get" action="/admin/keys/{{ key.id }}/clone/receipts">
@@ -40,7 +50,7 @@
   <section class="action-panel" aria-labelledby="recovery-error-heading">
     <h2 id="recovery-error-heading">Outcome</h2>
     <p class="warning-text" role="alert">{{ projection_error }}</p>
-    <p class="muted">The outcome is unknown from this view. Nothing is assumed about the operation; do not start a guessed new clone - re-running the SAME reviewed plan (while its state is still valid) is the safe path, because the core deduplicates on the operation UUID.</p>
+    <p class="muted">{% if demo_admin %}The outcome is unknown from this view. Nothing is assumed about the operation; no retry guidance is offered in this demo snapshot.{% else %}The outcome is unknown from this view. Nothing is assumed about the operation; do not start a guessed new clone - re-running the SAME reviewed plan (while its state is still valid) is the safe path, because the core deduplicates on the operation UUID.{% endif %}</p>
   </section>
   {% elif projection %}
   <section class="action-panel" aria-labelledby="recovery-outcome-heading">
@@ -49,9 +59,11 @@
     <p class="muted">
       No clone receipt matches this source and operation. NOTHING is assumed: the operation may have been refused, rolled back, or never started from this source.
     </p>
+    {% if not demo_admin %}
     <p class="muted">
       If you reviewed a plan but lost the result, re-running the SAME reviewed plan is safe: the core deduplicates on the operation UUID and returns the existing target instead of creating a second key. A new review (new operation UUID) is needed only for a genuinely new clone.
     </p>
+    {% endif %}
     {% else %}
     <p class="muted">This operation completed and created exactly one target key.</p>
     <dl>
@@ -80,9 +92,7 @@
       <dt>Policy fingerprint</dt>
       <dd><code>{{ projection.policy_fingerprint }}</code></dd>
     </dl>
-    <p class="muted">
-      The one-time plaintext is never redisplayed. Retry a still-unconsumed pending delivery through the existing one-time sendability flow (see the linked delivery), or rotate the key.
-    </p>
+    <p class="muted">The one-time plaintext is never redisplayed.{% if not demo_admin %} Retry a still-unconsumed pending delivery through the existing one-time sendability flow (see the linked delivery), or rotate the key.{% endif %}</p>
     {% endif %}
   </section>
   {% endif %}

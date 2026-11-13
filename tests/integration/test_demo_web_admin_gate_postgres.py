@@ -666,6 +666,22 @@ def test_e2e_admin_gate_two_sessions_distinct_copies(
                             "/admin/accounts/revoke",
                             "/admin/key-batch/plan",
                             f"/admin/keys/{key_id}/edit",
+                            # 224-q: the exact /calibration, /clone and
+                            # /clone/receipts GETs are now ADMITTED
+                            # (proven just below); near-misses and the
+                            # POST/JSON subpaths stay denied.
+                            f"/admin/keys/{key_id}/clones",
+                            f"/admin/keys/{key_id}/calibrations",
+                            f"/admin/keys/{key_id}/calibration/",
+                            f"/admin/keys/{key_id}/calibration/preview",
+                            f"/admin/keys/{key_id}/calibration/summary.json",
+                            f"/admin/keys/{key_id}/calibration/create-template",
+                            f"/admin/keys/{key_id}/configuration.json",
+                            f"/admin/keys/{key_id}/clone/",
+                            f"/admin/keys/{key_id}/clone/review",
+                            f"/admin/keys/{key_id}/clone/apply",
+                            f"/admin/keys/{key_id}/clone/receipts/",
+                            f"/admin/keys/{key_id}/clone/receipts/extra",
                             f"/admin/templates/{template_id}/edit",
                             f"/admin/routes/{route_id}/configuration",
                             f"/admin/routes/{route_id}/codex-profile/profile",
@@ -724,6 +740,73 @@ def test_e2e_admin_gate_two_sessions_distinct_copies(
                         "No captured job records in this snapshot"
                         in " ".join(r.text.split())
                     )
+
+                    # 224-q: the three admitted key read GETs for this
+                    # fixture's copied key. The clone form and the
+                    # receipts page render for ANY existing copied key;
+                    # the calibration page is purpose-gated and shows
+                    # the existing safe 400 refusal for non-trusted
+                    # copied keys (a safe refusal, never a false
+                    # success).
+                    async def _q_base_purpose(copy_db: str) -> str:
+                        s = await asyncpg.connect(**_conn_kwargs(
+                            san_env.target["host"], san_env.target["port"],
+                            san_env.target["user"], san_env.target["password"],
+                            copy_db,
+                        ))
+                        try:
+                            return (await s.fetchrow(
+                                "SELECT key_purpose FROM gateway_keys "
+                                "WHERE id = $1",
+                                key_id,
+                            ))["key_purpose"]
+                        finally:
+                            await s.close()
+
+                    base_purpose = await _q_base_purpose(target)
+                    r = await client.get(f"/admin/keys/{key_id}/clone")
+                    assert r.status_code == 200
+                    assert r.headers["cache-control"] == "private, no-store"
+                    assert (
+                        "Sanitized demo snapshot display"
+                        in " ".join(r.text.split())
+                    )
+                    r = await client.get(f"/admin/keys/{key_id}/clone/receipts")
+                    assert r.status_code == 200
+                    assert r.headers["cache-control"] == "private, no-store"
+                    assert (
+                        "Sanitized demo snapshot display"
+                        in " ".join(r.text.split())
+                    )
+                    r = await client.get(f"/admin/keys/{key_id}/calibration")
+                    if base_purpose == "trusted_calibration":
+                        assert r.status_code == 200
+                        assert (
+                            "Sanitized demo snapshot display"
+                            in " ".join(r.text.split())
+                        )
+                    else:
+                        assert r.status_code == 400
+                        assert "trusted calibration keys" in r.text
+                    # The query law through the REAL gate: unexpected
+                    # queries are fixed 404s, the receipts selector is
+                    # bounded (extra/duplicate/overlong refuse).
+                    for q in (
+                        f"/admin/keys/{key_id}/calibration?x=1",
+                        f"/admin/keys/{key_id}/calibration?operation=x",
+                        f"/admin/keys/{key_id}/clone?x=1",
+                        f"/admin/keys/{key_id}/clone/receipts?x=1",
+                        f"/admin/keys/{key_id}/clone/receipts"
+                        "?operation=12345678-9abc-4def-8123-456789abcdef"
+                        "&operation=12345678-9abc-4def-8123-456789abcdef",
+                        f"/admin/keys/{key_id}/clone/receipts"
+                        "?operation=12345678-9abc-4def-8123-456789abcdef"
+                        "&x=1",
+                        f"/admin/keys/{key_id}/clone/receipts?operation="
+                        + "a" * 65,
+                    ):
+                        r = await client.get(q)
+                        assert r.status_code == 404, q
 
                     # --- distinct copies: B renders exactly one more -----
                     # institution row than A (the 222-fictionalized marker).
@@ -1549,6 +1632,173 @@ def test_e2e_admin_gate_two_sessions_distinct_copies(
                             in " ".join(r.text.split())
                         )
 
+                    # --- 224-q: key read pages over the verified copy ---
+                    # TARGET-SIDE INSERTION (honest label): the test
+                    # inserts TWO test-only key rows into copy A's
+                    # gateway_keys through the owned target-owner
+                    # connection. Each row is copied structurally from
+                    # an already-sanitized fixture key row (SELECT *
+                    # with id/public_key_id/token_hash/purpose
+                    # overrides): one trusted_calibration key (for the
+                    # calibration page) and one standard key (for the
+                    # clone/receipts pages). This proves real
+                    # route/handler/READ-ONLY transport over the
+                    # verified copy and the gate-bound request-local
+                    # session - NOT 223/222 source capture or worker
+                    # publication (the configured-file installed proof
+                    # remains objective 225).
+                    _q_cal_key = str(uuid.uuid4())
+                    _q_std_key = str(uuid.uuid4())
+
+                    async def _q_insert_key(new_id: str, purpose: str) -> None:
+                        s = await _target_conn()
+                        try:
+                            row = await s.fetchrow(
+                                "SELECT * FROM gateway_keys "
+                                "ORDER BY created_at, id LIMIT 1"
+                            )
+                            assert row is not None
+                            vals = dict(row)
+                            vals["id"] = new_id
+                            vals["public_key_id"] = f"224q-{purpose}-public"
+                            vals["token_hash"] = (
+                                "224q-" + _art_hashlib.sha256(
+                                    new_id.encode()
+                                ).hexdigest()
+                            )
+                            vals["key_purpose"] = purpose
+                            # The closed purpose/policy-mode pair
+                            # constraint: a trusted_calibration key
+                            # must carry the discovery mode.
+                            vals["capability_policy_mode"] = (
+                                "trusted_calibration_discovery"
+                                if purpose == "trusted_calibration"
+                                else "standard"
+                            )
+                            cols = list(vals.keys())
+                            ph = ", ".join(
+                                f"${i + 1}" for i in range(len(cols))
+                            )
+                            await s.execute(
+                                f"INSERT INTO gateway_keys "
+                                f"({', '.join(cols)}) VALUES ({ph})",
+                                *[vals[c] for c in cols],
+                            )
+                        finally:
+                            await s.close()
+
+                    try:
+                        await _q_insert_key(_q_cal_key, "trusted_calibration")
+                        await _q_insert_key(_q_std_key, "standard")
+                        # Session A: the trusted-calibration key detail
+                        # shows the admitted calibration read link...
+                        r = await client_a.get(f"/admin/keys/{_q_cal_key}")
+                        assert r.status_code == 200
+                        assert (
+                            f'href="/admin/keys/{_q_cal_key}/calibration"'
+                        ) in r.text
+                        # ...and the calibration page renders with the
+                        # demo banner (frozen copy data, illustrative
+                        # preview form, no live configuration claim).
+                        r = await client_a.get(
+                            f"/admin/keys/{_q_cal_key}/calibration"
+                        )
+                        assert r.status_code == 200
+                        assert r.headers["cache-control"] == "private, no-store"
+                        _q_text = " ".join(r.text.split())
+                        assert "Sanitized demo snapshot display" in _q_text
+                        assert "frozen at snapshot time" in _q_text
+                        assert "ILLUSTRATIVE" in _q_text
+                        assert "no live configuration is read" in _q_text
+                        # The standard key's clone form carries the
+                        # view-time eligibility label; the eligibility
+                        # VALUE is derived by the core build_plan over
+                        # the frozen copied rows (whatever it reports
+                        # is honest historical display state).
+                        r = await client_a.get(f"/admin/keys/{_q_std_key}/clone")
+                        assert r.status_code == 200
+                        _q_text = " ".join(r.text.split())
+                        assert "Sanitized demo snapshot display" in _q_text
+                        assert (
+                            "computed for this copied snapshot AT VIEW TIME"
+                            in _q_text
+                        )
+                        assert (
+                            "not a live operational eligibility decision"
+                            in _q_text
+                        )
+                        assert "Eligibility:" in _q_text
+                        # The receipts page (no selector): the demo
+                        # banner over the operation form...
+                        r = await client_a.get(
+                            f"/admin/keys/{_q_std_key}/clone/receipts"
+                        )
+                        assert r.status_code == 200
+                        assert (
+                            "HISTORICAL, recovered from this copy"
+                            in " ".join(r.text.split())
+                        )
+                        # ...and with an operation selector: the honest
+                        # historical not-found (NO receipt rows exist
+                        # in the copy; nothing is implied about source
+                        # operations outside the snapshot).
+                        r = await client_a.get(
+                            f"/admin/keys/{_q_std_key}/clone/receipts"
+                            f"?operation={uuid.uuid4()}"
+                        )
+                        assert r.status_code == 200
+                        assert (
+                            "NOTHING is assumed" in " ".join(r.text.split())
+                        )
+                        # Canaries: copy name, reader role and DSN
+                        # fragments never appear.
+                        assert target_a not in r.text
+                        assert str(env["reader_role"]) not in r.text
+                        # Session B: the SAME paths against its OWN copy
+                        # (which has NO inserted rows) are honest
+                        # handler-level 404s (copy isolation).
+                        for p in (
+                            f"/admin/keys/{_q_cal_key}",
+                            f"/admin/keys/{_q_cal_key}/calibration",
+                            f"/admin/keys/{_q_std_key}/clone",
+                            f"/admin/keys/{_q_std_key}/clone/receipts",
+                        ):
+                            r = await client_b.get(p)
+                            assert r.status_code == 404, p
+                        assert _q_cal_key not in r.text
+                        # The page paths are the SAME quiet 204 cut.
+                        for p in (
+                            f"/admin/keys/{_q_cal_key}/calibration",
+                            f"/admin/keys/{_q_std_key}/clone",
+                            f"/admin/keys/{_q_std_key}/clone/receipts",
+                        ):
+                            r = await client_a.post(
+                                p,
+                                content=b"x" * 200_000,
+                                headers={"content-type": "text/garbage"},
+                            )
+                            assert r.status_code == 204, p
+                            assert r.content == b""
+                    finally:
+                        # Remove EXACTLY the two test-inserted ids
+                        # (exact ids, never a prefix match - a
+                        # pre-existing key sharing nothing with them
+                        # must never be touched); the
+                        # worker-published state returns exactly.
+                        s = await _target_conn()
+                        await s.execute(
+                            "DELETE FROM gateway_keys "
+                            "WHERE id = ANY($1::uuid[])",
+                            [
+                                uuid.UUID(_q_cal_key),
+                                uuid.UUID(_q_std_key),
+                            ],
+                        )
+                        await s.close()
+                        # Cleanup proven: session A 404s again.
+                        r = await client_a.get(f"/admin/keys/{_q_cal_key}")
+                        assert r.status_code == 404
+
                     # --- operational POST families: quiet 204 no-ops -----
                     key_id = await _first_id(san_env, target_b, "gateway_keys")
                     for client in (client_a, client_b):
@@ -2045,6 +2295,41 @@ def test_browser_smoke_demo_copy_pages(
             _ex_page = page.content()
             assert "ILLUSTRATIVE demo-only form" in " ".join(_ex_page.split())
             assert "Database target" not in _ex_page  # no live claim
+            # 224-q: the admitted key read pages in the real browser.
+            # The fixture's copied key detail shows the admitted demo
+            # read links (clone + receipts; calibration only for
+            # trusted-calibration keys); the receipts page renders the
+            # honest help/banner state (the owned fixture carries no
+            # clone receipt rows; the positive projection is proven by
+            # owned-PG transport + mocked-ASGI unit coverage).
+            page.goto("/admin/keys")
+            _qk_href = page.locator(
+                'tbody a[href^="/admin/keys/"]'
+            ).first.get_attribute("href")
+            assert _qk_href, "the owned fixture must carry one copied key"
+            r = page.goto(_qk_href)
+            assert r is not None and r.status == 200
+            _qk_page = page.content()
+            assert "Demo preview:" in _qk_page
+            assert _qk_href + "/clone" in _qk_page
+            assert _qk_href + "/clone/receipts" in _qk_page
+            assert (
+                "read-only views of data frozen at snapshot time"
+                in " ".join(_qk_page.split())
+            )
+            r = page.goto(_qk_href + "/clone/receipts")
+            assert r is not None and r.status == 200
+            assert r.headers["cache-control"] == "private, no-store"
+            _qr_page = page.content()
+            assert (
+                "Sanitized demo snapshot display"
+                in " ".join(_qr_page.split())
+            )
+            assert (
+                "HISTORICAL, recovered from this copy"
+                in " ".join(_qr_page.split())
+            )
+            assert target not in _qr_page
             assert target not in content
             assert 'href="/admin/operations"' not in content  # still no nav item
             # ephemeral desktop-layout screenshot (run-owned /tmp path;

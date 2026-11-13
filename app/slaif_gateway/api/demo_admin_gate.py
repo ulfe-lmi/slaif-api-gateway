@@ -188,6 +188,30 @@ ADMITTED_CATALOG_COLLECT_PATH = "/admin/operations/catalog/collect"
 ADMITTED_CATALOG_REVIEW_PATH = "/admin/operations/catalog/review"
 ADMITTED_CATALOG_EXPORT_PATH = "/admin/operations/catalog/export-baseline"
 ADMITTED_CATALOG_JOBS_PATH = "/admin/operations/catalog/jobs/"
+# 224-q: the three exact key read-page GET shapes (canonical
+# lowercase dashed UUID + exact suffix, no extra path components):
+# calibration, clone and clone/receipts. Malformed/uppercase/
+# undashed/source-like IDs and every near miss stay 404 before
+# routing; the JSON attachment GETs and every submit/apply/preview/
+# retry POST stay refused by the existing laws.
+_KEY_CANONICAL_UUID = (
+    r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+)
+_KEY_READ_PAGE_RE = re.compile(
+    rf"/admin/keys/{_KEY_CANONICAL_UUID}(?:/calibration|/clone|/clone/receipts)\Z"
+)
+# 224-q receipts query-law bound: the optional `operation` selector
+# may be at most this many raw bytes (a canonical UUID is 36); longer
+# values are refused here so they are never echoed or used.
+_KEY_RECEIPTS_OPERATION_MAX_LEN = 64
+# 224-q raw query ceiling for the receipts page: the `operation=`
+# name (10 bytes) plus the 64-byte value bound. The WHOLE raw query
+# is length-checked BEFORE any split/parse, so a malformed or
+# oversized scope query is a fixed default-denied 404 without
+# allocation or echo.
+_KEY_READ_PAGE_QUERY_MAX_LEN = (
+    len(b"operation=") + _KEY_RECEIPTS_OPERATION_MAX_LEN
+)
 # 224-m: the exact canonical run-detail shape; near misses and
 # noncanonical/source IDs are never admitted.
 _CATALOG_RUN_DETAIL_RE = re.compile(
@@ -293,8 +317,47 @@ def _scope_path(scope: dict) -> str:
     return path if isinstance(path, str) else ""
 
 
+def _key_read_page_query_admitted(path: str, query_string: bytes) -> bool:
+    """The 224-q query law for the three admitted key read pages.
+
+    The calibration form and the clone form define NO query
+    parameters in the demo: ANY query string is refused. The clone
+    receipts page accepts ZERO parameters or exactly ONE
+    ``operation=<value>`` selector (canonical raw form, bounded
+    length); duplicates, extra or unknown parameters and overlong
+    values are refused. Every refusal is a plain default-denied 404
+    BEFORE session resolution, routing or any echo.
+
+    The whole raw query is also checked against a small byte ceiling
+    BEFORE it is split, so an oversized/malformed scope query is
+    refused without allocation or echo.
+    """
+    if not query_string:
+        return True
+    if not path.endswith("/clone/receipts"):
+        return False
+    if not isinstance(query_string, (bytes, bytearray)):
+        return False
+    if len(query_string) > _KEY_READ_PAGE_QUERY_MAX_LEN:
+        return False
+    pairs = query_string.split(b"&")
+    if len(pairs) != 1:
+        return False
+    name, _, value = pairs[0].partition(b"=")
+    if name != b"operation":
+        return False
+    return len(value) <= _KEY_RECEIPTS_OPERATION_MAX_LEN
+
+
 def _is_admitted_path(path: str) -> bool:
     """The exact closed 224-e/224-f/224-i/224-j/224-k GET admission law."""
+    return _is_admitted_path_with_query(path, b"")
+
+
+def _is_admitted_path_with_query(path: str, query_string: bytes) -> bool:
+    """The closed GET admission law; the 224-q key read pages also
+    carry the bounded query law (see ``_key_read_page_query_admitted``).
+    """
     if path in ADMITTED_DASHBOARD_PATHS or path in ADMITTED_LIST_PATHS:
         return True
     if path == ADMITTED_RECORD_CHOICES_PATH:
@@ -313,6 +376,10 @@ def _is_admitted_path(path: str) -> bool:
         or path == ADMITTED_CATALOG_JOBS_PATH
     ):
         return True
+    if _KEY_READ_PAGE_RE.fullmatch(path) is not None:
+        # 224-q: exact shape admitted only under the bounded query
+        # law (the receipts page's single optional `operation`).
+        return _key_read_page_query_admitted(path, query_string)
     if _CATALOG_RUN_DETAIL_RE.fullmatch(path) is not None:
         return True
     for prefix in ADMITTED_EDIT_FAMILY_PREFIXES:
@@ -509,7 +576,14 @@ class DemoAdminGate:
                 # dispatched to the production handler).
                 await _respond_login_redirect(send)
                 return
-            if _is_admitted_path(path):
+            # 224-q: the closed law also binds the raw query string
+            # (exact bytes, no percent-decode): only the clone
+            # receipts page's single optional `operation` selector may
+            # appear, bounded in raw length; everything else 404s
+            # before session resolution or routing.
+            if _is_admitted_path_with_query(
+                path, scope.get("query_string") or b""
+            ):
                 projection = await self._resolve_session(scope)
                 if projection is None:
                     await _respond_login_redirect(send)

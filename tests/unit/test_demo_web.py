@@ -1624,6 +1624,11 @@ def test_gate_admission_law_closed_sets():
                 "/admin/accounts/reset",
                 "/admin/key-batch",
                 "/admin/record-choices?kind=owner&q=x",
+                # 224-q: the three exact key read-page GETs
+                # (calibration, clone, clone/receipts).
+                f"/admin/keys/{KEY_UUID}/calibration",
+                f"/admin/keys/{KEY_UUID}/clone",
+                f"/admin/keys/{KEY_UUID}/clone/receipts",
             ):
                 r = await client.get(p)
                 assert r.status_code == 303, p
@@ -5823,5 +5828,242 @@ def test_index_links_224p_pages(monkeypatch):
             assert f'href="{P_REVIEW_URL}"' in r.text
             assert f'href="{P_EXPORT_URL}"' in r.text
             assert f'href="{P_JOBS_URL}"' in r.text
+
+    asyncio.run(run())
+
+
+# --- 224-q: demo key read pages (gate admission + query law) ---------------
+
+Q_CAL_URL = f"/admin/keys/{KEY_UUID}/calibration"
+Q_CLONE_URL = f"/admin/keys/{KEY_UUID}/clone"
+Q_RCPT_URL = f"/admin/keys/{KEY_UUID}/clone/receipts"
+Q_OP = "12345678-9abc-4def-8123-456789abcdef"
+
+
+def test_q_gate_admission_exact_paths():
+    async def run():
+        app = _app(FakeFacade())
+        async with _client(app) as client:
+            # The THREE exact read-page shapes are ADMITTED (no session
+            # -> demo entry redirect, the same law as the other
+            # admitted GETs)...
+            for p in (Q_CAL_URL, Q_CLONE_URL, Q_RCPT_URL):
+                r = await client.get(p)
+                assert r.status_code == 303, p
+                assert r.headers["location"] == "/fakeadmin/login"
+            # ...and every malformed/near-miss shape stays default-
+            # denied BEFORE routing: bad IDs, extra/missing segments,
+            # trailing slashes, the JSON attachment GETs, and every
+            # submit/apply/preview/retry POST subpath.
+            for p in (
+                f"/admin/keys/{KEY_UUID.upper()}/calibration",
+                "/admin/keys/0123456789abcdef0123456789abcdef/calibration",
+                f"/admin/keys/urn:uuid:{KEY_UUID}/clone",
+                f"/admin/keys/{KEY_UUID}/calibrations",
+                f"/admin/keys/{KEY_UUID}/clones",
+                f"/admin/keys/{KEY_UUID}/calibration/",
+                f"/admin/keys/{KEY_UUID}/calibration/extra",
+                f"/admin/keys/{KEY_UUID}/calibration/preview",
+                f"/admin/keys/{KEY_UUID}/calibration/summary.json",
+                f"/admin/keys/{KEY_UUID}/calibration/create-template",
+                f"/admin/keys/{KEY_UUID}/configuration.json",
+                f"/admin/keys/{KEY_UUID}/clone/",
+                f"/admin/keys/{KEY_UUID}/clone/review",
+                f"/admin/keys/{KEY_UUID}/clone/apply",
+                f"/admin/keys/{KEY_UUID}/clone/receipts/",
+                f"/admin/keys/{KEY_UUID}/clone/receipts/extra",
+            ):
+                r = await client.get(p)
+                assert r.status_code == 404, p
+
+    asyncio.run(run())
+
+
+def test_q_gate_query_law_through_asgi(monkeypatch):
+    """The receipts page's bounded `operation` law, through ASGI.
+
+    With a VERIFIED session: a gate-refused query is the gate's own
+    fixed JSON 404 BEFORE routing; an admitted query passes the gate
+    (session resolution + preflight) into the REAL handler, proven by
+    the handler-rendered page (here a controlled not-found page: the
+    key-detail seam reports the copied key missing). Positive
+    rendering is covered by the template units and the owned-PG
+    transport test.
+    """
+    from contextlib import asynccontextmanager as _q_acm
+
+    import slaif_gateway.api.admin_key_clone as _q_akc
+    from slaif_gateway.services.admin_key_dashboard import (
+        AdminKeyNotFoundError as _Q_AdminKeyNotFoundError,
+    )
+
+    @_q_acm
+    async def _q_missing_key_scope(_request):
+        class _Service:
+            async def get_key_detail(self, _key_id):
+                raise _Q_AdminKeyNotFoundError()
+
+        yield _Service()
+
+    monkeypatch.setattr(
+        _q_akc, "_admin_key_dashboard_service_scope", _q_missing_key_scope
+    )
+
+    async def run():
+        fake = FakeFacade()
+        fake.worker_target_db = COPY_OK
+        _preflight_case(monkeypatch, COPY_OK, "on")
+        app = _app(fake)
+
+        async def _raw_get(path: str, query: bytes):
+            """One raw ASGI GET: the query string is the EXACT bytes
+            (httpx would normalize a bare ``?`` away, so the gate's
+            byte law is proven here directly)."""
+            scope = {
+                "type": "http",
+                "asgi": {"version": "3.0"},
+                "http_version": "1.1",
+                "method": "GET",
+                "scheme": "https",
+                "path": path,
+                "raw_path": path.encode("ascii"),
+                "query_string": query,
+                "headers": [(b"host", b"demo.test")],
+                "client": ("127.0.0.1", 12345),
+                "server": ("demo.test", 443),
+                "app": app,
+                "state": {},
+            }
+            status = None
+            chunks: list[bytes] = []
+
+            async def _receive():
+                return {
+                    "type": "http.request",
+                    "body": b"",
+                    "more_body": False,
+                }
+
+            async def _send(message):
+                nonlocal status
+                if message["type"] == "http.response.start":
+                    status = message["status"]
+                elif message["type"] == "http.response.body":
+                    chunks.append(message.get("body") or b"")
+
+            await app(scope, _receive, _send)
+            assert status is not None
+            return status, b"".join(chunks)
+
+        async with _client(app) as client:
+            _session_cookie(client)
+            await _verified_session_client(fake, client)
+
+            def _gate_refused(status, body, label):
+                assert status == 404, label
+                # The gate's own fixed 404 (JSON), never a handler page.
+                assert b"Gateway key not found" not in body, label
+
+            def _gate_admitted(status, body, label):
+                # The REAL handler ran (gate session + preflight
+                # passed): its controlled not-found page, not the
+                # gate's JSON 404.
+                assert status == 404, label
+                assert b"Gateway key not found" in body, label
+
+            # calibration/clone define NO query parameters: ANY
+            # nonempty query is refused (404), including the receipts
+            # selector.
+            for base in (Q_CAL_URL, Q_CLONE_URL):
+                for q in ("?x=1", "?operation=" + Q_OP, "?x="):
+                    r = await client.get(base + q)
+                    _gate_refused(r.status_code, r.content, (base, q))
+            # The raw byte form httpx would normalize away (a bare
+            # ``?`` = nonempty query string): still refused.
+            for base in (Q_CAL_URL, Q_RCPT_URL):
+                status, body = await _raw_get(base, b"?")
+                _gate_refused(status, body, (base, b"?"))
+            # receipts: zero parameters or exactly ONE `operation`
+            # pair is admitted (the empty value = the help page, the
+            # existing normal-form semantics).
+            for q in ("", "?operation=" + Q_OP, "?operation="):
+                r = await client.get(Q_RCPT_URL + q)
+                _gate_admitted(r.status_code, r.content, q)
+            # Duplicate, extra or unknown parameters refuse.
+            for q in (
+                "?operation=" + Q_OP + "&operation=" + Q_OP,
+                "?operation=" + Q_OP + "&x=1",
+                "?x=1",
+            ):
+                r = await client.get(Q_RCPT_URL + q)
+                _gate_refused(r.status_code, r.content, q)
+            # An overlong value (65 > 64) refuses...
+            r = await client.get(Q_RCPT_URL + "?operation=" + "a" * 65)
+            _gate_refused(r.status_code, r.content, "overlong value")
+            # ...and an oversized WHOLE query (beyond the 72-byte raw
+            # ceiling) refuses before any split/parse.
+            r = await client.get(Q_RCPT_URL + "?operation=" + "a" * 70)
+            _gate_refused(r.status_code, r.content, "oversized query")
+            r = await client.get(Q_RCPT_URL + "?" + "x" * 200)
+            _gate_refused(r.status_code, r.content, "gibberish oversized")
+
+    asyncio.run(run())
+
+
+def test_q_unsafe_methods_quiet_noop_body_not_parsed():
+    async def run():
+        app = _app(FakeFacade())
+        async with _client(app) as client:
+            _session_cookie(client)
+            paths = (
+                Q_CAL_URL,
+                Q_CAL_URL + "/preview",
+                Q_CAL_URL + "/summary.json",
+                Q_CAL_URL + "/create-template",
+                Q_CLONE_URL,
+                Q_CLONE_URL + "/review",
+                Q_CLONE_URL + "/apply",
+                Q_RCPT_URL,
+            )
+            for p in paths:
+                for method in ("POST", "PUT", "PATCH", "DELETE"):
+                    # 200 KB garbage body: a 204 proves the body was
+                    # never parsed before the cut.
+                    r = await client.request(
+                        method,
+                        p,
+                        content=b"x" * 200_000,
+                        headers={"content-type": "text/garbage"},
+                    )
+                    assert r.status_code == 204, (p, method)
+                    assert r.content == b""
+        async with _client(app) as anon:
+            for p in (Q_CAL_URL, Q_CLONE_URL, Q_RCPT_URL):
+                r = await anon.post(
+                    p,
+                    content=b"y" * 200_000,
+                    headers={"content-type": "text/garbage"},
+                )
+                assert r.status_code == 404, p
+
+    asyncio.run(run())
+
+
+def test_q_zero_active_404():
+    async def run():
+        fake = FakeFacade()
+        fake.active = 0
+        app = _app(fake)
+        async with _client(app) as client:
+            _session_cookie(client)
+            for p in (Q_CAL_URL, Q_CLONE_URL, Q_RCPT_URL):
+                r = await client.get(p)
+                assert r.status_code == 404, p
+            r = await client.post(
+                Q_RCPT_URL,
+                content=b"z" * 100,
+                headers={"content-type": "text/garbage"},
+            )
+            assert r.status_code == 404
 
     asyncio.run(run())

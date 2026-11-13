@@ -1,5 +1,6 @@
 import re
 import uuid
+from contextlib import asynccontextmanager
 from dataclasses import asdict, replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -12,6 +13,10 @@ from slaif_gateway.db.models import AdminSession, AdminUser
 from slaif_gateway.main import create_app
 from slaif_gateway.schemas.admin_keys import AdminKeyDetail, AdminKeyListRow
 from slaif_gateway.services.admin_session_service import AdminSessionContext
+from slaif_gateway.services.key_clone_service import (
+    KeyCloneError,
+    KeyCloneReceiptProjection,
+)
 
 
 class _FakeSession:
@@ -526,3 +531,290 @@ def test_lazy_throttling_error_redisplay_escapes_invalid_value(monkeypatch) -> N
     assert marker not in response.text
     assert "&lt;script&gt;alert(185)&lt;/script&gt;" in response.text
     assert called is False
+
+
+# --- 224-q: demo-only key read-page branches ---------------------------------
+#
+# These emulate the demo gate's request-local fictional admin context
+# (the gate stores it on request.state before the handler runs) on top
+# of the EXISTING normal read-only handlers and templates. The copy
+# database seam is the same class-level fake the normal tests use;
+# positive copied-row transport is owned by the 224-q owned-PG test.
+
+Q_OP = "12345678-9abc-4def-8123-456789abcdef"
+
+
+def _q_demo_page_context(monkeypatch) -> None:
+    """Patch the page-context seam in BOTH admin route modules to the
+    gate's request-local fictional context (no cookie read in demo)."""
+    admin_user = AdminUser(
+        id=uuid.uuid4(),
+        email="demo-admin@example.org",
+        display_name="Demo Admin",
+        password_hash="password_hash_must_not_render",
+        role="superadmin",
+        is_active=True,
+    )
+    admin_session = AdminSession(
+        id=uuid.uuid4(),
+        admin_user_id=admin_user.id,
+        session_token_hash="session_hash_must_not_render",
+        csrf_token_hash="csrf_hash_must_not_render",
+        expires_at=datetime.now(UTC) + timedelta(hours=1),
+    )
+    context = AdminSessionContext(admin_user=admin_user, admin_session=admin_session)
+
+    async def _page_context(_request):
+        return context, "demo-csrf-token"
+
+    monkeypatch.setattr(
+        "slaif_gateway.api.admin._admin_page_context", _page_context
+    )
+    monkeypatch.setattr(
+        "slaif_gateway.api.admin_key_clone._admin_page_context", _page_context
+    )
+
+
+def _q_norm(text: str) -> str:
+    """Whitespace-normalized text (template lines wrap mid-phrase)."""
+    return " ".join(text.split())
+
+
+def _q_normal_session(monkeypatch) -> None:
+    """The normal admin-session seam (same as _login_and_detail)."""
+    admin_user = AdminUser(
+        id=uuid.uuid4(),
+        email="admin@example.org",
+        display_name="Admin User",
+        password_hash="password_hash_must_not_render",
+        role="admin",
+        is_active=True,
+    )
+    admin_session = AdminSession(
+        id=uuid.uuid4(),
+        admin_user_id=admin_user.id,
+        session_token_hash="session_hash_must_not_render",
+        csrf_token_hash="csrf_hash_must_not_render",
+        expires_at=datetime.now(UTC) + timedelta(hours=1),
+    )
+    admin_session.admin_user = admin_user
+
+    async def validate_admin_session(self, **kwargs):
+        return AdminSessionContext(admin_user=admin_user, admin_session=admin_session)
+
+    async def refresh_csrf_token(self, **kwargs):
+        return "rendered-csrf-token"
+
+    monkeypatch.setattr(
+        "slaif_gateway.services.admin_session_service.AdminSessionService.validate_admin_session",
+        validate_admin_session,
+    )
+    monkeypatch.setattr(
+        "slaif_gateway.services.admin_session_service.AdminSessionService.refresh_csrf_token",
+        refresh_csrf_token,
+    )
+
+
+def _q_client(monkeypatch, key: AdminKeyDetail, *, demo: bool = True) -> TestClient:
+    async def get_key_detail(self, _gateway_key_id):
+        return key
+
+    monkeypatch.setattr(
+        "slaif_gateway.services.admin_key_dashboard.AdminKeyDashboardService.get_key_detail",
+        get_key_detail,
+    )
+    app = _app()
+    if not demo:
+        _q_normal_session(monkeypatch)
+    else:
+        _q_demo_page_context(monkeypatch)
+
+        @app.middleware("http")
+        async def _q_demo_state(request, call_next):
+            # The template context processor reads this state (the
+            # demo gate stores its fictional context on request.state).
+            request.state.demo_admin = SimpleNamespace(nav=())
+            return await call_next(request)
+
+    @asynccontextmanager
+    async def _no_lifespan(_app):
+        # The fake sessionmaker stays installed (same posture as the
+        # normal tests in this file): no real engine is ever built.
+        yield
+
+    app.router.lifespan_context = _no_lifespan
+    return TestClient(app)
+
+
+def _q_clone_runtime(monkeypatch, *, projection=None, error=None) -> None:
+    """Fake the clone runtime scope: the ONLY call the receipts page
+    makes is the read-only find_clone_receipt."""
+
+    class _FakeCloneService:
+        async def find_clone_receipt(self, **kwargs):
+            if error is not None:
+                raise error
+            assert projection is not None
+            return projection
+
+    @asynccontextmanager
+    async def _scope(_request):
+        yield _settings(), _FakeCloneService()
+
+    monkeypatch.setattr(
+        "slaif_gateway.api.admin_key_clone._admin_key_clone_runtime_scope",
+        _scope,
+    )
+
+
+def test_q_detail_demo_shows_admitted_read_links(monkeypatch) -> None:
+    # Trusted-calibration key: the calibration read link is visible...
+    key = replace(_detail(), key_purpose="trusted_calibration")
+    client = _q_client(monkeypatch, key)
+    r = client.get(f"/admin/keys/{key.id}")
+    assert r.status_code == 200
+    assert f'href="/admin/keys/{key.id}/calibration"' in r.text
+    # ...with the demo snapshot warning, and the non-admitted
+    # action links stay hidden in demo mode.
+    assert "Demo snapshot: this key cannot authenticate requests" in _q_norm(r.text)
+    assert "Codex compatibility" not in _q_norm(r.text)
+    assert "Replay maintenance" not in _q_norm(r.text)
+    assert "configuration.json" not in r.text
+    # Standard key: clone + receipts read links with the demo note.
+    std = _detail()
+    client = _q_client(monkeypatch, std)
+    r = client.get(f"/admin/keys/{std.id}")
+    assert r.status_code == 200
+    assert f'href="/admin/keys/{std.id}/clone"' in r.text
+    assert f'href="/admin/keys/{std.id}/clone/receipts"' in r.text
+    assert "read-only views of data frozen at snapshot time" in _q_norm(r.text)
+    assert "Codex compatibility" not in _q_norm(r.text)
+    assert "configuration.json" not in r.text
+
+
+def test_q_detail_normal_rendering_unchanged(monkeypatch) -> None:
+    # Normal admin: the non-admitted links render as before, and the
+    # calibration link stays purpose-gated.
+    std = _detail()
+    with _q_client(monkeypatch, std, demo=False) as client:
+        client.cookies.set("slaif_admin_session", "session-token-must-not-render")
+        r = client.get(f"/admin/keys/{std.id}")
+        assert r.status_code == 200
+        assert "Codex compatibility" in _q_norm(r.text)
+        assert "Replay maintenance" in _q_norm(r.text)
+        assert f'href="/admin/keys/{std.id}/configuration.json"' in r.text
+        assert f'href="/admin/keys/{std.id}/calibration"' not in r.text
+        assert "read-only views of data frozen at snapshot time" not in _q_norm(r.text)
+    trusted = replace(_detail(), key_purpose="trusted_calibration")
+    with _q_client(monkeypatch, trusted, demo=False) as client:
+        client.cookies.set("slaif_admin_session", "session-token-must-not-render")
+        r = client.get(f"/admin/keys/{trusted.id}")
+        assert r.status_code == 200
+        assert f'href="/admin/keys/{trusted.id}/calibration"' in r.text
+
+
+def test_q_calibration_demo_banner_and_illustrative_form(monkeypatch) -> None:
+    key = replace(_detail(), key_purpose="trusted_calibration")
+    with _q_client(monkeypatch, key) as client:
+        r = client.get(f"/admin/keys/{key.id}/calibration")
+        assert r.status_code == 200
+        assert "Sanitized demo snapshot display" in _q_norm(r.text)
+        assert "frozen at snapshot time" in _q_norm(r.text)
+        assert "ILLUSTRATIVE" in _q_norm(r.text)
+        assert "NO effect" in _q_norm(r.text)
+        assert "no live configuration is read" in _q_norm(r.text)
+        # The illustrative form is still rendered (no effect note only).
+        assert f'action="/admin/keys/{key.id}/calibration/preview"' in r.text
+
+
+def test_q_calibration_refuses_non_trusted_key(monkeypatch) -> None:
+    # A copied standard key is unsupported for calibration: the
+    # existing safe refusal, never a false success page.
+    key = _detail()
+    with _q_client(monkeypatch, key) as client:
+        r = client.get(f"/admin/keys/{key.id}/calibration")
+        assert r.status_code == 400
+        assert "trusted calibration keys" in r.text
+
+
+def test_q_clone_form_demo_banner_and_view_time_eligibility(monkeypatch) -> None:
+    key = _detail()
+    with _q_client(monkeypatch, key) as client:
+        r = client.get(f"/admin/keys/{key.id}/clone")
+        assert r.status_code == 200
+        assert "Sanitized demo snapshot display" in _q_norm(r.text)
+        assert "frozen at snapshot time" in _q_norm(r.text)
+        # The eligibility line is computed at view time over the frozen
+        # copied rows - NOT a historical-at-capture claim.
+        assert "computed for this copied snapshot AT VIEW TIME" in _q_norm(r.text)
+        assert "not a live operational eligibility decision" in _q_norm(r.text)
+        assert "Eligibility:" in r.text
+        assert f'action="/admin/keys/{key.id}/clone/review"' in r.text
+
+
+def _q_created_projection() -> KeyCloneReceiptProjection:
+    return KeyCloneReceiptProjection(
+        status="created",
+        source_gateway_key_id="src-" + "a" * 32,
+        operation_uuid=Q_OP,
+        target_gateway_key_id=str(uuid.uuid4()),
+        target_public_key_id="target-public-id",
+        target_owner_id=str(uuid.uuid4()),
+        target_status="active",
+        validity_mode="copy-source-expiry",
+    )
+
+
+def test_q_clone_recovery_demo_honest_outcomes(monkeypatch) -> None:
+    key = _detail()
+    # (a) No operation: the demo banner over the help form.
+    with _q_client(monkeypatch, key) as client:
+        r = client.get(f"/admin/keys/{key.id}/clone/receipts")
+        assert r.status_code == 200
+        assert "Sanitized demo snapshot display" in _q_norm(r.text)
+        assert "HISTORICAL, recovered from this copy" in _q_norm(r.text)
+    # (b) created: the target fields render, but the retry/rotate
+    # guidance is suppressed in demo mode.
+    _q_clone_runtime(monkeypatch, projection=_q_created_projection())
+    with _q_client(monkeypatch, key) as client:
+        r = client.get(f"/admin/keys/{key.id}/clone/receipts?operation={Q_OP}")
+        assert r.status_code == 200
+        assert "target-public-id" in r.text
+        assert "one-time plaintext is never redisplayed" in _q_norm(r.text)
+        assert "Retry a still-unconsumed" not in _q_norm(r.text)
+        assert "rotate the key" not in _q_norm(r.text)
+    # (c) not-found: the honest NOTHING-assumed wording, and the
+    # normal "re-run the plan" guidance paragraph stays suppressed.
+    not_found = KeyCloneReceiptProjection(
+        status="not-found",
+        source_gateway_key_id="src-" + "a" * 32,
+        operation_uuid=Q_OP,
+    )
+    _q_clone_runtime(monkeypatch, projection=not_found)
+    with _q_client(monkeypatch, key) as client:
+        r = client.get(f"/admin/keys/{key.id}/clone/receipts?operation={Q_OP}")
+        assert r.status_code == 200
+        assert "NOTHING is assumed" in _q_norm(r.text)
+        assert "If you reviewed a plan but lost the result" not in _q_norm(r.text)
+    # (d) projection error: the fixed safe message with the demo
+    # no-retry-guidance wording.
+    _q_clone_runtime(monkeypatch, error=KeyCloneError())
+    with _q_client(monkeypatch, key) as client:
+        r = client.get(f"/admin/keys/{key.id}/clone/receipts?operation={Q_OP}")
+        assert r.status_code == 200
+        assert "Key clone operation failed." in r.text
+        assert "no retry guidance is offered in this demo snapshot" in _q_norm(r.text)
+        assert "do not start a guessed new clone" not in _q_norm(r.text)
+
+
+def test_q_clone_recovery_normal_still_shows_retry_guidance(monkeypatch) -> None:
+    # The normal template wording is unchanged for non-demo renders.
+    key = _detail()
+    _q_clone_runtime(monkeypatch, projection=_q_created_projection())
+    with _q_client(monkeypatch, key, demo=False) as client:
+        client.cookies.set("slaif_admin_session", "session-token-must-not-render")
+        r = client.get(f"/admin/keys/{key.id}/clone/receipts?operation={Q_OP}")
+        assert r.status_code == 200
+        assert "Retry a still-unconsumed pending delivery" in _q_norm(r.text)
+        assert "rotate the key" in _q_norm(r.text)
+        assert "Sanitized demo snapshot display" not in _q_norm(r.text)
