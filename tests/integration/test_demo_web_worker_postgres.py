@@ -64,6 +64,8 @@ import asyncpg
 import pytest
 from slaif_gateway.config import Settings
 from slaif_gateway.services import demo_snapshot as ds
+from slaif_gateway.services import demo_snapshot_files as dsf
+from slaif_gateway.services import demo_snapshot_sanitize as dss
 from slaif_gateway.services import demo_web_worker as dww
 from slaif_gateway.services.demo_web_control import (
     VERIFIED_COPY_STATE,
@@ -1013,3 +1015,355 @@ def test_cli_process_request_and_cleanup_never_render_canaries(
         assert "demo_snap_" not in res2.output
     finally:
         get_settings.cache_clear()
+
+
+# --- 224-g: target-only verified display publication ----------------------------
+
+
+def _branding_fixture(tmp_path: Path) -> Path:
+    """One 0700 branding dir with a single neutral 0600 logo (223
+    substitutes the remaining slots neutrally)."""
+    branding = tmp_path / "branding"
+    branding.mkdir(mode=0o700)
+    (branding / "logo.svg").write_bytes(
+        b"<svg xmlns='http://www.w3.org/2000/svg' width='1' height='1'/>"
+    )
+    os.chmod(branding / "logo.svg", 0o600)
+    return branding
+
+
+async def _reader_connect(san: _Env, db: str):
+    return await asyncpg.connect(
+        host=str(san.target["host"]),
+        port=int(san.target["port"]),
+        user=_READER_ROLE,
+        password=_READER_PW,
+        database=db,
+        timeout=10.0,
+    )
+
+
+async def _copy_has_display_schema(san: _Env, db: str) -> bool:
+    conn = await _connect_target_db(san, db)
+    try:
+        row = await conn.fetchrow(
+            "SELECT 1 FROM pg_namespace WHERE nspname = 'demo_display'"
+        )
+        return row is not None
+    finally:
+        await conn.close()
+
+
+async def _reader_display_index(san: _Env, db: str) -> list[dict[str, Any]]:
+    conn = await _reader_connect(san, db)
+    try:
+        rows = await conn.fetch(
+            "SELECT logical_name, kind, sha256, byte_count "
+            "FROM demo_display.leaves ORDER BY logical_name"
+        )
+        return [dict(r) for r in rows]
+    finally:
+        await conn.close()
+
+
+async def _display_table_columns(san: _Env, db: str) -> set[str]:
+    conn = await _reader_connect(san, db)
+    try:
+        rows = await conn.fetch(
+            "SELECT column_name FROM information_schema.columns "
+            "WHERE table_schema = 'demo_display' "
+            "AND table_name = 'leaves'"
+        )
+        return {r["column_name"] for r in rows}
+    finally:
+        await conn.close()
+
+
+def _custody_display_facts(
+    custody: Path, job_id: str
+) -> dict[tuple[str, str], tuple[str, int]]:
+    """The worker's OWN custody view of the verified leaves (the
+    ground truth the target table must equal)."""
+    import json
+
+    files_dir = custody / job_id / dsf.FILES_DIR_NAME
+    doc = json.loads((files_dir / dsf.FILES_MANIFEST_NAME).read_text())
+    return {
+        (entry["logical_name"], entry["kind"]): (
+            entry["sha256"],
+            entry["bytes"],
+        )
+        for entry in doc["files"]
+    }
+
+
+def test_224g_verified_job_publishes_exact_display_leaves_to_copy(
+    san_env: _Env, wenv: dict[str, Any], custody: Path, tmp_path: Path
+) -> None:
+    env = wenv
+    branding = _branding_fixture(tmp_path)
+    rid = _create_request(env)
+    result, _config = _process(
+        san_env, env, custody, rid, SLAIF_BRANDING_DIR=str(branding)
+    )
+    assert result.state == "verified_unpublished", (
+        result.state, result.failure_code
+    )
+    row = _request_row(env, rid)
+    target_db = row["worker_target_db"]
+    job_id = row["worker_job_id"]
+    _issue_session(env, rid)  # session-protect for later cleanup runs
+
+    # The EXACT closed leaf set: the target table equals the worker's
+    # own re-proven custody, name for name.
+    facts = _custody_display_facts(custody, job_id)
+    assert len(facts) >= 2
+    assert ("branding/logo", dsf.KIND_BRANDING) in facts
+    assert (
+        "profiles/completion-choices.json",
+        dsf.KIND_COMPLETION_CHOICES,
+    ) in facts
+
+    async def run() -> None:
+        index = await _reader_display_index(san_env, target_db)
+        assert {
+            (r["logical_name"], r["kind"]): (r["sha256"], r["byte_count"])
+            for r in index
+        } == facts
+        assert len(index) == len(facts)
+        # Every stored name satisfies the CLOSED display law (kind +
+        # per-copy keyed or fixed vocabulary only).
+        for r in index:
+            assert dww._display_name_law(r["kind"], r["logical_name"])
+        # The table carries ONLY the closed safe index + body.
+        assert await _display_table_columns(san_env, target_db) == {
+            "logical_name",
+            "kind",
+            "sha256",
+            "byte_count",
+            "captured_at",
+            "body",
+        }
+        # No private custody field or secret canary crosses into the
+        # copy: scan every stored body + name for worker-private values.
+        conn = await _reader_connect(san_env, target_db)
+        try:
+            bodies = await conn.fetch(
+                "SELECT body::text AS b FROM demo_display.leaves"
+            )
+            for b in bodies:
+                text = b["b"]
+                for forbidden in (
+                    env["worker_pw"],
+                    str(custody),
+                    str(san_env.passfile),
+                    str(san_env.source["database"]),
+                    target_db,
+                ):
+                    assert forbidden not in text
+            # The reader role is SELECT-only on the display table:
+            # DML and DDL are refused by the database itself.
+            async def _denied_stmt(sql: str) -> None:
+                try:
+                    await conn.execute(sql)
+                except asyncpg.PostgresError as exc:
+                    assert exc.sqlstate in ("42501",), exc.sqlstate
+                    return
+                raise AssertionError(
+                    f"reader DML/DDL was NOT denied: {sql}"
+                )
+
+            await _denied_stmt(
+                "INSERT INTO demo_display.leaves (logical_name, kind, "
+                "sha256, byte_count, captured_at, body) "
+                "VALUES ('x', 'x', 'x', 1, 1.0, '\\x00')"
+            )
+            await _denied_stmt(
+                "UPDATE demo_display.leaves SET byte_count = 0"
+            )
+            await _denied_stmt("CREATE TABLE demo_display.evil (id int)")
+            await _denied_stmt("CREATE SCHEMA evil")
+        finally:
+            await conn.close()
+
+    asyncio.run(run())
+
+    # A raw, never-verified copy: no reader CONNECT grant at all, and
+    # no display schema in either its RAW state or after sanitizing it
+    # to the DB-only state (ingest is 224-g and runs ONLY on the fully
+    # verified job). These stages run OFF any event loop.
+    bare = ds.run_snapshot_job(_config.snapshot)
+    assert bare.state == ds.STATE_RAW_UNVERIFIED, bare.failure_code
+    bare_db = bare.target_db
+
+    async def run_bare() -> None:
+        try:
+            await _reader_connect(san_env, bare_db)
+        except asyncpg.PostgresError:
+            pass  # refused: the grant never ran for an unverified copy
+        else:
+            raise AssertionError("reader connected to an unverified copy")
+        assert not await _copy_has_display_schema(san_env, bare_db)
+
+    asyncio.run(run_bare())
+    san = dss.sanitize_copies(_config.snapshot, job_id=bare.job_id)
+    assert san.state == dss.SANITIZE_STATE_SANITIZED, san.failure_code
+
+    async def run_san() -> None:
+        assert not await _copy_has_display_schema(san_env, bare_db)
+
+    asyncio.run(run_san())
+
+
+def test_224g_ingest_torn_transaction_leaves_no_table_exact_cleanup(
+    san_env: _Env,
+    wenv: dict[str, Any],
+    custody: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    env = wenv
+    config, _ = _worker_config(san_env, env, custody)
+    # An UNRELATED session-protected verified copy that cleanup must
+    # never touch.
+    rid_a = _create_request(env)
+    result_a, _ = _process(san_env, env, custody, rid_a)
+    assert result_a.state == "verified_unpublished", result_a.failure_code
+    row_a = _request_row(env, rid_a)
+    db_a = row_a["worker_target_db"]
+    _issue_session(env, rid_a)
+    facts_a = _custody_display_facts(custody, row_a["worker_job_id"])
+    assert facts_a
+
+    # The second request's ingest is torn after the DDL: a real
+    # transaction on a real copy database must roll back completely.
+    real_connect = dss._connect_copy
+
+    class _TornIngestConn:
+        def __init__(self, real) -> None:
+            self._real = real
+            self.torn = False
+
+        def __getattr__(self, name):
+            # Delegate every other method (fetch/fetchval/transaction)
+            # to the real target-admin connection.
+            return getattr(self._real, name)
+
+        def transaction(self):
+            return self._real.transaction()
+
+        async def execute(self, sql: str, *args: object):
+            if (
+                "demo_display.leaves" in sql
+                and sql.strip().upper().startswith("INSERT")
+            ):
+                self.torn = True
+                raise RuntimeError("simulated torn ingest")
+            return await self._real.execute(sql, *args)
+
+        async def close(self):
+            await self._real.close()
+
+    async def flaky_connect(cfg, target_db, **kwargs):
+        conn = await real_connect(cfg, target_db, **kwargs)
+        return _TornIngestConn(conn)
+
+    monkeypatch.setattr(dss, "_connect_copy", flaky_connect)
+
+    rid_b = _create_request(env)
+    result_b, _ = _process(san_env, env, custody, rid_b)
+    assert result_b.state == "failed", result_b.state
+    assert result_b.failure_code == dww.CODE_DISPLAY_INGEST_FAILED
+    row_b = _request_row(env, rid_b)
+    assert row_b["state"] == "failed"
+    # The failed row keeps its worker columns NULL by design: resolve
+    # the exact bound copy from the private custody manifest.
+    bound_job_b = _job_identity_of(custody, rid_b)
+    assert bound_job_b is not None
+    manifest_b = ds.read_manifest(custody / bound_job_b)
+    assert manifest_b is not None
+    db_b = manifest_b.target_db
+    assert dww._WORKER_TARGET_DB_RE.fullmatch(db_b)
+    assert db_b != db_a
+
+    async def run() -> None:
+        # The torn transaction left NO published table in the exact
+        # failed copy, and the unrelated copy is untouched.
+        assert not await _copy_has_display_schema(san_env, db_b)
+        index_a = await _reader_display_index(san_env, db_a)
+        assert {
+            (r["logical_name"], r["kind"]): (r["sha256"], r["byte_count"])
+            for r in index_a
+        } == facts_a
+        # Exact request-associated cleanup: the failed copy (and with
+        # it the absent schema/grants) is dropped; the session-live
+        # copy is refused cleanup and survives.
+        res = await dww.recover_and_cleanup(config)
+        assert res.failure_code is None
+
+    asyncio.run(run())
+    # Post-cleanup checks (sync helpers with their own loops).
+    assert not _target_db_exists(san_env, db_b)
+    assert _request_row(env, rid_b)["state"] == "cleaned"
+    row_a_after = _request_row(env, rid_a)
+    assert row_a_after["state"] == "verified_unpublished"
+    assert _target_db_exists(san_env, db_a)
+
+
+def test_224g_leaf_tampered_after_verification_refuses_publication(
+    san_env: _Env,
+    wenv: dict[str, Any],
+    custody: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    env = wenv
+    branding = _branding_fixture(tmp_path)
+    config, _ = _worker_config(san_env, env, custody)
+
+    real_files = dsf.run_files_job
+
+    def tamper_files(cfg, settings, *, job_id=None):
+        result = real_files(cfg, settings, job_id=job_id)
+        if result.state == "FILES_VERIFIED" and job_id:
+            files_dir = cfg.custody_dir / job_id / dsf.FILES_DIR_NAME
+            leaves = sorted(
+                p
+                for p in files_dir.iterdir()
+                if p.name != dsf.FILES_MANIFEST_NAME
+            )
+            if leaves:
+                data = bytearray(leaves[0].read_bytes())
+                data[0] ^= 1
+                leaves[0].write_bytes(bytes(data))
+        return result
+
+    monkeypatch.setattr(dsf, "run_files_job", tamper_files)
+
+    rid = _create_request(env)
+    result, _ = _process(
+        san_env, env, custody, rid, SLAIF_BRANDING_DIR=str(branding)
+    )
+    assert result.state == "failed", result.state
+    row = _request_row(env, rid)
+    assert row["state"] == "failed"
+    # The failed row keeps its worker columns NULL by design: the
+    # durable ownership record is the private custody manifest.
+    bound_job = _job_identity_of(custody, rid)
+    assert bound_job is not None
+    bound_manifest = ds.read_manifest(custody / bound_job)
+    assert bound_manifest is not None
+    db = bound_manifest.target_db
+    assert dww._WORKER_TARGET_DB_RE.fullmatch(db)
+
+    async def run() -> None:
+        # The worker-held re-proof refused BEFORE ingest and grant:
+        # no display table, no reader grant.
+        assert not await _copy_has_display_schema(san_env, db)
+        try:
+            await _reader_connect(san_env, db)
+        except asyncpg.PostgresError:
+            pass
+        else:
+            raise AssertionError("reader connected to an unpublished copy")
+
+    asyncio.run(run())

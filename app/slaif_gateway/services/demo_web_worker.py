@@ -46,6 +46,8 @@ is ever rendered).
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import hashlib
 import re
 import time
 import uuid
@@ -64,6 +66,9 @@ from sqlalchemy.ext.asyncio import (
 
 from slaif_gateway.config import Settings
 from slaif_gateway.services.catalog_refresh import filesystem as catfs
+from slaif_gateway.services.provider_catalog_proposal import (
+    OPENROUTER_PACKAGE_ORDER,
+)
 from slaif_gateway.services import demo_snapshot as ds
 from slaif_gateway.services import demo_snapshot_files as dsf
 from slaif_gateway.services import demo_snapshot_sanitize as dss
@@ -93,10 +98,140 @@ CODE_READER_GRANT_FAILED = "WEB_READER_GRANT_FAILED"
 # invocations plus a role precheck on the trusted private network).
 _READER_GRANT_SECONDS = 30.0
 
+# 224-g: the exact verified copy's display leaves could not be
+# ingested into its target-only demo_display schema (torn or
+# refused target transaction). The copy is NEVER published in
+# that case.
+CODE_DISPLAY_INGEST_FAILED = "WEB_DISPLAY_INGEST_FAILED"
+
 _IDENT_RE = re.compile(r"[a-z_][a-z0-9_]{0,62}")
 
 # Bounded recovery/cleanup scan limit (per invocation).
 _MAX_CANDIDATES = 100
+
+
+# --- 224-g: bounded positive display logical-name law ---------------------------
+#
+# The files manifest is private custody: its ``logical_name`` field is
+# only as trustworthy as the worker-held proof that surrounds it. The
+# target-only display publication never copies it into the browser-
+# readable ``demo_display`` index merely because the leaf BODY passed
+# re-proof: the name itself must match the CLOSED set of per-copy
+# logical names the reviewed 223 producers can emit, per kind. Every
+# component below is keyed (per-copy) or fixed vocabulary - no original
+# source identifier, path, or free text can be represented.
+
+
+_DEMO_RUN_ID_RE = re.compile(r"^demo-run-[0-9a-f]{24}$")
+_DEMO_JOB_ID_RE = re.compile(r"^[0-9a-f]{32}$")
+_DEMO_RUN = r"demo-run-[0-9a-f]{24}"
+_DEMO_JOB = r"[0-9a-f]{32}"
+_DEMO_UPLOAD_BASENAME = r"(?:bundle|baseline|baseline-export)-[0-9a-f]{32}"
+_DEMO_PRESET = (
+    r"(?:" + "|".join(OPENROUTER_PACKAGE_ORDER) + r")"
+)
+_DEMO_BRAND_SLOT = r"(?:style\.css|logo|logo-compact|favicon|hero)"
+
+# Per-kind closed name grammars (223 producer set, nothing else).
+_DISPLAY_NAME_LAW: dict[str, tuple[re.Pattern[str], ...]] = {
+    dsf.KIND_REFRESH_BUNDLE: (
+        re.compile(rf"^catalog/runs/{_DEMO_RUN}/catalog-refresh\.json$"),
+        re.compile(rf"^catalog/uploads/{_DEMO_JOB}/bundle-[0-9a-f]{{32}}$"),
+    ),
+    dsf.KIND_BASELINE_DOC: (
+        re.compile(rf"^catalog/runs/{_DEMO_RUN}/catalog-baseline\.json$"),
+        re.compile(
+            rf"^catalog/uploads/{_DEMO_JOB}/"
+            r"(?:baseline|baseline-export)-[0-9a-f]{32}$"
+        ),
+    ),
+    dsf.KIND_ROUTE_TSV: (
+        re.compile(rf"^catalog/runs/{_DEMO_RUN}/routes-proposal\.tsv$"),
+        re.compile(rf"^catalog/proposals/{_DEMO_JOB}/routes-proposal\.tsv$"),
+        re.compile(
+            rf"^catalog/proposals/{_DEMO_JOB}/packages/{_DEMO_PRESET}/"
+            r"routes-proposal\.tsv$"
+        ),
+    ),
+    dsf.KIND_PRICING_TSV: (
+        re.compile(rf"^catalog/runs/{_DEMO_RUN}/pricing-proposal\.tsv$"),
+        re.compile(rf"^catalog/proposals/{_DEMO_JOB}/pricing-proposal\.tsv$"),
+        re.compile(
+            rf"^catalog/proposals/{_DEMO_JOB}/packages/{_DEMO_PRESET}/"
+            r"pricing-proposal\.tsv$"
+        ),
+    ),
+    dsf.KIND_FX_JSON: (
+        re.compile(rf"^catalog/runs/{_DEMO_RUN}/fx-proposal\.json$"),
+    ),
+    dsf.KIND_VALIDATION_JSON: (
+        re.compile(rf"^catalog/runs/{_DEMO_RUN}/validation\.json$"),
+    ),
+    dsf.KIND_REVIEW_HTML: (
+        re.compile(rf"^catalog/runs/{_DEMO_RUN}/REVIEW\.html$"),
+    ),
+    dsf.KIND_SOURCE_MANIFEST: (
+        re.compile(
+            rf"^catalog/proposals/{_DEMO_JOB}/source-manifest\.json$"
+        ),
+    ),
+    dsf.KIND_NORMALIZED_JSON: (
+        re.compile(
+            rf"^catalog/proposals/{_DEMO_JOB}/"
+            r"provider-catalog-normalized\.json$"
+        ),
+    ),
+    dsf.KIND_WARNINGS_JSON: (
+        re.compile(rf"^catalog/proposals/{_DEMO_JOB}/warnings\.json$"),
+    ),
+    dsf.KIND_MARKDOWN: (
+        re.compile(
+            rf"^catalog/proposals/{_DEMO_JOB}/"
+            r"provider-catalog-report\.md$"
+        ),
+        re.compile(
+            rf"^catalog/proposals/{_DEMO_JOB}/packages/{_DEMO_PRESET}/"
+            r"(?:package-report|model-review)\.md$"
+        ),
+    ),
+    dsf.KIND_PACKAGE_MANIFEST: (
+        re.compile(
+            rf"^catalog/proposals/{_DEMO_JOB}/packages/{_DEMO_PRESET}/"
+            r"package-manifest\.json$"
+        ),
+    ),
+    dsf.KIND_JOB_RECORD: (
+        re.compile(rf"^catalog/jobs/{_DEMO_JOB}\.json$"),
+    ),
+    dsf.KIND_BRANDING: (
+        re.compile(rf"^branding/{_DEMO_BRAND_SLOT}$"),
+    ),
+    dsf.KIND_LLM_PROFILES: (
+        re.compile(r"^profiles/upstream-llm\.json$"),
+    ),
+    dsf.KIND_COMPLETION_CHOICES: (
+        re.compile(r"^profiles/completion-choices\.json$"),
+    ),
+}
+
+# Bounded overall length for one closed display name (the longest
+# producer shape is far below this; it caps any future drift).
+_DISPLAY_NAME_MAX_LEN = 200
+
+
+def _display_name_law(kind: object, logical_name: object) -> bool:
+    """Bounded positive law: the EXACT closed per-kind logical names
+    the reviewed 223 producers emit (keyed per-copy ids or fixed
+    vocabulary only). Unknown kinds, foreign shapes, traversal, or
+    over-length names are all refusals."""
+    if not isinstance(kind, str) or kind not in _DISPLAY_NAME_LAW:
+        return False
+    if (
+        not isinstance(logical_name, str)
+        or not 0 < len(logical_name) <= _DISPLAY_NAME_MAX_LEN
+    ):
+        return False
+    return any(p.fullmatch(logical_name) for p in _DISPLAY_NAME_LAW[kind])
 
 
 class DemoWebWorkerError(Exception):
@@ -333,6 +468,60 @@ def _elapsed_ms(started: float) -> int:
 _WORKER_MAIN_MANIFEST_MAX_BYTES = 64 * 1024
 
 
+def _anchored_main_manifest(
+    config: DemoWebWorkerConfig,
+    job_id: str,
+    request_id: uuid.UUID,
+) -> tuple[ds.SnapshotManifest, tuple[int, int]] | None:
+    """Open the ANCHORED held job handle and re-read the worker-held
+    private main custody manifest, proving:
+
+    * the manifest identity (stored job id == exact job id);
+    * the EXACT request ownership (the manifest's private
+      ``request_id`` association equals the request being handed off);
+    * the combined 222+223 verified manifest state and files state;
+    * the exact target database name (closed grammar).
+
+    Returns the validated manifest plus the job-directory identity
+    ``(st_dev, st_ino)`` captured by the SAME held handle (so a caller
+    can bind a follow-up files-tree proof to this exact directory).
+    ``None`` on any refusal - no pathname read is ever used: a swapped
+    job directory cannot redirect the proof.
+    """
+    if not _WORKER_JOB_ID_RE.fullmatch(job_id):
+        return None
+    job_dir = config.snapshot.custody_dir / job_id
+    try:
+        handle = catfs.open_anchored_handle(job_dir)
+    except catfs.CatalogRefreshSealError:
+        return None
+    try:
+        handle.assert_name_binding(str(job_dir))
+        # Bind the files re-proof to THIS exact job directory.
+        job_identity = handle.identity
+        try:
+            raw = catfs.anchored_read_fd(
+                handle.dir_fd,
+                ds._MANIFEST_NAME,
+                _WORKER_MAIN_MANIFEST_MAX_BYTES,
+            )
+        except (OSError, catfs.CatalogRefreshSealError):
+            return None
+    finally:
+        handle.close()
+    manifest = ds._manifest_from_bytes(raw)
+    if (
+        manifest is None
+        or manifest.job_id != job_id
+        or manifest.request_id != str(request_id)
+        or manifest.state != ds.STATE_DB_AND_FILES_VERIFIED_UNPUBLISHED
+        or manifest.files_state != dsf.FILES_STATE_VERIFIED
+        or not _WORKER_TARGET_DB_RE.fullmatch(manifest.target_db)
+    ):
+        return None
+    return manifest, job_identity
+
+
 def _verify_worker_held(
     config: DemoWebWorkerConfig,
     job_id: str,
@@ -369,37 +558,11 @@ def _verify_worker_held(
     Returns the binding only when everything agrees; ``None`` otherwise
     (the caller fails the request and never publishes).
     """
-    if not _WORKER_JOB_ID_RE.fullmatch(job_id):
+    proof = _anchored_main_manifest(config, job_id, request_id)
+    if proof is None:
         return None
+    manifest, job_identity = proof
     job_dir = config.snapshot.custody_dir / job_id
-    try:
-        handle = catfs.open_anchored_handle(job_dir)
-    except catfs.CatalogRefreshSealError:
-        return None
-    try:
-        handle.assert_name_binding(str(job_dir))
-        # Bind the files re-proof to THIS exact job directory.
-        job_identity = handle.identity
-        try:
-            raw = catfs.anchored_read_fd(
-                handle.dir_fd,
-                ds._MANIFEST_NAME,
-                _WORKER_MAIN_MANIFEST_MAX_BYTES,
-            )
-        except (OSError, catfs.CatalogRefreshSealError):
-            return None
-    finally:
-        handle.close()
-    manifest = ds._manifest_from_bytes(raw)
-    if (
-        manifest is None
-        or manifest.job_id != job_id
-        or manifest.request_id != str(request_id)
-        or manifest.state != ds.STATE_DB_AND_FILES_VERIFIED_UNPUBLISHED
-        or manifest.files_state != dsf.FILES_STATE_VERIFIED
-        or not _WORKER_TARGET_DB_RE.fullmatch(manifest.target_db)
-    ):
-        return None
     deadline = time.monotonic() + config.files.max_elapsed_seconds
     try:
         total_bytes, leaf_count = dsf._reprove_files_tree(
@@ -443,6 +606,205 @@ async def _safe_record_failure(
         pass
 
 
+# --- 224-g target-only verified display-leaf publication -----------------------
+#
+# The verified sanitized display leaves are duplicated INTO the exact
+# disposable target database (a target-only ``demo_display`` schema +
+# one leaves table), which is the publication boundary for the
+# session-bound SELECT-only web reader. Nothing file-system, no
+# private manifest field, and no source reference crosses into the
+# copy: only the closed safe index fields (logical_name, kind, display
+# sha256, byte count, capture time) and the sanitized bytea body.
+
+
+_DISPLAY_LEAVES_DDL = (
+    "CREATE SCHEMA demo_display; "
+    "CREATE TABLE demo_display.leaves ( "
+    "logical_name text NOT NULL, "
+    "kind text NOT NULL, "
+    "sha256 text NOT NULL, "
+    "byte_count bigint NOT NULL, "
+    "captured_at double precision NOT NULL, "
+    "body bytea NOT NULL, "
+    "PRIMARY KEY (logical_name) "
+    ")"
+)
+
+
+async def _display_ingest_transaction(
+    config: DemoWebWorkerConfig,
+    target_db: str,
+    job_dir: Path,
+    manifest: ds.SnapshotManifest,
+    job_identity: tuple[int, int],
+    deadline: float,
+) -> None:
+    """ONE bounded target-only transaction on the EXACT copy: create
+    the fresh ``demo_display`` schema + leaves table, stream ONE
+    re-proven leaf at a time through parameterized INSERTs, and commit
+    ONLY after the held re-proof generator is fully exhausted (so its
+    final handle name-binding and deadline checks have run). Any
+    failure rolls back everything - a torn ingest leaves no published
+    table. The generator is always closed (held FDs released), even on
+    a mid-iteration driver failure or cancellation."""
+    remaining_ms = int(max(100.0, (deadline - time.monotonic()) * 1000.0))
+    conn = await dss._connect_copy(
+        config.snapshot, target_db, statement_timeout_ms=remaining_ms
+    )
+    try:
+        try:
+            async with conn.transaction():
+                await conn.execute(_DISPLAY_LEAVES_DDL)
+                seen: set[str] = set()
+                total_bytes = 0
+                count = 0
+                gen = dsf.verified_leaf_entries(
+                    job_dir,
+                    config.files,
+                    deadline,
+                    expected_job_identity=job_identity,
+                )
+                try:
+                    with contextlib.closing(gen):
+                        for entry, data in gen:
+                            if time.monotonic() > deadline:
+                                raise DemoWebWorkerError(
+                                    CODE_DISPLAY_INGEST_FAILED,
+                                    "The display ingest exceeded its elapsed bound."
+                                )
+                            kind = entry.get("kind")
+                            name = entry.get("logical_name")
+                            if not _display_name_law(kind, name):
+                                raise DemoWebWorkerError(
+                                    CODE_DISPLAY_INGEST_FAILED,
+                                    "A display leaf name failed the closed "
+                                    "display law."
+                                )
+                            if name in seen:
+                                raise DemoWebWorkerError(
+                                    CODE_DISPLAY_INGEST_FAILED,
+                                    "A display leaf name is duplicated."
+                                )
+                            seen.add(name)
+                            size = entry.get("bytes")
+                            if (
+                                type(size) is not int
+                                or size != len(data)
+                                or size > config.files.max_file_bytes
+                                or size > dsf.VERIFY_ABS_MAX_FILE_BYTES
+                            ):
+                                raise DemoWebWorkerError(
+                                    CODE_DISPLAY_INGEST_FAILED,
+                                    "A display leaf size is inconsistent."
+                                )
+                            captured = entry.get("captured_at")
+                            if (
+                                isinstance(captured, bool)
+                                or not isinstance(captured, (int, float))
+                                or not (0.0 < float(captured) < 9.0e15)
+                            ):
+                                raise DemoWebWorkerError(
+                                    CODE_DISPLAY_INGEST_FAILED,
+                                    "A display leaf capture time is invalid."
+                                )
+                            total_bytes += len(data)
+                            if (
+                                total_bytes > config.files.max_total_bytes
+                                or total_bytes > dsf.VERIFY_ABS_MAX_TOTAL_BYTES
+                            ):
+                                raise DemoWebWorkerError(
+                                    CODE_DISPLAY_INGEST_FAILED,
+                                    "The display ingest exceeds its byte bound."
+                                )
+                            count += 1
+                            # ONLY the closed safe index fields are
+                            # projected into SQL (parameterized); the
+                            # private entry fields (source, source_ref,
+                            # source_sha256, inode identity, on-disk leaf
+                            # name) are never serialized into the copy.
+                            await conn.execute(
+                                "INSERT INTO demo_display.leaves "
+                                "(logical_name, kind, sha256, byte_count, "
+                                "captured_at, body) "
+                                "VALUES ($1, $2, $3, $4, $5, $6)",
+                                name,
+                                kind,
+                                hashlib.sha256(data).hexdigest(),
+                                len(data),
+                                float(captured),
+                                data,
+                            )
+                    # Full exhaustion reached: the generator ran its final
+                    # job-directory name-binding and deadline checks.
+                finally:
+                    # Held FDs are released even when a driver failure or
+                    # cancellation interrupts the iteration.
+                    gen.close()
+                if count != manifest.files_count:
+                    raise DemoWebWorkerError(
+                        CODE_DISPLAY_INGEST_FAILED,
+                        "The display leaf set does not match the custody."
+                    )
+            # Commit happened on a FULLY re-proven leaf set only.
+        except ds.DemoSnapshotError:
+            # The shared 223 re-proof law refused (identity, digest,
+            # exact set, bound, or deadline): the transaction already
+            # rolled back; surface the one finite safe code.
+            raise DemoWebWorkerError(
+                CODE_DISPLAY_INGEST_FAILED,
+                "The verified display tree failed its re-proof.",
+            ) from None
+    finally:
+        await dss._close_quiet(conn)
+
+
+def _ingest_verified_display(
+    config: DemoWebWorkerConfig,
+    job_id: str,
+    request_id: uuid.UUID,
+    target_db: str,
+) -> None:
+    """224-g target-only ingest of ONE job's verified display leaves.
+
+    Synchronous entry (invoked via ``asyncio.to_thread`` from
+    ``process_request``): re-proves the worker-held main manifest under
+    the anchored no-follow handle, then runs ONE bounded target
+    transaction (its own event loop in the worker thread) that streams
+    the re-proven leaves into the fresh target-only ``demo_display``
+    schema. ONE finite deadline (the file-job elapsed bound) covers the
+    whole ingest. Any refusal or failure raises
+    ``DemoWebWorkerError(CODE_DISPLAY_INGEST_FAILED)``; the target
+    transaction is rolled back, so no partial table can survive.
+    """
+    if not _WORKER_TARGET_DB_RE.fullmatch(target_db):
+        raise DemoWebWorkerError(
+            CODE_DISPLAY_INGEST_FAILED,
+            "The demo copy name is not a valid disposable database name.",
+        )
+    deadline = time.monotonic() + config.files.max_elapsed_seconds
+    proof = _anchored_main_manifest(config, job_id, request_id)
+    if proof is None:
+        raise DemoWebWorkerError(
+            CODE_DISPLAY_INGEST_FAILED,
+            "The verified display tree could not be re-proven.",
+        )
+    manifest, job_identity = proof
+    job_dir = config.snapshot.custody_dir / job_id
+    try:
+        asyncio.run(
+            _display_ingest_transaction(
+                config, target_db, job_dir, manifest, job_identity, deadline
+            )
+        )
+    except DemoWebWorkerError:
+        raise
+    except Exception:
+        raise DemoWebWorkerError(
+            CODE_DISPLAY_INGEST_FAILED,
+            "The verified display could not be ingested into the demo copy.",
+        ) from None
+
+
 # --- 224-d exact verified-copy reader publication grant --------------------------
 
 
@@ -469,9 +831,14 @@ def _grant_target_reader(config: DemoWebWorkerConfig, target_db: str) -> None:
        database performing, atomically:
        ``GRANT CONNECT ON DATABASE`` (the one copy),
        ``GRANT USAGE ON SCHEMA public`` and
-       ``GRANT SELECT ON ALL TABLES IN SCHEMA public``.
-       A mid-transaction failure rolls back EVERYTHING - no partial
-       CONNECT can survive a schema-grant refusal.
+       ``GRANT SELECT ON ALL TABLES IN SCHEMA public``, and (224-g)
+       ``GRANT USAGE ON SCHEMA demo_display`` plus
+       ``GRANT SELECT ON demo_display.leaves`` - the target-only
+       display publication schema that the 224-g ingest creates in
+       this same copy. A mid-transaction failure rolls back
+       EVERYTHING - no partial CONNECT can survive a schema-grant
+       refusal, and a missing ``demo_display`` schema refuses the
+       whole bundle.
 
     The public-table grant is bounded by the 222 fail-closed schema
     inventory: this copy exists only because 222 sanitized exactly
@@ -554,6 +921,8 @@ def _grant_target_reader(config: DemoWebWorkerConfig, target_db: str) -> None:
         f'GRANT CONNECT ON DATABASE "{target_db}" TO "{role}"; '
         f'GRANT USAGE ON SCHEMA public TO "{role}"; '
         f'GRANT SELECT ON ALL TABLES IN SCHEMA public TO "{role}"; '
+        f'GRANT USAGE ON SCHEMA demo_display TO "{role}"; '
+        f"GRANT SELECT ON demo_display.leaves TO \"{role}\"; "
         "COMMIT;",
         env=env,
         workdir=workdir,
@@ -678,6 +1047,29 @@ async def process_request(
             await _safe_record_failure(control, request_id)
             return ProcessRequestResult(
                 "failed", FAILURE_WORKER_FAILED, _elapsed_ms(started)
+            )
+        # 5a) 224-g target-only display publication: ingest ONLY this
+        # job's verified sanitized leaves into the disposable copy's
+        # target-only ``demo_display`` schema. It runs OFF the control
+        # loop (its own bounded event loop inside the worker thread),
+        # re-proves the worker-held custody and the complete 223
+        # display-tree law under the anchored handles, and streams ONE
+        # bounded leaf at a time into the copy. Any refusal or torn
+        # transaction fails the request WITHOUT publishing; the exact
+        # request-associated cleanup drops the bound target database,
+        # and with it the target-only schema and every grant.
+        try:
+            await asyncio.to_thread(
+                _ingest_verified_display,
+                config,
+                job.job_id,
+                request_id,
+                binding.worker_target_db,
+            )
+        except DemoWebWorkerError as exc:
+            await _safe_record_failure(control, request_id)
+            return ProcessRequestResult(
+                "failed", exc.code, _elapsed_ms(started)
             )
         # 5b) 224-d publication grant: only NOW - after the combined
         # 222+223 worker-held proof for the exact job - may the

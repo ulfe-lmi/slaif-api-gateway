@@ -627,6 +627,84 @@ async def demo_copy_preview_get(request: Request) -> object:
     return response
 
 
+@fake_admin_router.get("/files-preview", name="demo_files_preview")
+async def demo_files_preview_get(request: Request) -> object:
+    """224-g read-only display-leaf preview: the SAFE INDEX only
+    (closed logical names, kinds, byte counts, capture times) from
+    the session's ONE verified copy target-only ``demo_display``
+    schema - a proof of the display publication, not a file browser.
+    No body bytes are rendered in this suffix. Fail-closed: no target
+    name, DSN, credential or internal error ever reaches the page; an
+    unreadable or pre-upgrade (display-less) copy renders the one
+    safe note instead. The response is ``no-store`` so the browser
+    cache never retains demo facts after logout.
+    """
+    from datetime import datetime, timezone
+
+    cfg = _config(request)
+    if await _zero_active(request):
+        return _json(404, "Not Found")
+    token = request.cookies.get(COOKIE_SESSION)
+    facade = _facade(request)
+
+    def _bounce() -> RedirectResponse:
+        response = RedirectResponse(LOGIN_URL, status_code=303)
+        _clear_cookie(response, COOKIE_SESSION, path=SESSION_COOKIE_PATH)
+        return response
+
+    if not token:
+        return _bounce()
+    # The same full per-use validation law as the copy preview: the
+    # stored token resolves the account and the live
+    # account/generation fence is re-checked on every read.
+    stored = await facade.session_facts_by_token(token)
+    if stored is None:
+        return _bounce()
+    try:
+        session = await facade.validate_session(
+            account_id=stored.account_id, token=token
+        )
+    except DemoWebControlError:
+        return _bounce()
+    # The EXACT request binding from the control row (id AND account
+    # match, verified, unexpired) and ONLY its closed demo_snap_<20hex>
+    # copy name are accepted. Construction AND read share one
+    # safe-error boundary: a malformed stored name or a pre-upgrade
+    # display-less copy is a safe note, never a raw error or a DSN.
+    leaves: list[dict[str, object]] | None = None
+    snap_request = await facade.get_request(session.request_id)
+    if snap_request is not None and (
+        snap_request.id == session.request_id
+        and snap_request.account_id == session.account_id
+        and _copy_readable_now(snap_request)
+        and snap_request.worker_target_db is not None
+    ):
+        factory = request.app.state.demo_display_reader_factory
+        try:
+            reader = factory(cfg, snap_request.worker_target_db)
+            raw_leaves = await reader.read_index()
+            leaves = [
+                {
+                    **leaf,
+                    "captured_utc": datetime.fromtimestamp(
+                        float(leaf["captured_at"]), tz=timezone.utc
+                    ).strftime("%Y-%m-%d %H:%M:%S"),
+                }
+                for leaf in raw_leaves
+            ]
+        except DemoWebError:
+            leaves = None  # one safe note; no detail escapes
+    csrf_token = _new_csrf_token(cfg.cookie_secret)
+    response = _templates(request).TemplateResponse(
+        request,
+        "files_preview.html",
+        {"csrf": csrf_token, "leaves": leaves},
+    )
+    response.headers["Cache-Control"] = "no-store"
+    _set_cookie(response, COOKIE_CSRF, csrf_token, int(CSRF_TTL_S))
+    return response
+
+
 @fake_admin_router.post("/logout", name="demo_logout")
 async def demo_logout_post(request: Request) -> object:
     cfg = _config(request)

@@ -140,6 +140,10 @@ COPY_PREVIEW_TABLES: tuple[str, ...] = (
 _COPY_STATEMENT_TIMEOUT_S = 10.0
 _COPY_CONNECT_TIMEOUT_S = 10.0
 
+# 224-g: the display index holds at most the 223 leaf ceiling rows;
+# the finite row bound makes the SELECT allocation-capped regardless.
+_DISPLAY_ROW_MAX = 4096
+
 
 class DemoWebConfigError(DemoWebError):
     """Configuration is missing/invalid (safe message, no value echo)."""
@@ -665,12 +669,158 @@ class CopyReader:
             await self.close()
 
 
+class DisplayReader:
+    """Bounded, per-request, SELECT-only reader for ONE session's
+    verified copy target-only display index (224-g).
+
+    Same trust boundary as ``CopyReader``: the web process has NO
+    pathname/custody access and reaches ONLY the exact disposable
+    database named by the verified control row (closed
+    ``demo_snap_<20hex>`` law) under the operator's static reader
+    role. It reads ONLY the worker-published ``demo_display`` schema's
+    single leaves table - the target-only publication created by the
+    224-g worker ingest - never any worker file.
+
+    The whole read is ONE database-side READ ONLY transaction
+    (verified ``transaction_read_only`` + ``current_database()``
+    binding), and the projection is the closed safe index only:
+    logical name, kind, byte count, capture time. The sanitized body
+    bytes are NOT returned in this suffix (no permissive download or
+    body endpoint exists yet). No request-derived input reaches the
+    SQL. Every failure is the one safe refusal; a missing
+    ``demo_display`` schema (pre-upgrade copy) is that same refusal -
+    the page renders the safe note instead.
+    """
+
+    def __init__(self, config: DemoWebConfig, target_db: str) -> None:
+        # Validate BEFORE any allocation/connection: a malformed name
+        # from the control row is a safe refusal, never an
+        # interpolation.
+        if _COPY_TARGET_DB_RE.fullmatch(target_db) is None:
+            raise DemoWebError(
+                "copy_binding_unavailable",
+                "The session copy binding is not available.",
+            )
+        self._config = config
+        self._target_db = target_db
+        self._engine: AsyncEngine | None = None
+
+    async def close(self) -> None:
+        # Always attempt disposal; a disposal failure must never leak
+        # a raw driver exception: it is wrapped in the same safe
+        # refusal, so an otherwise successful read surfaces as that
+        # safe refusal, never as a raw detail.
+        if self._engine is not None:
+            engine, self._engine = self._engine, None
+            try:
+                await engine.dispose()
+            except DemoWebError:
+                raise
+            except Exception:
+                raise DemoWebError(
+                    "copy_binding_unavailable",
+                    "The session copy binding is not available.",
+                ) from None
+
+    async def read_index(self) -> list[dict[str, object]]:
+        """Read the bounded display index; every failure is the one
+        safe refusal (no name, DSN or error detail escapes)."""
+        from sqlalchemy import text as _sql_text
+
+        try:
+            self._engine = create_async_engine(
+                self._config.copy_engine_url(self._target_db),
+                poolclass=NullPool,
+                connect_args={
+                    # Explicit stage boundary (trusted private
+                    # network only) plus a bounded connect.
+                    "ssl": False,
+                    "timeout": _COPY_CONNECT_TIMEOUT_S,
+                    "server_settings": {
+                        "statement_timeout": str(
+                            int(_COPY_STATEMENT_TIMEOUT_S * 1000)
+                        )
+                    },
+                },
+            )
+            async with self._engine.connect() as conn:
+                async with conn.begin():
+                    # First statement of this explicit transaction:
+                    # make it READ ONLY, then verify the server agrees.
+                    await conn.exec_driver_sql(
+                        "SET TRANSACTION READ ONLY"
+                    )
+                    mode = (
+                        await conn.exec_driver_sql(
+                            "SELECT current_setting("
+                            "'transaction_read_only')"
+                        )
+                    ).first()
+                    if mode is None or mode[0] != "on":
+                        raise DemoWebError(
+                            "copy_binding_unavailable",
+                            "The session copy binding is not available.",
+                        )
+                    row = (
+                        await conn.exec_driver_sql(
+                            "SELECT current_database()"
+                        )
+                    ).first()
+                    if row is None or row[0] != self._target_db:
+                        raise DemoWebError(
+                            "copy_binding_unavailable",
+                            "The session copy binding is not available.",
+                        )
+                    # Fixed closed table (the worker-published
+                    # target-only display schema); no request-derived
+                    # identifier reaches the statement, and the row
+                    # bound caps the allocation. A missing schema is a
+                    # safe refusal (pre-upgrade copies).
+                    rows = (
+                        await conn.execute(
+                            _sql_text(
+                                "SELECT logical_name, kind, byte_count, "
+                                "captured_at FROM demo_display.leaves "
+                                "ORDER BY logical_name LIMIT "
+                                f"{_DISPLAY_ROW_MAX}"
+                            )
+                        )
+                    ).all()
+                return [
+                    {
+                        "logical_name": str(r[0]),
+                        "kind": str(r[1]),
+                        "byte_count": int(r[2]),
+                        "captured_at": float(r[3]),
+                    }
+                    for r in rows
+                ]
+        except DemoWebError:
+            raise
+        except Exception:
+            # Driver, connection, dispose or statement failure (or a
+            # missing demo_display schema): one generic safe refusal.
+            raise DemoWebError(
+                "copy_binding_unavailable",
+                "The session copy binding is not available.",
+            ) from None
+        finally:
+            await self.close()
+
+
 # --- the standalone ASGI entrypoint -----------------------------------------------
 
 
 def _default_copy_reader_factory(cfg: DemoWebConfig, target_db: str) -> CopyReader:
     """Default per-request copy-reader factory (224-d)."""
     return CopyReader(cfg, target_db)
+
+
+def _default_display_reader_factory(
+    cfg: DemoWebConfig, target_db: str
+) -> DisplayReader:
+    """Default per-request display-index reader factory (224-g)."""
+    return DisplayReader(cfg, target_db)
 
 
 def _demo_display_settings() -> Settings:
@@ -754,6 +904,7 @@ def create_demo_app(
     *,
     facade: DemoWebFacade | None = None,
     copy_reader_factory: Callable[[DemoWebConfig, str], CopyReader] | None = None,
+    display_reader_factory: Callable[[DemoWebConfig, str], DisplayReader] | None = None,
 ) -> DemoAdminGate:
     """Build the standalone demo web ASGI app (224-c; 224-e gated).
 
@@ -816,6 +967,14 @@ def create_demo_app(
         copy_reader_factory
         if copy_reader_factory is not None
         else _default_copy_reader_factory
+    )
+    # 224-g: per-request target-only display-index reader factory
+    # (the purpose-built reader by default; tests may substitute a
+    # fake).
+    app.state.demo_display_reader_factory = (
+        display_reader_factory
+        if display_reader_factory is not None
+        else _default_display_reader_factory
     )
 
     static_dir = Path(__file__).resolve().parent / "web" / "static"

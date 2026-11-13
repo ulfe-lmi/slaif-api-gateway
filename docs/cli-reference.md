@@ -1037,9 +1037,13 @@ worker handoff (including the 224-d exact verified-copy reader
 publication grant, which the `process-request` command performs
 automatically after the combined 222+223 proof) and the 224-c browser
 entry (standalone `/fakeadmin` process, now with the 224-d read-only
-copy preview) are implemented; the demo is still not usable
-end-to-end until the later 224 suffixes land the copy-backed GUI
-binding. 224-d adds NO new CLI command.
+copy preview, the 224-e/224-f db-backed admin sections and the
+224-g metadata-only files preview) are implemented; the demo is
+still not usable end-to-end until the later 224 suffixes land the
+copy-backed GUI panels. 224-d/224-e/224-f/224-g add NO new CLI
+commands: the 224-g target-only display publication happens
+automatically inside `process-request` (worker-only) between the
+combined 222+223 proof and the verified handoff.
 
 ```bash
 # One bounded snapshot job (create + dump + restore into a unique raw copy)

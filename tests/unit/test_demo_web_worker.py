@@ -253,7 +253,7 @@ def _make_verified_copies(
     leaf_st = os.stat(leaf_path, follow_symlinks=False)
     entry = {
         "leaf": leaf_name,
-        "logical_name": "reports/report.md",
+        "logical_name": f"catalog/proposals/{'ab' * 16}/provider-catalog-report.md",
         "kind": dsf.KIND_MARKDOWN,
         "sha256": hashlib.sha256(payload).hexdigest(),
         "bytes": len(payload),
@@ -316,6 +316,14 @@ def _pipeline_success(
         )
 
     monkeypatch.setattr(dsf, "run_files_job", fake_files)
+
+    def fake_ingest(config, job_id, request_id, target_db):
+        # 224-g: the target-only demo_display ingest is database-side
+        # evidence; unit tests substitute the recorded no-op seam.
+        calls["ingest"].append((job_id, request_id, target_db))
+
+    calls["ingest"] = []
+    monkeypatch.setattr(dww, "_ingest_verified_display", fake_ingest)
     return calls
 
 
@@ -385,7 +393,7 @@ def test_process_request_claim_refused_runs_no_pipeline(
     )
     assert result.state == "claim_refused"
     assert result.failure_code == "worker_failed"
-    assert calls == {"snapshot": [], "sanitize": [], "files": []}
+    assert calls == {"snapshot": [], "sanitize": [], "files": [], "ingest": []}
     assert control.handoffs == [] and control.failures == []
     assert "job" not in result.to_safe_dict()
     assert control.closed
@@ -1388,6 +1396,10 @@ def test_grant_success_single_transaction_exact_copy(
     assert f'GRANT CONNECT ON DATABASE "{target}" TO "{READER_ROLE}"' in grant_sql
     assert f'GRANT USAGE ON SCHEMA public TO "{READER_ROLE}"' in grant_sql
     assert f'GRANT SELECT ON ALL TABLES IN SCHEMA public TO "{READER_ROLE}"' in grant_sql
+    # 224-g: the target-only display schema grant rides the SAME
+    # atomic transaction.
+    assert f'GRANT USAGE ON SCHEMA demo_display TO "{READER_ROLE}"' in grant_sql
+    assert f'GRANT SELECT ON demo_display.leaves TO "{READER_ROLE}"' in grant_sql
     # No statement may name the source cluster or any DML/DDL.
     full = pre_sql + " " + grant_sql
     for forbidden in ("DELETE", "UPDATE ", "INSERT", "CREATE", "ALTER", "DROP "):
@@ -1475,3 +1487,375 @@ def test_process_request_grant_failure_fails_without_publishing(
     # NEVER published: no handoff attempt, failure recorded.
     assert control.handoffs == []
     assert control.failures == [(REQUEST_ID, "worker_failed")]
+
+
+# --- 224-g target-only display ingest ------------------------------------------------
+
+
+class _FakeDisplayTxn:
+    def __init__(self, conn: "_FakeDisplayConn") -> None:
+        self._conn = conn
+
+    async def __aenter__(self) -> "_FakeDisplayTxn":
+        return self
+
+    async def __aexit__(self, exc_type, _exc, _tb) -> bool:
+        if exc_type is not None:
+            self._conn.rolled_back = True
+        return False
+
+
+class _FakeDisplayConn:
+    """Records every statement + parameter tuple of the ingest
+    transaction; never touches a real database."""
+
+    def __init__(self) -> None:
+        self.executes: list[tuple[str, tuple[object, ...]]] = []
+        self.rolled_back = False
+        self.closed = False
+
+    def transaction(self) -> _FakeDisplayTxn:
+        return _FakeDisplayTxn(self)
+
+    async def execute(self, sql: str, *args: object) -> None:
+        self.executes.append((sql, args))
+
+    async def close(self) -> None:
+        self.closed = True
+
+
+def _fake_display_conn(monkeypatch: pytest.MonkeyPatch) -> _FakeDisplayConn:
+    conn = _FakeDisplayConn()
+
+    async def fake_connect_copy(config, target_db, **kwargs):
+        fake_connect_copy.target_db = target_db
+        fake_connect_copy.kwargs = kwargs
+        return conn
+
+    monkeypatch.setattr(dss, "_connect_copy", fake_connect_copy)
+    return conn
+
+
+def _ingest_one_leaf(custody: Path, job: str, target: str, **entry_overrides):
+    """Run the sync ingest entry against ONE-leaf verified custody."""
+    _make_verified_copies(custody, job, target)
+    if entry_overrides:
+        files_dir = custody / job / dsf.FILES_DIR_NAME
+        import json as _json
+
+        doc = _json.loads((files_dir / dsf.FILES_MANIFEST_NAME).read_text())
+        for key, value in entry_overrides.items():
+            doc["files"][0][key] = value
+        (files_dir / dsf.FILES_MANIFEST_NAME).write_text(
+            _json.dumps(doc, sort_keys=True) + "\n"
+        )
+    return dww._ingest_verified_display(
+        _worker_config_for(custody), job, REQUEST_ID, target
+    )
+
+
+def _worker_config_for(custody: Path) -> dww.DemoWebWorkerConfig:
+    import tempfile
+
+    tmp = Path(tempfile.mkdtemp(prefix="224g-cfg-"))
+    passfile = tmp / "pgpass"
+    passfile.write_text(
+        "127.0.0.1:5555:slaif_src:snap_reader:canary-src\n"
+        "127.0.0.1:5556:*:snap_target:canary-tgt\n",
+        encoding="utf-8",
+    )
+    os.chmod(passfile, 0o600)
+    settings = Settings(**_settings_dict(custody, passfile))
+    return dww.web_worker_config_from_settings(settings)
+
+
+LEGIT_REPORT_NAME = f"catalog/proposals/{'ab' * 16}/provider-catalog-report.md"
+
+
+def test_ingest_happy_path_projects_only_closed_safe_fields(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    custody, _pf = _custody_passfile(tmp_path)
+    job, target = _job_id(71), _target_db(71)
+    conn = _fake_display_conn(monkeypatch)
+    _ingest_one_leaf(custody, job, target)
+    assert not conn.rolled_back and conn.closed
+    sqls = [sql for sql, _args in conn.executes]
+    assert sqls[0] == dww._DISPLAY_LEAVES_DDL
+    assert "CREATE SCHEMA demo_display" in sqls[0]
+    assert "CREATE TABLE demo_display.leaves" in sqls[0]
+    assert len(conn.executes) == 2  # DDL + the single INSERT
+    _sql, args = conn.executes[1]
+    assert "INSERT INTO demo_display.leaves" in _sql
+    name, kind, sha, count, captured, body = args
+    assert name == LEGIT_REPORT_NAME
+    assert kind == dsf.KIND_MARKDOWN
+    assert sha == hashlib.sha256(dsf.NEUTRAL_MARKDOWN).hexdigest()
+    assert count == len(dsf.NEUTRAL_MARKDOWN)
+    assert captured == 1500.0
+    assert body == dsf.NEUTRAL_MARKDOWN
+    # No private manifest field (source, source_ref, source_sha256,
+    # inode identity, on-disk leaf name) may be projected into SQL.
+    rendered = repr(conn.executes)
+    for forbidden in (
+        "fixed-label",  # source_ref
+        hashlib.sha256(b"src").hexdigest(),  # source_sha256
+        "f0001-",  # on-disk leaf name
+        "inode",
+    ):
+        assert forbidden not in rendered
+
+
+def test_ingest_rejects_illegal_logical_name_and_rolls_back(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    custody, _pf = _custody_passfile(tmp_path)
+    job, target = _job_id(72), _target_db(72)
+    conn = _fake_display_conn(monkeypatch)
+    with pytest.raises(dww.DemoWebWorkerError) as ei:
+        _ingest_one_leaf(
+            custody, job, target, logical_name="branding/evil.svg"
+        )
+    assert ei.value.code == dww.CODE_DISPLAY_INGEST_FAILED
+    assert conn.rolled_back
+    assert len(conn.executes) == 1  # DDL only; no INSERT survived
+
+
+def test_ingest_rejects_duplicate_logical_names(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    custody, _pf = _custody_passfile(tmp_path)
+    job, target = _job_id(73), _target_db(73)
+    _make_verified_copies(custody, job, target)
+    files_dir = custody / job / dsf.FILES_DIR_NAME
+    import json as _json
+
+    # A second physical leaf with the SAME closed logical name.
+    leaf2 = files_dir / ("f0002-" + "cd" * 6)
+    leaf2.write_bytes(dsf.NEUTRAL_MARKDOWN)
+    os.chmod(leaf2, 0o600)
+    leaf_st = os.stat(leaf2, follow_symlinks=False)
+    doc = _json.loads((files_dir / dsf.FILES_MANIFEST_NAME).read_text())
+    doc["files"].append(
+        {
+            "leaf": leaf2.name,
+            "logical_name": LEGIT_REPORT_NAME,
+            "kind": dsf.KIND_MARKDOWN,
+            "sha256": hashlib.sha256(dsf.NEUTRAL_MARKDOWN).hexdigest(),
+            "bytes": len(dsf.NEUTRAL_MARKDOWN),
+            "inode_identity": [leaf_st.st_dev, leaf_st.st_ino],
+            "source": "test",
+            "source_ref": "fixed-label",
+            "captured_at": 1500.0,
+            "source_sha256": hashlib.sha256(b"src").hexdigest(),
+        }
+    )
+    (files_dir / dsf.FILES_MANIFEST_NAME).write_text(
+        _json.dumps(doc, sort_keys=True) + "\n"
+    )
+    conn = _fake_display_conn(monkeypatch)
+    with pytest.raises(dww.DemoWebWorkerError) as ei:
+        dww._ingest_verified_display(
+            _worker_config_for(custody), job, REQUEST_ID, target
+        )
+    assert ei.value.code == dww.CODE_DISPLAY_INGEST_FAILED
+    assert conn.rolled_back
+    # DDL + the FIRST (legit) leaf INSERT ran; the duplicate refused
+    # before its INSERT and the whole transaction rolled back.
+    assert len(conn.executes) == 2
+    assert all("INSERT" not in sql or i == 1 for i, (sql, _a) in enumerate(conn.executes))
+
+
+def test_ingest_rejects_unknown_kind_entry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    custody, _pf = _custody_passfile(tmp_path)
+    job, target = _job_id(74), _target_db(74)
+    conn = _fake_display_conn(monkeypatch)
+    with pytest.raises(dww.DemoWebWorkerError) as ei:
+        _ingest_one_leaf(custody, job, target, kind="not-a-kind")
+    assert ei.value.code == dww.CODE_DISPLAY_INGEST_FAILED
+    assert conn.rolled_back
+    assert len(conn.executes) == 1
+
+
+def test_ingest_rejects_leaf_changed_after_verification(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    custody, _pf = _custody_passfile(tmp_path)
+    job, target = _job_id(75), _target_db(75)
+    conn = _fake_display_conn(monkeypatch)
+    _make_verified_copies(custody, job, target, corrupt_leaf=True)
+    with pytest.raises(dww.DemoWebWorkerError) as ei:
+        dww._ingest_verified_display(
+            _worker_config_for(custody), job, REQUEST_ID, target
+        )
+    assert ei.value.code == dww.CODE_DISPLAY_INGEST_FAILED
+    assert conn.rolled_back
+    # DDL ran first, then the re-proof refusal rolled the transaction
+    # back: no INSERT ever reached the copy.
+    assert len(conn.executes) == 1
+
+
+def test_ingest_rejects_main_manifest_leaf_count_drift(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    custody, _pf = _custody_passfile(tmp_path)
+    job, target = _job_id(76), _target_db(76)
+    _make_verified_copies(custody, job, target)
+    job_dir = custody / job
+    manifest = ds.read_manifest(job_dir)
+    assert manifest is not None
+    manifest.files_count = 5  # custody lies about the re-proven set
+    ds.write_manifest(job_dir, manifest)
+    conn = _fake_display_conn(monkeypatch)
+    with pytest.raises(dww.DemoWebWorkerError) as ei:
+        dww._ingest_verified_display(
+            _worker_config_for(custody), job, REQUEST_ID, target
+        )
+    assert ei.value.code == dww.CODE_DISPLAY_INGEST_FAILED
+    assert conn.rolled_back
+    assert len(conn.executes) == 2  # DDL ran, zero INSERTs survived
+
+
+def test_ingest_rejects_invalid_capture_time(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    custody, _pf = _custody_passfile(tmp_path)
+    job, target = _job_id(77), _target_db(77)
+    conn = _fake_display_conn(monkeypatch)
+    with pytest.raises(dww.DemoWebWorkerError) as ei:
+        _ingest_one_leaf(custody, job, target, captured_at=True)
+    assert ei.value.code == dww.CODE_DISPLAY_INGEST_FAILED
+    assert conn.rolled_back
+
+
+def test_ingest_deadline_already_elapsed_fails_closed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    custody, _pf = _custody_passfile(tmp_path)
+    job, target = _job_id(78), _target_db(78)
+    _make_verified_copies(custody, job, target)
+    _fake_display_conn(monkeypatch)
+
+    async def run_past_deadline() -> None:
+        config = _worker_config_for(custody)
+        proof = dww._anchored_main_manifest(config, job, REQUEST_ID)
+        assert proof is not None
+        manifest, job_identity = proof
+        await dww._display_ingest_transaction(
+            config,
+            target,
+            custody / job,
+            manifest,
+            job_identity,
+            deadline=0.0,  # already elapsed
+        )
+
+    with pytest.raises(dww.DemoWebWorkerError) as ei:
+        asyncio.run(run_past_deadline())
+    assert ei.value.code == dww.CODE_DISPLAY_INGEST_FAILED
+
+
+def test_ingest_refuses_foreign_job_or_request_before_any_db_work(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    custody, _pf = _custody_passfile(tmp_path)
+    job, target = _job_id(79), _target_db(79)
+    _make_verified_copies(custody, job, target)
+    conn = _fake_display_conn(monkeypatch)
+    config = _worker_config_for(custody)
+    # Foreign request: the anchored manifest ownership check refuses.
+    with pytest.raises(dww.DemoWebWorkerError) as ei:
+        dww._ingest_verified_display(
+            config, job, uuid.uuid4(), target
+        )
+    assert ei.value.code == dww.CODE_DISPLAY_INGEST_FAILED
+    # Malformed target name: refused before any DB work at all.
+    with pytest.raises(dww.DemoWebWorkerError) as ei2:
+        dww._ingest_verified_display(config, job, REQUEST_ID, "evil_db")
+    assert ei2.value.code == dww.CODE_DISPLAY_INGEST_FAILED
+    assert conn.executes == []
+
+
+def test_ingest_logical_name_law_closed_per_kind() -> None:
+    K = dsf
+    run = "demo-run-" + "a" * 24
+    job32 = "b" * 32
+    presets = (
+        "openrouter-chat-text",
+        "openrouter-chat-image",
+        "openrouter-chat-audio",
+        "openrouter-chat-multimodal",
+        "openrouter-responses-text",
+    )
+    law = dww._display_name_law
+    assert law(K.KIND_REFRESH_BUNDLE, f"catalog/runs/{run}/catalog-refresh.json")
+    assert law(K.KIND_REFRESH_BUNDLE, f"catalog/uploads/{job32}/bundle-{'c' * 32}")
+    assert law(K.KIND_BASELINE_DOC, f"catalog/runs/{run}/catalog-baseline.json")
+    assert law(K.KIND_BASELINE_DOC, f"catalog/uploads/{job32}/baseline-export-{'d' * 32}")
+    assert law(K.KIND_ROUTE_TSV, f"catalog/runs/{run}/routes-proposal.tsv")
+    assert law(K.KIND_ROUTE_TSV, f"catalog/proposals/{job32}/routes-proposal.tsv")
+    assert law(K.KIND_ROUTE_TSV, f"catalog/proposals/{job32}/packages/{presets[0]}/routes-proposal.tsv")
+    assert law(K.KIND_PRICING_TSV, f"catalog/proposals/{job32}/packages/{presets[4]}/pricing-proposal.tsv")
+    assert law(K.KIND_FX_JSON, f"catalog/runs/{run}/fx-proposal.json")
+    assert law(K.KIND_VALIDATION_JSON, f"catalog/runs/{run}/validation.json")
+    assert law(K.KIND_REVIEW_HTML, f"catalog/runs/{run}/REVIEW.html")
+    assert law(K.KIND_SOURCE_MANIFEST, f"catalog/proposals/{job32}/source-manifest.json")
+    assert law(K.KIND_NORMALIZED_JSON, f"catalog/proposals/{job32}/provider-catalog-normalized.json")
+    assert law(K.KIND_WARNINGS_JSON, f"catalog/proposals/{job32}/warnings.json")
+    assert law(K.KIND_MARKDOWN, f"catalog/proposals/{job32}/provider-catalog-report.md")
+    assert law(K.KIND_MARKDOWN, f"catalog/proposals/{job32}/packages/{presets[1]}/package-report.md")
+    assert law(K.KIND_MARKDOWN, f"catalog/proposals/{job32}/packages/{presets[2]}/model-review.md")
+    assert law(K.KIND_PACKAGE_MANIFEST, f"catalog/proposals/{job32}/packages/{presets[3]}/package-manifest.json")
+    assert law(K.KIND_JOB_RECORD, f"catalog/jobs/{job32}.json")
+    for slot in ("style.css", "logo", "logo-compact", "favicon", "hero"):
+        assert law(K.KIND_BRANDING, f"branding/{slot}")
+    assert law(K.KIND_LLM_PROFILES, "profiles/upstream-llm.json")
+    assert law(K.KIND_COMPLETION_CHOICES, "profiles/completion-choices.json")
+    # Closed law: foreign shapes, traversal, unknown kinds, wrong
+    # kind/name pairs, and over-length names all refuse.
+    assert not law(K.KIND_BRANDING, "branding/evil.svg")
+    assert not law(K.KIND_BRANDING, "branding/../etc/passwd")
+    assert not law(K.KIND_ROUTE_TSV, f"catalog/runs/{run}/routes-proposal.tsvx")
+    assert not law(K.KIND_MARKDOWN, f"catalog/proposals/{job32}/packages/evil-pkg/report.md")
+    assert not law("unknown_kind", "profiles/upstream-llm.json")
+    assert not law(K.KIND_BRANDING, f"catalog/jobs/{job32}.json")
+    assert not law(K.KIND_LLM_PROFILES, "x" * 201)
+    assert not law(K.KIND_LLM_PROFILES, "")
+    assert not law(123, "profiles/upstream-llm.json")
+
+
+def test_process_request_ingest_failure_fails_without_publishing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config, settings, custody, _ = _worker_config(tmp_path)
+    job, target = _job_id(80), _target_db(80)
+    _make_verified_copies(custody, job, target)
+    control = FakeControl(config)
+    _install_fake_control(monkeypatch, control)
+    calls = _pipeline_success(monkeypatch, job, target)
+
+    def ingest_boom(cfg, job_id, request_id, target_db):
+        assert (job_id, request_id, target_db) == (job, REQUEST_ID, target)
+        raise dww.DemoWebWorkerError(
+            dww.CODE_DISPLAY_INGEST_FAILED,
+            "The verified display could not be ingested into the demo copy.",
+        )
+
+    monkeypatch.setattr(dww, "_ingest_verified_display", ingest_boom)
+    grants: list[str] = []
+    monkeypatch.setattr(
+        dww, "_grant_target_reader", lambda cfg, db: grants.append(db)
+    )
+    result = asyncio.run(
+        dww.process_request(config, settings, request_id=REQUEST_ID)
+    )
+    assert result.state == "failed"
+    assert result.failure_code == dww.CODE_DISPLAY_INGEST_FAILED
+    # NEVER published: no grant, no handoff, failure recorded, and the
+    # 221/222/223 pipeline ran exactly once.
+    assert grants == []
+    assert control.handoffs == []
+    assert control.failures == [(REQUEST_ID, "worker_failed")]
+    assert len(calls["snapshot"]) == 1 and calls["ingest"] == []

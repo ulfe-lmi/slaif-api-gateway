@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Demo Files Preview</title>
+  <link rel="stylesheet" href="/fakeadmin/static/css/admin.css">
+  <script src="/fakeadmin/static/js/table-sort.js" defer></script>
+</head>
+<body>
+  <section class="auth-panel" aria-labelledby="files-preview-heading">
+    <div class="auth-header">
+      <h1 id="files-preview-heading">Read-only files preview</h1>
+    </div>
+
+    {% if leaves %}
+    <p>
+      Bounded metadata from the display files published to the copy
+      bound to this session (identity-masked data, metadata only).
+      File contents are not shown in this stage; this is a read-only
+      proof of your private copy and no other session can read it.
+    </p>
+    <table data-sortable class="data-table">
+      <thead>
+        <tr>
+          <th data-ordinal aria-hidden="true">#</th>
+          <th scope="col">Name</th>
+          <th scope="col">Kind</th>
+          <th scope="col">Bytes</th>
+          <th scope="col">Captured (UTC)</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for leaf in leaves %}
+        <tr>
+          <td class="row-ordinal">{{ loop.index }}</td>
+          <td>{{ leaf.logical_name }}</td>
+          <td>{{ leaf.kind }}</td>
+          <td>{{ leaf.byte_count }}</td>
+          <td>{{ leaf.captured_utc }}</td>
+        </tr>
+        {% else %}
+        <tr data-no-sort>
+          <td colspan="5" class="empty-state">No display files are
+            available right now.</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <p class="form-error" role="note">
+      Your display files are not available right now. They are
+      readable only while your verified snapshot is current and has
+      published display files; please check back from the ready page.
+    </p>
+    {% endif %}
+
+    <p class="form-error" role="note">
+      File contents are <strong>not rendered</strong> in this stage:
+      only bounded metadata is shown.
+    </p>
+
+    <p>
+      <a href="/fakeadmin/ready">Back to ready</a>
+    </p>
+
+    <form method="post" action="/fakeadmin/logout" class="form-stack">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <button type="submit">Log out</button>
+    </form>
+  </section>
+</body>
+</html>

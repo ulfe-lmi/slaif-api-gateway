@@ -1878,6 +1878,19 @@ connection and makes every dynamic `/admin` response
 `Cache-Control: private, no-store` (revisioned `/admin/static`
 assets keep their own cache policy).
 
+224-g adds NO new settings either: the worker's target-only display
+ingest reuses the existing file-job bounds
+(`DEMO_SNAPSHOT_FILES_MAX_FILE_BYTES`,
+`DEMO_SNAPSHOT_FILES_MAX_TOTAL_BYTES`,
+`DEMO_SNAPSHOT_FILES_MAX_ELAPSED_SECONDS` - the last as the ONE
+finite ingest deadline) and the worker's existing target-admin
+passfile credential, and the web display reader reuses the existing
+`DEMO_WEB_COPY_*` reader connection. It publishes the 223-verified
+sanitized display leaves into a target-only `demo_display` schema
+inside the exact disposable copy (no source/ordinary-DB schema
+change) and adds the metadata-only `/fakeadmin/files-preview` page
+(`no-store`; no body rendering).
+
 ## Production Notes
 
 - Never commit `.env`.

@@ -332,9 +332,12 @@ class FakeFacade:
         )
 
 
-def _app(fake: FakeFacade, copy_reader_factory=None):
+def _app(fake: FakeFacade, copy_reader_factory=None, display_reader_factory=None):
     return create_demo_app(
-        _config(), facade=fake, copy_reader_factory=copy_reader_factory
+        _config(),
+        facade=fake,
+        copy_reader_factory=copy_reader_factory,
+        display_reader_factory=display_reader_factory,
     )
 
 
@@ -2179,3 +2182,231 @@ def test_demo_display_settings_ignores_ambient_env(monkeypatch):
     assert app.state.settings is not None
     assert app.state.settings.DATABASE_URL is None
     assert app.state.demo_mode is True
+
+
+# --- 224-g: display-index reader and files-preview route -----------------------
+
+from slaif_gateway.demo_web import (  # noqa: E402
+    DisplayReader,
+    _default_display_reader_factory,
+)
+
+LEAF_ONE = {
+    "logical_name": f"catalog/proposals/{'ab' * 16}/provider-catalog-report.md",
+    "kind": "markdown",
+    "byte_count": 50,
+    "captured_at": 1750000000.0,
+}
+LEAF_TWO = {
+    "logical_name": "branding/logo",
+    "kind": "branding",
+    "byte_count": 1234,
+    "captured_at": 1750000010.5,
+}
+
+
+class FakeDisplayReader:
+    """In-memory display-index reader standing in for the per-request
+    engine (same seam pattern as FakeCopyReader)."""
+
+    def __init__(self, leaves=None, raise_code=None):
+        self._leaves = leaves
+        self._raise_code = raise_code
+        self.reads = 0
+
+    async def read_index(self):
+        self.reads += 1
+        if self._raise_code is not None:
+            raise DemoWebError(
+                self._raise_code, "The session copy binding is not available."
+            )
+        assert self._leaves is not None
+        return [dict(leaf) for leaf in self._leaves]
+
+
+def _display_factory(leaves=None, raise_code=None):
+    made: list[tuple] = []
+
+    def factory(cfg, target_db):
+        made.append((cfg, target_db))
+        return FakeDisplayReader(leaves, raise_code)
+
+    return factory, made
+
+
+def test_display_reader_constructor_refuses_malformed_name():
+    cfg = _config(copy_host="127.0.0.1", copy_user="reader", copy_password="p")
+    with pytest.raises(DemoWebError) as ei:
+        DisplayReader(cfg, "demo_snap_" + "a" * 21)
+    assert ei.value.code == "copy_binding_unavailable"
+    with pytest.raises(DemoWebError):
+        DisplayReader(cfg, "evil_db")
+    # The real default factory enforces the SAME closed-name law.
+    with pytest.raises(DemoWebError):
+        _default_display_reader_factory(cfg, "evil_db")
+
+
+def test_display_reader_close_wraps_dispose_failure_safely():
+    class _BoomEngine:
+        def __init__(self) -> None:
+            self.disposed = 0
+
+        async def dispose(self) -> None:
+            self.disposed += 1
+            raise RuntimeError("driver boom postgresql://secret@x/y")
+
+    engine = _BoomEngine()
+    reader = DisplayReader(
+        _config(copy_host="h", copy_user="u", copy_password="p"), COPY_OK
+    )
+    reader._engine = engine  # type: ignore[assignment]
+    with pytest.raises(DemoWebError) as ei:
+        asyncio.run(reader.close())
+    assert ei.value.code == "copy_binding_unavailable"
+    assert "boom" not in str(ei.value)
+    assert "secret" not in str(ei.value)
+    assert engine.disposed == 1
+    asyncio.run(reader.close())  # a second close is a safe no-op
+
+
+def test_files_preview_requires_valid_session():
+    async def run():
+        fake = FakeFacade()
+        fake.request_state = "verified_unpublished"
+        fake.worker_target_db = COPY_OK
+        app = _app(fake)
+        async with _client(app) as client:
+            r = await client.get("/fakeadmin/files-preview")
+            assert r.status_code == 303
+            assert r.headers["location"] == "/fakeadmin/login"
+            client.cookies.set(
+                "slaif_demo_session", "forged", domain="demo.test", path="/"
+            )
+            r = await client.get("/fakeadmin/files-preview")
+            assert r.status_code == 303
+            assert client.cookies.get("slaif_demo_session") is None
+
+    asyncio.run(run())
+
+
+def test_files_preview_zero_active_accounts_404():
+    async def run():
+        fake = FakeFacade()
+        fake.active = 0
+        app = _app(fake)
+        async with _client(app) as client:
+            r = await client.get("/fakeadmin/files-preview")
+            assert r.status_code == 404
+
+    asyncio.run(run())
+
+
+def test_files_preview_unverified_request_safe_note():
+    async def run():
+        fake = FakeFacade()
+        fake.request_state = "claimed"
+        fake.worker_target_db = CANARY_DB
+        factory, made = _display_factory(leaves=[LEAF_ONE])
+        app = _app(fake, display_reader_factory=factory)
+        async with _client(app) as client:
+            client.cookies.set(
+                "slaif_demo_session", "unit-token-1", domain="demo.test", path="/"
+            )
+            r = await client.get("/fakeadmin/files-preview")
+            assert r.status_code == 200
+            assert "not available right now" in r.text
+            assert CANARY_DB not in r.text
+            assert made == []  # the reader was never constructed
+
+    asyncio.run(run())
+
+
+def test_files_preview_verified_lists_safe_index_no_store_no_canary():
+    async def run():
+        fake = FakeFacade()
+        fake.worker_target_db = COPY_OK
+        factory, made = _display_factory(leaves=[LEAF_ONE, LEAF_TWO])
+        app = _app(fake, display_reader_factory=factory)
+        async with _client(app) as client:
+            await _verified_session_client(fake, client)
+            r = await client.get("/fakeadmin/files-preview")
+            assert r.status_code == 200
+            assert r.headers.get("cache-control") == "no-store"
+            assert LEAF_ONE["logical_name"] in r.text
+            assert LEAF_TWO["logical_name"] in r.text
+            assert "markdown" in r.text and "branding" in r.text
+            assert str(LEAF_ONE["byte_count"]) in r.text
+            assert str(LEAF_TWO["byte_count"]) in r.text
+            assert "not available right now" not in r.text
+            # The copy name, DSN and credentials NEVER reach the page,
+            # and no body bytes are rendered (metadata only).
+            assert COPY_OK not in r.text
+            assert "postgresql" not in r.text.lower()
+            assert "readerpw" not in r.text
+            assert "Neutral demo display copy" not in r.text
+            # The factory got the EXACT verified copy name once.
+            assert [m[1] for m in made] == [COPY_OK]
+
+    asyncio.run(run())
+
+
+def test_files_preview_reader_failure_safe_note_pre_upgrade_copy():
+    # A pre-upgrade verified copy lacks the target-only demo_display
+    # schema: the reader refuses and the page shows the safe note.
+    async def run():
+        fake = FakeFacade()
+        fake.request_state = "verified_unpublished"
+        fake.worker_target_db = COPY_OK
+        factory, made = _display_factory(raise_code="copy_binding_unavailable")
+        app = _app(fake, display_reader_factory=factory)
+        async with _client(app) as client:
+            await _verified_session_client(fake, client)
+            r = await client.get("/fakeadmin/files-preview")
+            assert r.status_code == 200
+            assert "not available right now" in r.text
+            assert COPY_OK not in r.text
+            assert len(made) == 1
+
+    asyncio.run(run())
+
+
+def test_files_preview_wrong_account_binding_safe_note():
+    async def run():
+        fake = FakeFacade()
+        fake.request_state = "verified_unpublished"
+        fake.worker_target_db = CANARY_DB
+        fake.request_account_id = uuid.uuid4()
+        factory, made = _display_factory(leaves=[LEAF_ONE])
+        app = _app(fake, display_reader_factory=factory)
+        async with _client(app) as client:
+            client.cookies["slaif_demo_session"] = "unit-token-1"
+            r = await client.get("/fakeadmin/files-preview")
+            assert r.status_code == 200
+            assert "not available right now" in r.text
+            assert CANARY_DB not in r.text
+            assert made == []
+
+    asyncio.run(run())
+
+
+def test_files_preview_disabled_account_bounces():
+    async def run():
+        class Disabled(FakeFacade):
+            async def validate_session(self, *, account_id, token):
+                raise DemoWebControlError("web_account_disabled", "disabled")
+
+        fake = Disabled()
+        fake.request_state = "verified_unpublished"
+        fake.worker_target_db = COPY_OK
+        factory, made = _display_factory(leaves=[LEAF_ONE])
+        app = _app(fake, display_reader_factory=factory)
+        async with _client(app) as client:
+            client.cookies.set(
+                "slaif_demo_session", "unit-token-1", domain="demo.test", path="/"
+            )
+            r = await client.get("/fakeadmin/files-preview")
+            assert r.status_code == 303
+            assert client.cookies.get("slaif_demo_session") is None
+            assert made == []
+
+    asyncio.run(run())

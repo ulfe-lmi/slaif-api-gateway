@@ -1408,3 +1408,129 @@ file-backed display panels.
   one new section's sorting, the no-store header, and that a
   fresh reload after sign-out rechecks authorization instead of
   serving a cached snapshot.
+
+## Demo verified file display publication (objective 224-g)
+
+224-g gives the SAME session-bound SELECT-only copy reader access to
+the 223-verified sanitized file display leaves - through the TARGET
+DATABASE, never the worker file system. The worker ingests ONLY that
+job's verified leaves into a fresh, target-only `demo_display`
+schema inside the exact disposable copy, and the existing static
+reader role receives `USAGE`/`SELECT` on it in the SAME bounded grant
+transaction that grants the public tables. The standalone web process
+gets a small request-bound read-only display reader on its EXISTING
+`DEMO_WEB_COPY_*` credentials, and the new
+`/fakeadmin/files-preview` page lists ONLY safe bounded metadata
+(logical name, kind, byte count, capture time) as a proof of binding.
+No file BODY is rendered from a URL in this suffix, and NO
+file-backed admin panel is mounted yet. The `demo_display` schema is
+disposable with the copy: it is never in the source database, never
+in the ordinary gateway DB, and never in the 222-verified `public`
+inventory.
+
+### Worker ingest (target-only, 224-g)
+
+* Runs ONLY after the complete 224-b worker-held re-proof (combined
+  222 + 223: job/request/target identity, exact files tree, digests)
+  and BEFORE the 224-a verified handoff.
+* ONE finite deadline - the existing file-job elapsed bound
+  (`DEMO_SNAPSHOT_FILES_MAX_ELAPSED_SECONDS`, reused; no new
+  setting) - covers the whole ingest.
+* ONE bounded target transaction: creates the `demo_display` schema
+  + one `leaves` table, streams ONE re-proven leaf at a time through
+  parameterized `INSERT`s (no body, password or source value in
+  argv, SQL text or logs), and commits ONLY after the held re-proof
+  generator is fully exhausted (its final handle name-binding and
+  deadline checks have run). The generator's held descriptors are
+  always released, even on a mid-iteration driver failure.
+* A CLOSED display law applies to every entry: the exact per-kind
+  logical-name grammars the 223 producers can emit (per-copy keyed
+  ids or fixed vocabulary only), no duplicate names, no unknown
+  kind, exact byte counts, bounded capture times, and the per-leaf /
+  aggregate byte bounds.
+* The table stores ONLY the closed safe index fields
+  (`logical_name`, `kind`, display `sha256`, `byte_count`,
+  `captured_at`) plus the sanitized `bytea` body. The private
+  manifest fields (`source`, `source_ref`, `source_sha256`, inode
+  identity, on-disk leaf names) NEVER enter the copy.
+* A failed or torn transaction leaves NO published table: the
+  request fails with the finite safe code
+  `WEB_DISPLAY_INGEST_FAILED`, and the exact request-associated
+  cleanup drops the bound target database - removing the schema and
+  every grant with it (a failed drop retains the inspectable
+  `cleanup_pending` state).
+
+### Storage tradeoff (operator target-disk sizing, 224-g)
+
+This deliberately duplicates verified sanitized file bytes in the
+target database until the copy is dropped. The payload is bounded by
+the existing 223/224-b limits: 32 MiB per leaf / 128 MiB aggregate
+by default (configurable upper 128 MiB / 4 GiB), at most four
+retained copies - so the additional target payload is at most 512 MiB
+by default and 16 GiB at the configured upper bound, before
+PostgreSQL storage overhead. The private 223 custody retains its own
+sanitized leaves until cleanup as well. Size the operator's TARGET
+disk for that; a capacity or deadline failure fails the login
+closed and never publishes partial file data.
+
+### Pre-upgrade session behavior (224-g)
+
+Existing pre-upgrade verified sessions whose copies predate this
+stage have NO `demo_display` schema. Their already-authorized
+DB-only pages keep working until expiry, but the new files preview
+FAILS CLOSED for them (the page renders the safe note instead). New
+logins after this stage get the full display publication.
+
+### Reader law (224-g)
+
+The web display reader uses the existing `DEMO_WEB_COPY_*` static
+reader credential against the exact copy named by the verified
+control row (closed `demo_snap_<20hex>` law): one per-request
+engine, a database-side READ ONLY transaction with verified
+read-only mode and `current_database()` binding, the fixed closed
+table with a finite row bound, and disposal after every use. No
+filesystem access, no worker module import, no source/owner
+connection, no app-global per-visitor state. Every response is
+`no-store`; nothing reveals the database name, credential, private
+manifest, raw source reference or secret. A future internal method
+may retrieve one validated leaf body for the later panel adapters;
+this suffix ships no download endpoint or body rendering.
+
+### Still-gated after 224-g
+
+All file-backed admin PANELS remain unmounted (a later 224 suffix
+wires them on top of this publication), along with the still-gated
+224-f families. The demo remains NOT usable for company
+demonstrations; objective 225 remains the installed acceptance gate.
+
+### Evidence (224-g)
+
+* Focused unit: the closed per-kind display-name law (positive
+  shapes and foreign/traversal/unknown-kind refusals); the ingest
+  happy path projecting ONLY the closed safe fields (private
+  manifest fields asserted absent from every SQL parameter);
+  duplicate-name, unknown-kind, illegal-name, changed-leaf,
+  main-manifest count drift, invalid capture time and elapsed
+  deadline refusals (each rolling back the target transaction);
+  foreign job/request and malformed target name before any DB work;
+  the grant transaction now carrying the `demo_display` USAGE +
+  `SELECT ON demo_display.leaves` statements atomically; the
+  process-request ingest-failure path (no grant, no handoff,
+  failure recorded); and the files-preview route/session law
+  (bounce, safe note for unverified/expired/wrong-account/pre-upgrade
+  copies, no-store, metadata-only rendering, no canary).
+* Owned PostgreSQL 16 (real target service): a fully verified
+  job publishes the EXACT closed leaf set - the target table equals
+  the worker's own re-proven custody name-for-name with the two
+  configured sources pinned; the table carries only the closed safe
+  columns; worker-private values (control password, custody path,
+  passfile, source database, copy name) are absent from every stored
+  body; the real reader role is denied DML/DDL on the table
+  (42501); a raw copy has NO reader CONNECT and NO display schema in
+  either its raw or DB-only-sanitized state; a torn ingest
+  transaction (real rollback on the real copy) leaves NO published
+  table while an unrelated session-live copy is untouched, and the
+  exact request-associated cleanup drops only the failed copy and
+  marks it cleaned; a leaf changed after 223 verification refuses
+  publication before ingest and grant (no display table, no reader
+  grant).

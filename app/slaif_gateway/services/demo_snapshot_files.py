@@ -3983,28 +3983,27 @@ def _verify_leaf_policy(kind: object, data: bytes, slot: str | None) -> None:
     _verify_json_policy(kind, data)
 
 
-def _reprove_files_tree(
+def verified_leaf_entries(
     job_dir: Path,
     config: FileSnapshotConfig,
     deadline: float,
     expected_job_identity: tuple[int, int] | None = None,
-) -> tuple[int, int]:
-    """Shared read-only re-proof of the job's display tree (224-b).
+):
+    """Shared read-only re-proof of the job's display tree (224-b),
+    yielding ONE fully re-proven leaf at a time (224-g).
 
-    The complete identity/inventory law used by BOTH the 223 write
-    verifier and the 224-b worker-held pre-publication proof: every
-    leaf re-read through the anchored no-follow boundary; the
-    files-directory identity; the EXACT leaf set (no foreign entry, no
-    missing leaf, no duplicate or invalid name); per-leaf regular
-    type / 0600 mode / byte count / inode identity; and the per-leaf
-    digest plus display policy. It deliberately has NO
-    already-verified short-circuit: a promoted (``FILES_VERIFIED``)
-    tree is re-proven from the held files exactly as hard as a fresh
-    one. Per-file and cumulative byte bounds come from the TRUSTED
-    configured caps (bounded by the absolute verification ceilings);
-    the untrusted manifest counts only ever shrink the read. The
-    ABSOLUTE deadline is re-checked before every leaf read and before
-    a clean return.
+    The complete identity/inventory law: every leaf re-read through the
+    anchored no-follow boundary; the files-directory identity; the
+    EXACT leaf set (no foreign entry, no missing leaf, no duplicate or
+    invalid name); per-leaf regular type / 0600 mode / byte count /
+    inode identity; and the per-leaf digest plus display policy. It
+    deliberately has NO already-verified short-circuit: a promoted
+    (``FILES_VERIFIED``) tree is re-proven from the held files exactly
+    as hard as a fresh one. Per-file and cumulative byte bounds come
+    from the TRUSTED configured caps (bounded by the absolute
+    verification ceilings); the untrusted manifest counts only ever
+    shrink the read. The ABSOLUTE deadline is re-checked before every
+    leaf read and before a clean return.
 
     ``expected_job_identity`` (224-b): when given, the freshly opened
     job-directory handle must have EXACTLY this ``(st_dev, st_ino)`` -
@@ -4013,7 +4012,9 @@ def _reprove_files_tree(
     per-handle name binding alone cannot detect a swap across two
     unrelated opens) is a refusal.
 
-    Returns ``(total_bytes, leaf_count)``; any drift is a
+    Yields ``(entry, data)`` - the exact manifest entry document plus
+    the re-proven leaf bytes - for each accepted leaf, one bounded
+    leaf at a time (never the aggregate in memory). Any drift is a
     ``FILES_VERIFY_FAILED`` refusal.
     """
 
@@ -4175,14 +4176,36 @@ def _reprove_files_tree(
                     slot = logical.split("/", 1)[1]
                 _verify_leaf_policy(entry.get("kind"), data, slot)
                 total_bytes += len(data)
+                yield entry, data
         finally:
             os.close(files_fd)
         handle.assert_name_binding(str(job_dir))
     finally:
         handle.close()
     _deadline_check()
-    return total_bytes, len(entries)
 
+
+def _reprove_files_tree(
+    job_dir: Path,
+    config: FileSnapshotConfig,
+    deadline: float,
+    expected_job_identity: tuple[int, int] | None = None,
+) -> tuple[int, int]:
+    """Shared read-only re-proof of the job's display tree (224-b).
+
+    Consumes the single shared re-proof
+    (``verified_leaf_entries``) and returns ``(total_bytes,
+    leaf_count)``; any drift inside the shared law is a
+    ``FILES_VERIFY_FAILED`` refusal.
+    """
+    total_bytes = 0
+    leaf_count = 0
+    for _entry, data in verified_leaf_entries(
+        job_dir, config, deadline, expected_job_identity
+    ):
+        total_bytes += len(data)
+        leaf_count += 1
+    return total_bytes, leaf_count
 
 def verify_files(
     job_dir: Path,
