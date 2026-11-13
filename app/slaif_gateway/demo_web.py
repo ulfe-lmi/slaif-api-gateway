@@ -52,11 +52,14 @@ from slaif_gateway.db.repositories.fake_admin_accounts import (
     FakeAdminLoginCredential,
 )
 from slaif_gateway.services.demo_web_control import (
+    REQUEST_TTL,
     DemoSessionIssuedResult,
     DemoSnapshotRequestProjection,
     DemoWebControlService,
     DemoWebSessionProjection,
 )
+
+PENDING_TTL_S = int(REQUEST_TTL.total_seconds())
 
 __all__ = [
     "DemoWebConfig",
@@ -96,7 +99,15 @@ LOGIN_FIELD_MAX = 128  # username / password input lengths
 LOGIN_ATTEMPT_MAX = 20  # failed logins per window...
 LOGIN_ATTEMPT_WINDOW_S = 300.0  # ...per this bounded window
 CSRF_TTL_S = 600  # login/logout form token lifetime
-PENDING_TTL_S = 900  # short-lived wait cookie lifetime
+
+# The pending wait cookie lives as long as the request it binds (the
+# 224-a REQUEST_TTL, 60 minutes): a legitimate bounded worker chain
+# (221 dump + 222 sanitation + 223 file stage + pre-publication
+# re-proof, each capped at 300 s, plus queue time) can exceed a 15
+# minute cookie, and a successful snapshot must still be able to
+# reach the browser. The ABSOLUTE bound is still the request's own
+# expires_at (re-checked on every poll), and the live account fences
+# apply throughout; the cookie grants nothing by itself.
 # Finite inbound token bound: signed cookies are well under this; a
 # longer value is refused BEFORE any decode (no allocation blowup).
 SIGNED_TOKEN_MAX_LEN = 512

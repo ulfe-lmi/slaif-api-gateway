@@ -16,7 +16,10 @@ Safety law (224-c):
   verification on either path (a precomputed dummy hash is checked for
   unknown/disabled usernames so the dominant verification cost is
   uniform), one constant failure message;
-* wait: a short-lived signed cookie binds ``account:request:generation``;
+* wait: a signed cookie (lifetime tied to the 224-a request TTL, 60
+  minutes - a legitimate bounded worker chain can exceed 15 minutes)
+  binds ``account:request:generation``; the request's own expiry is
+  the absolute bound and is re-checked on every poll;
   every poll rechecks the live request facts and the live account
   fence; session issuance happens ONLY here (one ``create_session``
   call, at the verified moment) and nowhere else;

@@ -731,6 +731,53 @@ def test_wait_pending_cookie_bad_signature_refused():
     asyncio.run(run())
 
 
+def test_pending_ttl_matches_request_ttl():
+    """The pending cookie lifetime is tied to the 224-a request TTL,
+    so a legitimate bounded worker chain (221+222+223+re-proof, each
+    capped at 300 s, plus queue time) can finish before the browser
+    loses its pending binding."""
+    from slaif_gateway.services.demo_web_control import REQUEST_TTL
+
+    assert PENDING_TTL_S == int(REQUEST_TTL.total_seconds())
+    assert PENDING_TTL_S >= 3 * 300 + 300  # the worst-case chain
+
+
+def test_wait_pending_survives_long_worker_chain():
+    """A pending cookie more than 900 s old (the old lifetime) on a
+    still-unexpired verified request can STILL complete; the zero/
+    disable/generation fences are unchanged."""
+    async def run():
+        fake = FakeFacade()
+        fake.request_state = "verified_unpublished"
+        app = _app(fake)
+        old_token = make_signed_payload(
+            SECRET, "pending", f"{ACC}:{REQ}:{fake.live_gen}", PENDING_TTL_S,
+            now=time.time() - 1000,
+        )
+        async with _client(app) as client:
+            client.cookies.set(
+                "slaif_demo_pending", old_token,
+                domain="demo.test", path="/fakeadmin",
+            )
+            assert (await client.get("/fakeadmin/wait/status")).json() == {
+                "state": "ready"
+            }
+            r = await client.get("/fakeadmin/wait")
+            assert r.status_code == 303
+            assert fake.issued == 1
+            # fence still applies: disable -> denied, no second issue
+            fake.enabled = False
+            client.cookies.set(
+                "slaif_demo_pending", old_token,
+                domain="demo.test", path="/fakeadmin",
+            )
+            assert (await client.get("/fakeadmin/wait/status")).json() == {
+                "state": "unavailable"
+            }
+
+    asyncio.run(run())
+
+
 def test_wait_pending_cookie_expired_refused():
     async def run():
         fake = FakeFacade()

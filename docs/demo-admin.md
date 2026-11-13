@@ -996,8 +996,10 @@ receives one session, and logs out.
   or password."
   A successful login creates ONE fresh pending snapshot request
   (224-a) bound to the LIVE credential generation and moves the
-  browser to the wait surface with a short-lived signed pending
-  cookie.
+  browser to the wait surface with a signed pending cookie whose
+  lifetime is tied to the request's 60-minute TTL (a legitimate
+  bounded worker chain can exceed 15 minutes; the request's own
+  expiry remains the absolute bound, re-checked on every poll).
 - **Wait**: the signed pending cookie binds
   `account:request:generation`. Every poll (page and the JSON
   `/wait/status`) re-reads the live request facts AND the live account
@@ -1027,7 +1029,7 @@ All demo cookies are `HttpOnly`, `Secure`, `SameSite=Strict`:
 | Cookie | Path | Carries |
 | --- | --- | --- |
 | `slaif_demo_csrf` | `/fakeadmin` | a signed, expiring CSRF token (double-submit with the form field) |
-| `slaif_demo_pending` | `/fakeadmin` | a signed `account:request:generation` binding (short TTL, consumed at issuance) |
+| `slaif_demo_pending` | `/fakeadmin` | a signed `account:request:generation` binding (lifetime tied to the request's 60-minute TTL; consumed at issuance) |
 | `slaif_demo_session` | `/` | the raw opaque session token only (its SHA-256 hash is the only stored form) |
 
 The session cookie deliberately uses `Path=/` on the dedicated demo
