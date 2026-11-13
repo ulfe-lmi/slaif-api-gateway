@@ -617,6 +617,14 @@ async def _safe_record_failure(
 # sha256, byte count, capture time) and the sanitized bytea body.
 
 
+# 224-h: the web preview formats ``captured_at`` with
+# ``datetime.fromtimestamp(..., tz=timezone.utc)``; every stored capture
+# time stays below datetime's year-9999 ceiling (with margin), so
+# current AND post-2038 capture times remain valid. The web route
+# additionally falls back to its safe note for any value it cannot
+# format (platform-specific limits).
+_DISPLAY_CAPTURE_AT_MAX = 253_402_300_800.0  # just above year 9999, exclusive
+
 _DISPLAY_LEAVES_DDL = (
     "CREATE SCHEMA demo_display; "
     "CREATE TABLE demo_display.leaves ( "
@@ -646,116 +654,174 @@ async def _display_ingest_transaction(
     final handle name-binding and deadline checks have run). Any
     failure rolls back everything - a torn ingest leaves no published
     table. The generator is always closed (held FDs released), even on
-    a mid-iteration driver failure or cancellation."""
-    remaining_ms = int(max(100.0, (deadline - time.monotonic()) * 1000.0))
-    conn = await dss._connect_copy(
-        config.snapshot, target_db, statement_timeout_ms=remaining_ms
-    )
+    a mid-iteration driver failure or cancellation.
+
+    224-h: the ``deadline`` is a REAL wall-clock cap. An already
+    exhausted budget is refused BEFORE any connection; ONE
+    ``asyncio.timeout`` covers the connect, the DDL, EVERY insert and
+    the FINAL COMMIT (the transaction context-manager exit), so once
+    the budget elapses NO ingest, grant or handoff is confirmed. The
+    cancellation/rollback/connection-close cleanup that follows a
+    timeout may still take extra time; the exact target cleanup is
+    authoritative. The synchronous leaf reads between awaits keep an
+    explicit monotonic check (and the generator's own per-leaf
+    deadline check). A timed-out or uncertain commit fails
+    closed (no handoff, no grant); the open transaction is rolled back
+    during unwinding when the driver allows it, the connection close
+    is the backstop, and the exact request-associated copy cleanup
+    remains authoritative. The connection/statement timeouts remain
+    tighter secondary caps.
+    """
+    if time.monotonic() >= deadline:
+        raise DemoWebWorkerError(
+            CODE_DISPLAY_INGEST_FAILED,
+            "The display ingest exceeded its elapsed bound.",
+        )
+    conn = None
     try:
-        try:
-            async with conn.transaction():
-                await conn.execute(_DISPLAY_LEAVES_DDL)
-                seen: set[str] = set()
-                total_bytes = 0
-                count = 0
-                gen = dsf.verified_leaf_entries(
-                    job_dir,
-                    config.files,
-                    deadline,
-                    expected_job_identity=job_identity,
-                )
-                try:
-                    with contextlib.closing(gen):
-                        for entry, data in gen:
-                            if time.monotonic() > deadline:
-                                raise DemoWebWorkerError(
-                                    CODE_DISPLAY_INGEST_FAILED,
-                                    "The display ingest exceeded its elapsed bound."
-                                )
-                            kind = entry.get("kind")
-                            name = entry.get("logical_name")
-                            if not _display_name_law(kind, name):
-                                raise DemoWebWorkerError(
-                                    CODE_DISPLAY_INGEST_FAILED,
-                                    "A display leaf name failed the closed "
-                                    "display law."
-                                )
-                            if name in seen:
-                                raise DemoWebWorkerError(
-                                    CODE_DISPLAY_INGEST_FAILED,
-                                    "A display leaf name is duplicated."
-                                )
-                            seen.add(name)
-                            size = entry.get("bytes")
-                            if (
-                                type(size) is not int
-                                or size != len(data)
-                                or size > config.files.max_file_bytes
-                                or size > dsf.VERIFY_ABS_MAX_FILE_BYTES
-                            ):
-                                raise DemoWebWorkerError(
-                                    CODE_DISPLAY_INGEST_FAILED,
-                                    "A display leaf size is inconsistent."
-                                )
-                            captured = entry.get("captured_at")
-                            if (
-                                isinstance(captured, bool)
-                                or not isinstance(captured, (int, float))
-                                or not (0.0 < float(captured) < 9.0e15)
-                            ):
-                                raise DemoWebWorkerError(
-                                    CODE_DISPLAY_INGEST_FAILED,
-                                    "A display leaf capture time is invalid."
-                                )
-                            total_bytes += len(data)
-                            if (
-                                total_bytes > config.files.max_total_bytes
-                                or total_bytes > dsf.VERIFY_ABS_MAX_TOTAL_BYTES
-                            ):
-                                raise DemoWebWorkerError(
-                                    CODE_DISPLAY_INGEST_FAILED,
-                                    "The display ingest exceeds its byte bound."
-                                )
-                            count += 1
-                            # ONLY the closed safe index fields are
-                            # projected into SQL (parameterized); the
-                            # private entry fields (source, source_ref,
-                            # source_sha256, inode identity, on-disk leaf
-                            # name) are never serialized into the copy.
-                            await conn.execute(
-                                "INSERT INTO demo_display.leaves "
-                                "(logical_name, kind, sha256, byte_count, "
-                                "captured_at, body) "
-                                "VALUES ($1, $2, $3, $4, $5, $6)",
-                                name,
-                                kind,
-                                hashlib.sha256(data).hexdigest(),
-                                len(data),
-                                float(captured),
-                                data,
-                            )
-                    # Full exhaustion reached: the generator ran its final
-                    # job-directory name-binding and deadline checks.
-                finally:
-                    # Held FDs are released even when a driver failure or
-                    # cancellation interrupts the iteration.
-                    gen.close()
-                if count != manifest.files_count:
-                    raise DemoWebWorkerError(
-                        CODE_DISPLAY_INGEST_FAILED,
-                        "The display leaf set does not match the custody."
+        async with asyncio.timeout(deadline - time.monotonic()):
+            conn = await dss._connect_copy(
+                config.snapshot,
+                target_db,
+                statement_timeout_ms=int(
+                    max(100.0, (deadline - time.monotonic()) * 1000.0)
+                ),
+            )
+            try:
+                async with conn.transaction():
+                    await conn.execute(_DISPLAY_LEAVES_DDL)
+                    seen: set[str] = set()
+                    total_bytes = 0
+                    count = 0
+                    gen = dsf.verified_leaf_entries(
+                        job_dir,
+                        config.files,
+                        deadline,
+                        expected_job_identity=job_identity,
                     )
-            # Commit happened on a FULLY re-proven leaf set only.
-        except ds.DemoSnapshotError:
-            # The shared 223 re-proof law refused (identity, digest,
-            # exact set, bound, or deadline): the transaction already
-            # rolled back; surface the one finite safe code.
-            raise DemoWebWorkerError(
-                CODE_DISPLAY_INGEST_FAILED,
-                "The verified display tree failed its re-proof.",
-            ) from None
+                    try:
+                        with contextlib.closing(gen):
+                            for entry, data in gen:
+                                if time.monotonic() > deadline:
+                                    raise DemoWebWorkerError(
+                                        CODE_DISPLAY_INGEST_FAILED,
+                                        "The display ingest exceeded its "
+                                        "elapsed bound."
+                                    )
+                                kind = entry.get("kind")
+                                name = entry.get("logical_name")
+                                if not _display_name_law(kind, name):
+                                    raise DemoWebWorkerError(
+                                        CODE_DISPLAY_INGEST_FAILED,
+                                        "A display leaf name failed the closed "
+                                        "display law."
+                                    )
+                                if name in seen:
+                                    raise DemoWebWorkerError(
+                                        CODE_DISPLAY_INGEST_FAILED,
+                                        "A display leaf name is duplicated."
+                                    )
+                                seen.add(name)
+                                size = entry.get("bytes")
+                                if (
+                                    type(size) is not int
+                                    or size != len(data)
+                                    or size > config.files.max_file_bytes
+                                    or size > dsf.VERIFY_ABS_MAX_FILE_BYTES
+                                ):
+                                    raise DemoWebWorkerError(
+                                        CODE_DISPLAY_INGEST_FAILED,
+                                        "A display leaf size is inconsistent."
+                                    )
+                                captured = entry.get("captured_at")
+                                if (
+                                    isinstance(captured, bool)
+                                    or not isinstance(captured, (int, float))
+                                    or not (
+                                        0.0
+                                        < float(captured)
+                                        < _DISPLAY_CAPTURE_AT_MAX
+                                    )
+                                ):
+                                    raise DemoWebWorkerError(
+                                        CODE_DISPLAY_INGEST_FAILED,
+                                        "A display leaf capture time is "
+                                        "invalid."
+                                    )
+                                total_bytes += len(data)
+                                if (
+                                    total_bytes
+                                    > config.files.max_total_bytes
+                                    or total_bytes
+                                    > dsf.VERIFY_ABS_MAX_TOTAL_BYTES
+                                ):
+                                    raise DemoWebWorkerError(
+                                        CODE_DISPLAY_INGEST_FAILED,
+                                        "The display ingest exceeds its "
+                                        "byte bound."
+                                    )
+                                count += 1
+                                # ONLY the closed safe index fields are
+                                # projected into SQL (parameterized); the
+                                # private entry fields (source, source_ref,
+                                # source_sha256, inode identity, on-disk
+                                # leaf name) are never serialized into
+                                # the copy.
+                                await conn.execute(
+                                    "INSERT INTO demo_display.leaves "
+                                    "(logical_name, kind, sha256, byte_count, "
+                                    "captured_at, body) "
+                                    "VALUES ($1, $2, $3, $4, $5, $6)",
+                                    name,
+                                    kind,
+                                    hashlib.sha256(data).hexdigest(),
+                                    len(data),
+                                    float(captured),
+                                    data,
+                                )
+                        # Full exhaustion reached: the generator ran its
+                        # final job-directory name-binding and deadline
+                        # checks.
+                    finally:
+                        # Held FDs are released even when a driver
+                        # failure or cancellation interrupts the
+                        # iteration.
+                        gen.close()
+                    if (
+                        count != manifest.files_count
+                        or total_bytes != manifest.files_bytes
+                    ):
+                        raise DemoWebWorkerError(
+                            CODE_DISPLAY_INGEST_FAILED,
+                            "The display leaf set does not match the "
+                            "custody."
+                        )
+                # A normal exit from the transaction context manager is
+                # a CONFIRMED commit inside the deadline - the only
+                # exit after which a handoff or a grant may follow.
+            except ds.DemoSnapshotError:
+                # The shared 223 re-proof law refused (identity,
+                # digest, exact set, bound, or deadline): the
+                # transaction already rolled back; surface the one
+                # finite safe code.
+                raise DemoWebWorkerError(
+                    CODE_DISPLAY_INGEST_FAILED,
+                    "The verified display tree failed its re-proof.",
+                ) from None
+    except TimeoutError:
+        # 224-h: an await - connect, DDL, INSERT, or the final COMMIT
+        # - crossed the deadline. No handoff and no grant may follow;
+        # the open transaction (if any) was rolled back during
+        # unwinding when the driver allowed it, the connection close
+        # below is the backstop, and exact copy cleanup remains
+        # authoritative.
+        raise DemoWebWorkerError(
+            CODE_DISPLAY_INGEST_FAILED,
+            "The display ingest exceeded its elapsed bound.",
+        ) from None
     finally:
-        await dss._close_quiet(conn)
+        if conn is not None:
+            await dss._close_quiet(conn)
 
 
 def _ingest_verified_display(
@@ -771,8 +837,12 @@ def _ingest_verified_display(
     the anchored no-follow handle, then runs ONE bounded target
     transaction (its own event loop in the worker thread) that streams
     the re-proven leaves into the fresh target-only ``demo_display``
-    schema. ONE finite deadline (the file-job elapsed bound) covers the
-    whole ingest. Any refusal or failure raises
+    schema. ONE finite deadline (the file-job elapsed bound) is a real
+    wall-clock cap over the connection, the inserts and the commit.
+    224-h: the worker-held manifest's EXACT ``target_db`` must equal the
+    verified copy binding supplied to this entry - the caller's name is
+    never authority; a foreign but syntactically valid target refuses
+    before any connection. Any refusal or failure raises
     ``DemoWebWorkerError(CODE_DISPLAY_INGEST_FAILED)``; the target
     transaction is rolled back, so no partial table can survive.
     """
@@ -789,6 +859,14 @@ def _ingest_verified_display(
             "The verified display tree could not be re-proven.",
         )
     manifest, job_identity = proof
+    if manifest.target_db != target_db:
+        # 224-h: the caller's target name is NEVER authority - a
+        # foreign (but syntactically valid) target refuses here,
+        # before any connection, grant or publication.
+        raise DemoWebWorkerError(
+            CODE_DISPLAY_INGEST_FAILED,
+            "The verified display target does not match the copy binding.",
+        )
     job_dir = config.snapshot.custody_dir / job_id
     try:
         asyncio.run(

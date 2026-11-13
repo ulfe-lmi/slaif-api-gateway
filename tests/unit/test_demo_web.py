@@ -2410,3 +2410,64 @@ def test_files_preview_disabled_account_bounces():
             assert made == []
 
     asyncio.run(run())
+
+
+# --- 224-h: no-store on EVERY files-preview response + time law -------------------
+
+
+def test_files_preview_every_response_no_store():
+    async def run():
+        # (a) zero active accounts: the 404 is no-store too.
+        fake = FakeFacade()
+        fake.active = 0
+        app = _app(fake)
+        async with _client(app) as client:
+            r = await client.get("/fakeadmin/files-preview")
+            assert r.status_code == 404
+            assert r.headers.get("cache-control") == "no-store"
+        # (b) missing session: the login bounce redirect is no-store.
+        fake = FakeFacade()
+        app = _app(fake)
+        async with _client(app) as client:
+            r = await client.get("/fakeadmin/files-preview")
+            assert r.status_code == 303
+            assert r.headers.get("location") == "/fakeadmin/login"
+            assert r.headers.get("cache-control") == "no-store"
+        # (c) unverified request: the safe-note page is no-store.
+        fake = FakeFacade()
+        fake.request_state = "claimed"
+        fake.worker_target_db = CANARY_DB
+        app = _app(fake)
+        async with _client(app) as client:
+            client.cookies.set(
+                "slaif_demo_session", "unit-token-1", domain="demo.test", path="/"
+            )
+            r = await client.get("/fakeadmin/files-preview")
+            assert r.status_code == 200
+            assert r.headers.get("cache-control") == "no-store"
+            assert "not available right now" in r.text
+
+    asyncio.run(run())
+
+
+def test_files_preview_out_of_range_capture_time_safe_note():
+    # A stored capture time that is finite but NOT representable by
+    # datetime.fromtimestamp (a legacy writer predating the 224-h
+    # law) must render the SAME safe note - never a 500.
+    async def run():
+        fake = FakeFacade()
+        fake.worker_target_db = COPY_OK
+        bad_leaf = dict(LEAF_ONE)
+        bad_leaf["captured_at"] = 9.0e15
+        factory, made = _display_factory(leaves=[bad_leaf])
+        app = _app(fake, display_reader_factory=factory)
+        async with _client(app) as client:
+            await _verified_session_client(fake, client)
+            r = await client.get("/fakeadmin/files-preview")
+            assert r.status_code == 200
+            assert r.headers.get("cache-control") == "no-store"
+            assert "not available right now" in r.text
+            assert COPY_OK not in r.text
+            assert len(made) == 1
+
+    asyncio.run(run())

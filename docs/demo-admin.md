@@ -1435,7 +1435,18 @@ inventory.
   and BEFORE the 224-a verified handoff.
 * ONE finite deadline - the existing file-job elapsed bound
   (`DEMO_SNAPSHOT_FILES_MAX_ELAPSED_SECONDS`, reused; no new
-  setting) - covers the whole ingest.
+  setting). Since 224-h it is a REAL wall-clock cap: an already
+  exhausted budget is refused before any connection, and ONE
+  `asyncio.timeout` covers the connect, the DDL, every `INSERT`
+  and the final COMMIT, so once the budget elapses NO ingest,
+  grant or handoff is confirmed (the cancellation/rollback/
+  connection-close cleanup after a timeout may still take extra
+  time; the exact target cleanup is authoritative). A timed-out or
+  uncertain commit fails closed with no handoff and no grant; the connection close is the rollback backstop, and
+  the exact request-associated copy cleanup remains authoritative
+  (if a driver cancellation ever leaves a transient, UNGRANTED
+  target-only table behind, it can never be browser-authoritative
+  and is removed with the copy).
 * ONE bounded target transaction: creates the `demo_display` schema
   + one `leaves` table, streams ONE re-proven leaf at a time through
   parameterized `INSERT`s (no body, password or source value in
@@ -1446,8 +1457,14 @@ inventory.
 * A CLOSED display law applies to every entry: the exact per-kind
   logical-name grammars the 223 producers can emit (per-copy keyed
   ids or fixed vocabulary only), no duplicate names, no unknown
-  kind, exact byte counts, bounded capture times, and the per-leaf /
-  aggregate byte bounds.
+  kind, exact byte counts, capture times in the representable
+  range (below `datetime`'s year-9999 ceiling, so current and
+  post-2038 capture times stay valid), and the per-leaf /
+  aggregate byte bounds. Since 224-h the commit additionally
+  requires BOTH the leaf COUNT and the AGGREGATE BYTE total to
+  equal the worker-held custody manifest, and the manifest's exact
+  `target_db` must equal the verified copy binding BEFORE any
+  target connection - the caller's target name is never authority.
 * The table stores ONLY the closed safe index fields
   (`logical_name`, `kind`, display `sha256`, `byte_count`,
   `captured_at`) plus the sanitized `bytea` body. The private
@@ -1490,11 +1507,46 @@ engine, a database-side READ ONLY transaction with verified
 read-only mode and `current_database()` binding, the fixed closed
 table with a finite row bound, and disposal after every use. No
 filesystem access, no worker module import, no source/owner
-connection, no app-global per-visitor state. Every response is
-`no-store`; nothing reveals the database name, credential, private
-manifest, raw source reference or secret. A future internal method
+connection, no app-global per-visitor state. EVERY response of the
+`/fakeadmin/files-preview` route (login redirect, zero-active 404,
+safe note and successful page) is explicitly
+`Cache-Control: no-store`; nothing reveals the database name,
+credential, private manifest, raw source reference or secret. The
+preview formats only representable finite capture times; a stored
+value outside that range renders the SAME safe note instead of a
+500. A future internal method
 may retrieve one validated leaf body for the later panel adapters;
 this suffix ships no download endpoint or body rendering.
+
+### Boundary repair (224-h)
+
+224-h closes four review findings on the 224-g seam (same PR):
+
+1. **Target equality before any connection**: the worker-held
+   main manifest's exact `target_db` must equal the verified copy
+   binding; a foreign but syntactically valid target name refuses
+   with `WEB_DISPLAY_INGEST_FAILED` before any connection, grant
+   or publication.
+2. **Count AND aggregate bytes**: the ingest commits only after
+   BOTH `count == files_count` and `total_bytes == files_bytes`
+   against the worker-held custody manifest, after full exhaustion
+   of the held re-proof iterator.
+3. **Wall-clock deadline over connect/DDL/INSERT/commit**: one
+   `asyncio.timeout` (the file-job elapsed bound) covers every
+   await of the ingest; an already-expired budget refuses before
+   connecting; a timed-out or uncertain commit fails closed (no
+   handoff, no grant). If a driver cancellation can leave a
+   transient ungranted target-only table, exact copy cleanup
+   removes it; such a table is never browser-authoritative.
+4. **Preview response + time law**: every files-preview response
+   category is explicitly `no-store`, and only representable
+   finite capture times are formatted (same safe note otherwise,
+   never a 500); the worker-side capture-time bound is the
+   representable range below year 9999.
+
+The 224-g files-preview table also corrected the admin usability
+inventory count (+1 sortable table). For the four points above,
+this repair supersedes the 224-g report's claims.
 
 ### Still-gated after 224-g
 

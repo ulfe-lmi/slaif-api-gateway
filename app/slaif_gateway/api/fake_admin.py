@@ -636,19 +636,29 @@ async def demo_files_preview_get(request: Request) -> object:
     No body bytes are rendered in this suffix. Fail-closed: no target
     name, DSN, credential or internal error ever reaches the page; an
     unreadable or pre-upgrade (display-less) copy renders the one
-    safe note instead. The response is ``no-store`` so the browser
-    cache never retains demo facts after logout.
+    safe note instead. EVERY response of this route - login redirect,
+    zero-active 404, safe note and successful page - is explicitly
+    ``Cache-Control: no-store`` so the browser cache never retains
+    demo facts after logout.
     """
     from datetime import datetime, timezone
 
     cfg = _config(request)
     if await _zero_active(request):
-        return _json(404, "Not Found")
+        # 224-h: EVERY files-preview response carries no-store,
+        # including this 404 (the shared _json helper used by the
+        # other demo routes stays untouched).
+        response = JSONResponse(
+            status_code=404, content={"detail": "Not Found"}
+        )
+        response.headers["Cache-Control"] = "no-store"
+        return response
     token = request.cookies.get(COOKIE_SESSION)
     facade = _facade(request)
 
     def _bounce() -> RedirectResponse:
         response = RedirectResponse(LOGIN_URL, status_code=303)
+        response.headers["Cache-Control"] = "no-store"
         _clear_cookie(response, COOKIE_SESSION, path=SESSION_COOKIE_PATH)
         return response
 
@@ -683,15 +693,23 @@ async def demo_files_preview_get(request: Request) -> object:
         try:
             reader = factory(cfg, snap_request.worker_target_db)
             raw_leaves = await reader.read_index()
-            leaves = [
-                {
-                    **leaf,
-                    "captured_utc": datetime.fromtimestamp(
+            formatted: list[dict[str, object]] | None = []
+            for leaf in raw_leaves:
+                try:
+                    captured_utc = datetime.fromtimestamp(
                         float(leaf["captured_at"]), tz=timezone.utc
-                    ).strftime("%Y-%m-%d %H:%M:%S"),
-                }
-                for leaf in raw_leaves
-            ]
+                    ).strftime("%Y-%m-%d %H:%M:%S")
+                except (OverflowError, OSError, TypeError, ValueError):
+                    # 224-h: a stored capture time outside the
+                    # representable range (legacy writer or a
+                    # corrupted value) never becomes a 500 or leaks
+                    # raw bytes - the page falls back to the same
+                    # safe note.
+                    formatted = None
+                    break
+                formatted.append({**leaf, "captured_utc": captured_utc})
+            if formatted is not None:
+                leaves = formatted
         except DemoWebError:
             leaves = None  # one safe note; no detail escapes
     csrf_token = _new_csrf_token(cfg.cookie_secret)

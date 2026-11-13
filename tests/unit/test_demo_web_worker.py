@@ -21,6 +21,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import os
+import time
 import uuid
 from pathlib import Path
 
@@ -1493,14 +1494,25 @@ def test_process_request_grant_failure_fails_without_publishing(
 
 
 class _FakeDisplayTxn:
+    """asyncpg-style transaction context manager; the 224-h bounded
+    ingest commits in ``__aexit__`` UNDER the single asyncio.timeout,
+    exactly like the real driver."""
+
     def __init__(self, conn: "_FakeDisplayConn") -> None:
         self._conn = conn
+        self.entered = 0
+        self.committed = 0
+        self.rollbacks = 0
 
     async def __aenter__(self) -> "_FakeDisplayTxn":
+        self.entered += 1
         return self
 
     async def __aexit__(self, exc_type, _exc, _tb) -> bool:
-        if exc_type is not None:
+        if exc_type is None:
+            self.committed += 1
+        else:
+            self.rollbacks += 1
             self._conn.rolled_back = True
         return False
 
@@ -1513,9 +1525,11 @@ class _FakeDisplayConn:
         self.executes: list[tuple[str, tuple[object, ...]]] = []
         self.rolled_back = False
         self.closed = False
+        self.txn: "_FakeDisplayTxn | None" = None
 
     def transaction(self) -> _FakeDisplayTxn:
-        return _FakeDisplayTxn(self)
+        self.txn = _FakeDisplayTxn(self)
+        return self.txn
 
     async def execute(self, sql: str, *args: object) -> None:
         self.executes.append((sql, args))
@@ -1580,6 +1594,8 @@ def test_ingest_happy_path_projects_only_closed_safe_fields(
     conn = _fake_display_conn(monkeypatch)
     _ingest_one_leaf(custody, job, target)
     assert not conn.rolled_back and conn.closed
+    assert conn.txn is not None
+    assert conn.txn.entered == 1 and conn.txn.committed == 1
     sqls = [sql for sql, _args in conn.executes]
     assert sqls[0] == dww._DISPLAY_LEAVES_DDL
     assert "CREATE SCHEMA demo_display" in sqls[0]
@@ -1859,3 +1875,271 @@ def test_process_request_ingest_failure_fails_without_publishing(
     assert control.handoffs == []
     assert control.failures == [(REQUEST_ID, "worker_failed")]
     assert len(calls["snapshot"]) == 1 and calls["ingest"] == []
+
+
+# --- 224-h boundary repair ----------------------------------------------------------
+
+
+def test_ingest_refuses_foreign_target_before_any_connection(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    custody, _pf = _custody_passfile(tmp_path)
+    job, target = _job_id(81), _target_db(81)
+    _make_verified_copies(custody, job, target)
+    foreign = _target_db(82)  # syntactically valid, NOT this job's target
+    connects: list[str] = []
+
+    async def counting_connect(config, target_db, **kwargs):
+        connects.append(target_db)
+
+    monkeypatch.setattr(dss, "_connect_copy", counting_connect)
+    config = _worker_config_for(custody)
+    with pytest.raises(dww.DemoWebWorkerError) as ei:
+        dww._ingest_verified_display(config, job, REQUEST_ID, foreign)
+    assert ei.value.code == dww.CODE_DISPLAY_INGEST_FAILED
+    assert connects == []  # refused BEFORE any connection
+
+
+def test_ingest_refuses_byte_drift_with_unchanged_count(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    custody, _pf = _custody_passfile(tmp_path)
+    job, target = _job_id(83), _target_db(83)
+    _make_verified_copies(custody, job, target)
+    job_dir = custody / job
+    manifest = ds.read_manifest(job_dir)
+    assert manifest is not None
+    manifest.files_bytes = manifest.files_bytes + 1  # count stays true
+    ds.write_manifest(job_dir, manifest)
+    conn = _fake_display_conn(monkeypatch)
+    with pytest.raises(dww.DemoWebWorkerError) as ei:
+        dww._ingest_verified_display(
+            _worker_config_for(custody), job, REQUEST_ID, target
+        )
+    assert ei.value.code == dww.CODE_DISPLAY_INGEST_FAILED
+    assert conn.rolled_back
+    # DDL + the one leaf INSERT ran; the aggregate byte check refused
+    # and the whole transaction rolled back.
+    assert len(conn.executes) == 2
+
+
+def test_ingest_expired_before_connect_refuses_without_connection(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    custody, _pf = _custody_passfile(tmp_path)
+    job, target = _job_id(84), _target_db(84)
+    _make_verified_copies(custody, job, target)
+    connects: list[str] = []
+
+    async def counting_connect(config, target_db, **kwargs):
+        connects.append(target_db)
+
+    monkeypatch.setattr(dss, "_connect_copy", counting_connect)
+    config = _worker_config_for(custody)
+    proof = dww._anchored_main_manifest(config, job, REQUEST_ID)
+    assert proof is not None
+    manifest, job_identity = proof
+    with pytest.raises(dww.DemoWebWorkerError) as ei:
+        asyncio.run(
+            dww._display_ingest_transaction(
+                config,
+                target,
+                custody / job,
+                manifest,
+                job_identity,
+                deadline=0.0,  # already elapsed
+            )
+        )
+    assert ei.value.code == dww.CODE_DISPLAY_INGEST_FAILED
+    assert connects == []  # the budget was refused BEFORE connecting
+
+
+def test_ingest_blocked_connect_past_deadline_refuses_without_ddl(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    custody, _pf = _custody_passfile(tmp_path)
+    job, target = _job_id(85), _target_db(85)
+    _make_verified_copies(custody, job, target)
+
+    async def slow_connect(config, target_db, **kwargs):
+        await asyncio.sleep(0.5)
+        raise AssertionError("connect must not complete past the deadline")
+
+    monkeypatch.setattr(dss, "_connect_copy", slow_connect)
+    config = _worker_config_for(custody)
+    proof = dww._anchored_main_manifest(config, job, REQUEST_ID)
+    assert proof is not None
+    manifest, job_identity = proof
+    with pytest.raises(dww.DemoWebWorkerError) as ei:
+        asyncio.run(
+            dww._display_ingest_transaction(
+                config,
+                target,
+                custody / job,
+                manifest,
+                job_identity,
+                deadline=time.monotonic() + 0.1,
+            )
+        )
+    assert ei.value.code == dww.CODE_DISPLAY_INGEST_FAILED
+    assert "elapsed bound" in str(ei.value)
+
+
+def test_ingest_blocked_commit_past_deadline_rolls_back_and_refuses(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    custody, _pf = _custody_passfile(tmp_path)
+    job, target = _job_id(86), _target_db(86)
+    _make_verified_copies(custody, job, target)
+
+    class _StallTxn:
+        def __init__(self, conn) -> None:
+            self._conn = conn
+            self.committed = 0
+            self.rollbacks = 0
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            if exc_type is None:
+                # the COMMIT stalls past the shared deadline
+                await asyncio.sleep(0.5)
+                self.committed += 1
+            else:
+                self.rollbacks += 1
+                self._conn.rolled_back = True
+            return False
+
+    class _Conn:
+        def __init__(self) -> None:
+            self.executes: list[tuple[str, tuple[object, ...]]] = []
+            self.rolled_back = False
+            self.closed = False
+            self.txn = _StallTxn(self)
+
+        def transaction(self):
+            return self.txn
+
+        async def execute(self, sql: str, *args: object) -> None:
+            self.executes.append((sql, args))
+
+        async def close(self) -> None:
+            self.closed = True
+
+    fake = _Conn()
+
+    async def fake_connect(config, target_db, **kwargs):
+        return fake
+
+    monkeypatch.setattr(dss, "_connect_copy", fake_connect)
+    config = _worker_config_for(custody)
+    proof = dww._anchored_main_manifest(config, job, REQUEST_ID)
+    assert proof is not None
+    manifest, job_identity = proof
+    with pytest.raises(dww.DemoWebWorkerError) as ei:
+        asyncio.run(
+            dww._display_ingest_transaction(
+                config,
+                target,
+                custody / job,
+                manifest,
+                job_identity,
+                deadline=time.monotonic() + 0.1,
+            )
+        )
+    assert ei.value.code == dww.CODE_DISPLAY_INGEST_FAILED
+    assert "elapsed bound" in str(ei.value)
+    # The commit NEVER confirmed, so no handoff/grant can follow this
+    # result; the connection was closed, and its termination ends any
+    # still-open transaction on the server (exact copy cleanup remains
+    # authoritative).
+    assert fake.txn.committed == 0
+    assert fake.closed
+    assert len(fake.executes) == 2  # DDL + leaf were inside the tx
+
+
+def test_ingest_capture_time_law_representable_range(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    custody, _pf = _custody_passfile(tmp_path)
+    # 8.0e15 was accepted by the old 9e15 law but is NOT representable
+    # by datetime.fromtimestamp: it must now refuse.
+    job, target = _job_id(87), _target_db(87)
+    conn = _fake_display_conn(monkeypatch)
+    with pytest.raises(dww.DemoWebWorkerError) as ei:
+        _ingest_one_leaf(custody, job, target, captured_at=8.0e15)
+    assert ei.value.code == dww.CODE_DISPLAY_INGEST_FAILED
+    assert conn.rolled_back
+    # 2038 AND the year-9999 boundary itself stay accepted (and
+    # committed): the bound must not cut off future capture times.
+    job2, target2 = _job_id(88), _target_db(88)
+    conn2 = _fake_display_conn(monkeypatch)
+    _ingest_one_leaf(custody, job2, target2, captured_at=253402300799.0)
+    assert not conn2.rolled_back
+    assert conn2.txn is not None and conn2.txn.committed == 1
+    assert len(conn2.executes) == 2
+    # And the exclusive bound itself refuses.
+    job3, target3 = _job_id(90), _target_db(90)
+    conn3 = _fake_display_conn(monkeypatch)
+    with pytest.raises(dww.DemoWebWorkerError) as ei3:
+        _ingest_one_leaf(custody, job3, target3, captured_at=253402300800.0)
+    assert ei3.value.code == dww.CODE_DISPLAY_INGEST_FAILED
+    assert conn3.rolled_back
+
+
+def test_ingest_blocked_ddl_past_deadline_refuses_without_insert(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    custody, _pf = _custody_passfile(tmp_path)
+    job, target = _job_id(91), _target_db(91)
+    _make_verified_copies(custody, job, target)
+
+    class _StallDDL:
+        def __init__(self) -> None:
+            self.executes: list[tuple[str, tuple[object, ...]]] = []
+            self.rolled_back = False
+            self.closed = False
+            self.txn = _FakeDisplayTxn(self)
+
+        def transaction(self):
+            return self.txn
+
+        async def execute(self, sql: str, *args: object) -> None:
+            if "CREATE" in sql:
+                # the DDL stalls past the shared deadline
+                await asyncio.sleep(0.5)
+            self.executes.append((sql, args))
+
+        async def close(self) -> None:
+            self.closed = True
+
+    fake = _StallDDL()
+
+    async def fake_connect(config, target_db, **kwargs):
+        return fake
+
+    monkeypatch.setattr(dss, "_connect_copy", fake_connect)
+    config = _worker_config_for(custody)
+    proof = dww._anchored_main_manifest(config, job, REQUEST_ID)
+    assert proof is not None
+    manifest, job_identity = proof
+    with pytest.raises(dww.DemoWebWorkerError) as ei:
+        asyncio.run(
+            dww._display_ingest_transaction(
+                config,
+                target,
+                custody / job,
+                manifest,
+                job_identity,
+                deadline=time.monotonic() + 0.1,
+            )
+        )
+    assert ei.value.code == dww.CODE_DISPLAY_INGEST_FAILED
+    assert "elapsed bound" in str(ei.value)
+    # The DDL never completed, NO INSERT ran, the transaction unwound
+    # (rolled back) and the connection was closed: nothing published.
+    assert fake.executes == []
+    assert fake.txn.rollbacks == 1
+    assert fake.txn.committed == 0
+    assert fake.closed
