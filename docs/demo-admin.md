@@ -842,13 +842,14 @@ suffix lands; nothing in 224-b uses it yet.
 A copy in `DB_AND_FILES_VERIFIED_UNPUBLISHED` state is NEVER evicted
 by any generic 221 path: not retention expiry, not copy-budget
 overflow, not a bare `run`/`expire` CLI invocation, not a concurrent
-worker's startup pass — regardless of protected set and age. Only the
-exact control-owned cleanup (`cleanup` above, gated by the request
+worker's startup pass — regardless of age or any caller input. Only
+the exact control-owned cleanup (`cleanup` above, gated by the request
 state machine and the live-session law) may remove it. This makes a
 published (verified, session-usable) copy — and a copy between the
 worker's proof and its publication CAS — immune to generic eviction by
-construction: a stale protected-set read or a cross-worker race cannot
-remove it, and no caller-supplied optional set is relied upon.
+construction: the exemption is read from the copy's OWN persisted
+manifest state, so a cross-worker race or a stale state read cannot
+remove it, and no caller-supplied set is involved or relied upon.
 
 Verified copies still OCCUPY their finite budget slot: they count in
 both the overflow computation and the fail-closed admission check.
@@ -866,8 +867,12 @@ sanitized + verified + CLEANUP_FAILED) would exceed the cap and
 evicting every evictable copy (raw/sanitized only) could not bring
 the total back within the cap; otherwise the new copy is admitted
 only when the post-eviction total stays within the cap. No
-caller-supplied protected set participates: the structural
-state-law above is the only eviction protection.
+caller-supplied set participates at all: the persisted copy state is
+the only eviction protection. Example at the default cap of 4 with
+three verified copies and one evictable (raw/sanitized) copy: the
+evictable copy is removed and the new copy IS admitted as the fourth;
+a refusal happens only when the fourth occupied slot is held by a
+never-evictable copy (verified or CLEANUP_FAILED).
 
 ### Request→job association and recovery
 
@@ -981,11 +986,14 @@ receives one session, and logs out.
   enforced on bytes actually received (chunked bodies included) before
   any parsing, signed double-submit CSRF, a bounded in-process failed
   attempt window (429 with `Retry-After` beyond it), and a
-  column-scoped credential lookup. Verification is constant-time: a
-  real Argon2id check always runs — against the real hash for a known
-  enabled account, against a precomputed fixed dummy hash (computed
-  once at process startup) for unknown or disabled accounts — and the
-  failure message is one constant "Incorrect username or password."
+  column-scoped credential lookup. One real Argon2id verification
+  always runs on either path — against the real hash for a known
+  enabled account, or against a precomputed fixed dummy hash
+  (computed once at process startup) for unknown or disabled
+  accounts — so the dominant verification cost is uniform even though
+  the surrounding database lookup and branching are not mathematically
+  constant; the failure message is one constant "Incorrect username
+  or password."
   A successful login creates ONE fresh pending snapshot request
   (224-a) bound to the LIVE credential generation and moves the
   browser to the wait surface with a short-lived signed pending

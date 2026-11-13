@@ -12,9 +12,10 @@ Safety law (224-c):
   existence oracle; the demo surface is indistinguishable from an
   unknown path);
 * login: bounded attempt window, signed double-submit CSRF, finite
-  field lengths, column-scoped credential lookup, constant-time
-  Argon2 verification (a dummy hash is checked for unknown/disabled
-  usernames), one constant failure message;
+  field lengths, column-scoped credential lookup, one real Argon2id
+  verification on either path (a precomputed dummy hash is checked for
+  unknown/disabled usernames so the dominant verification cost is
+  uniform), one constant failure message;
 * wait: a short-lived signed cookie binds ``account:request:generation``;
   every poll rechecks the live request facts and the live account
   fence; session issuance happens ONLY here (one ``create_session``
@@ -179,7 +180,8 @@ def _new_csrf_token(secret: str) -> str:
 
 
 def _check_csrf(secret: str, cookie_value: str | None, field_value: str | None) -> bool:
-    """Signed double-submit CSRF check (constant-time, finite bound)."""
+    """Signed double-submit CSRF check (constant-time signature
+    comparison via compare_digest, finite length bound)."""
     if not field_value or not isinstance(field_value, str):
         return False
     if len(field_value) > SIGNED_TOKEN_MAX_LEN:
