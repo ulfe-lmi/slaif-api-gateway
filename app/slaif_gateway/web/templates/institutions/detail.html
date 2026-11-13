@@ -11,7 +11,7 @@
       <p class="muted">Safe institution metadata. Secrets are not displayed.</p>
     </div>
     <div class="header-actions">
-{% if not demo_admin %}      <a class="button-link" href="/admin/institutions/{{ institution.id }}/edit">Edit institution</a>{% endif %}
+      <a class="button-link" href="/admin/institutions/{{ institution.id }}/edit">Edit institution</a>
       <a class="button-link secondary" href="/admin/institutions">All institutions</a>
       <form method="post" action="/admin/logout">
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">

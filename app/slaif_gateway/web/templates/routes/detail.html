@@ -12,7 +12,7 @@
     </div>
     <div class="header-actions">
       <a class="button-link" href="/admin/routes/{{ route.id }}/edit">Edit</a>
-      <a class="button-link secondary" href="/admin/routes/{{ route.id }}/configuration">Reviewed configuration change</a>
+{% if not demo_admin %}      <a class="button-link secondary" href="/admin/routes/{{ route.id }}/configuration">Reviewed configuration change</a>{% endif %}
       <a class="button-link secondary" href="/admin/routes">Model routes</a>
       <form method="post" action="/admin/logout">
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
@@ -52,7 +52,7 @@
         <dt>Codex provider identity</dt><dd>{{ route.codex_provider_display_name or route.codex_provider_kind or "None" }}</dd>
         <dt>Codex wire API</dt><dd>{{ route.codex_wire_api or "None" }}</dd>
         <dt>Codex paired route</dt><dd>{% if route.codex_paired_route_id %}<a href="/admin/routes/{{ route.codex_paired_route_id }}">{{ route.codex_paired_route_id }}</a>{% else %}None{% endif %}</dd>
-        <dt>Codex compatibility</dt><dd><a href="/admin/operations/compatibility/">Compatibility data and reviewed key migrations</a></dd>
+        <dt>Codex compatibility</dt><dd>{% if not demo_admin %}<a href="/admin/operations/compatibility/">Compatibility data and reviewed key migrations</a>{% else %}<span class="muted small">Not available in the demo preview.</span>{% endif %}</dd>
         <dt>Created</dt><dd>{{ route.created_at.isoformat() }}</dd>
         <dt>Updated</dt><dd>{{ route.updated_at.isoformat() }}</dd>
       </dl>
@@ -62,7 +62,9 @@
       {% else %}
       <p class="muted small">Exact registered profile {{ route.codex_profile_id }} (metadata v{{ route.codex_metadata_version }}) is locally qualified; live provider E2E is {% if route.codex_real_provider_e2e %}qualified{% else %}not claimed{% endif %}.</p>
       {% endif %}
-      {% if codex_profile_artifacts %}
+      {% if demo_admin %}
+      <p class="warning-text">Demo read-only preview: Codex profile artifacts are not rendered in this snapshot because the demo host does not forward /v1.</p>
+      {% elif codex_profile_artifacts %}
       <section class="action-panel" aria-labelledby="codex-artifacts-heading">
         <h2 id="codex-artifacts-heading">Credential-free Codex artifacts</h2>
         <p class="muted small">Generated from the resolved registered profile and validated gateway URL only.</p>

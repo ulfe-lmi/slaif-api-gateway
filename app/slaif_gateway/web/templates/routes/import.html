@@ -60,7 +60,8 @@
     <section class="action-panel" aria-labelledby="route-import-fields-heading">
       <h2 id="route-import-fields-heading">Supported fields</h2>
       <p class="muted">Use requested_model or model_pattern, match_type, endpoint, provider or provider_config_id, upstream_model, priority, enabled, visible_in_models, supports_streaming, capabilities, and notes. Provider references must match provider config rows; provider key values are rejected.</p>
-      <button type="submit">Preview route import</button>
+{% if demo_admin %}      <p class="warning-text">Demo read-only preview: submitting this form changes nothing in the snapshot.</p>
+{% endif %}      <button type="submit">Preview route import</button>
     </section>
   </form>
 

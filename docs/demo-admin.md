@@ -1586,3 +1586,102 @@ demonstrations; objective 225 remains the installed acceptance gate.
   marks it cleaned; a leaf changed after 223 verification refuses
   publication before ingest and grant (no display table, no reader
   grant).
+
+## Demo admin core forms and route read pages (objective 224-i)
+
+224-i (same PR #383) admits, through the same closed default-deny
+gate, the next closed set of EXISTING GET/HEAD read pages:
+
+* the routes list (`/admin/routes`) and the route detail
+  (`/admin/routes/{uuid}`);
+* the twelve fixed core form GETs: `/admin/keys/create`,
+  `/admin/keys/bulk-import`, `/admin/owners/new`,
+  `/admin/institutions/new`, `/admin/cohorts/new`,
+  `/admin/providers/new`, `/admin/routes/new`,
+  `/admin/routes/import`, `/admin/pricing/new`,
+  `/admin/pricing/import`, `/admin/fx/new`, `/admin/fx/import`;
+* the seven canonical-UUID edit forms:
+  `/admin/{owners,institutions,cohorts,providers,routes,pricing,fx}/{uuid}/edit`;
+* the provider discover read-only form
+  (`/admin/providers/{uuid}/discover`).
+
+The demo nav gains a **Routes** entry (between Providers and Pricing,
+matching the normal nav order). The create/import/edit links that the
+224-f/g demo conditionals hid (their targets were 404 at the time)
+are shown again in demo mode now that their targets are admitted;
+links whose targets stay gated (key batch, reports, operations)
+remain hidden.
+
+### Form semantics (read-only demo)
+
+Every admitted form is the REAL administrator form rendered from the
+session's verified copy (field choices, hints and copied values).
+The persistent banner stays on every page; the four data-ingest
+forms (key bulk-import and the route/pricing/FX import preview
+forms) add one concise local hint above their preview submit.
+Submitting any form produces the SAME quiet server-side 204 no-op
+BEFORE routing and body parsing: nothing is written to the copy,
+the source or the normal database, and no provider or network call
+occurs. The operational buttons are deliberately NOT removed -
+their server-side no-op is the safety boundary, and the banner
+explains it.
+
+### Route detail demo-safe presentation (224-i)
+
+* the Codex profile artifact block is NOT rendered in demo mode:
+  `render_codex_profile` is skipped entirely, because the demo host
+  cannot forward `/v1` and a profile built from the neutral demo
+  base URL would be misleading; a one-line read-only hint replaces
+  the block. Normal admin rendering is unchanged.
+* the still-404 "Reviewed configuration change" and "Codex
+  compatibility" links are hidden in demo mode;
+* the provider config section shows only the 222-fictionalized
+  copied `base_url` / `api_key_env_var` values (222 preserves the
+  provider slug and remaps/fictionalizes the row ID, URL and
+  env-var name - proven in the owned-PG evidence).
+
+### Remaining 404 families (still default-denied)
+
+Operations (all subpaths), reports, catalog, compatibility,
+branding, process-configuration, OpenAI-assisted, accounts, key
+batch/clone (and specifically `/admin/keys/{uuid}/edit` and
+`/admin/templates/{uuid}/edit`), route configuration-change and
+codex-profile downloads, exports, and every action GET, unknown
+path or non-canonical path shape. All file-backed admin panels
+remain unmounted (their read data is published by 224-g; wiring is a
+later 224 suffix). The demo remains NOT usable for company
+demonstrations; objective 225 is the installed acceptance gate.
+
+### Evidence (224-i)
+
+* Focused unit (`test_demo_web.py`, 106 passed, +2 new): the closed
+  admission law (every 224-i positive shape admitted, unknown/extra/
+  malformed/action GETs denied, keys/templates edits denied, edit
+  middle-segment UUID variants denied, discover only on providers);
+  no-store on an admitted form response; the demo nav includes
+  Routes (thirteen sections) with normal rendering unchanged; and
+  the route-detail handler skips `render_codex_profile` in demo mode
+  (asserted never called) so the demo HTML carries no localhost/live
+  URL, no profile TOML and no download links, while normal mode
+  still renders the artifact block.
+* Owned PostgreSQL 16 (real reader role, real worker chain, two
+  concurrent sessions on distinct copies): the routes list (rendered
+  row count equals the copied `model_routes` count) and route
+  detail, all twelve form GETs, all seven edit forms and the
+  discover form render 200 with banner and no-store; the route
+  detail shows the copied fictionalized provider URL/env-name while
+  the raw SOURCE values are absent; the still-gated GETs
+  (keys/templates edit, route configuration, codex-profile
+  download, exports) stay 404; and the whole read phase leaves the
+  source and BOTH copies unchanged (`model_routes` added to the
+  invariance set).
+* Real Chromium: the new Routes nav link is visible and follows to
+  the list, a route detail row opens, and the cohorts create form
+  renders; its operational submit returns the quiet 204 no-op with
+  the rendered cohort row count unchanged. One screenshot is saved
+  to a run-owned /tmp path (never committed and not in ordinary
+  application logs).
+* The 224-h exact-head CI unit failure (governance identifier test
+  versus the immutable 224-h order's title suffix) is recovered by
+  this identifier-only order: the unchanged governance suite passes
+  9/9 locally against `oap/active=224-i`.

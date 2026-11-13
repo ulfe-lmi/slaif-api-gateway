@@ -512,12 +512,14 @@ def test_v1_absent_admin_gated_on_demo_app():
             assert r.status_code == 303
             assert r.headers["location"] == "/fakeadmin/login"
             # ...and unreviewed admin GETs stay default-denied.
-            assert (await client.get("/admin/routes")).status_code == 404
             assert (await client.get("/admin/openai-assisted")).status_code == 404
             # 224-f: the new DB-backed families are admitted too
-            # (no session -> demo entry redirect).
+            # (no session -> demo entry redirect); 224-i admits the
+            # routes list/detail and the core form GETs as well.
             assert (await client.get("/admin/providers")).status_code == 303
             assert (await client.get("/admin/usage")).status_code == 303
+            assert (await client.get("/admin/routes")).status_code == 303
+            assert (await client.get("/admin/keys/create")).status_code == 303
 
     asyncio.run(run())
 
@@ -1582,14 +1584,29 @@ def test_gate_admission_law_closed_sets():
                 "/admin/owners",
                 "/admin/institutions",
                 "/admin/cohorts",
-                # 224-f: the seven reviewed database-backed families.
+                # 224-f: the seven reviewed database-backed families;
+                # 224-i adds the routes list.
                 "/admin/providers",
+                "/admin/routes",
                 "/admin/pricing",
                 "/admin/templates",
                 "/admin/fx",
                 "/admin/usage",
                 "/admin/audit",
                 "/admin/email-deliveries",
+                # 224-i: the twelve fixed core form GETs.
+                "/admin/keys/create",
+                "/admin/keys/bulk-import",
+                "/admin/owners/new",
+                "/admin/institutions/new",
+                "/admin/cohorts/new",
+                "/admin/providers/new",
+                "/admin/routes/new",
+                "/admin/routes/import",
+                "/admin/pricing/new",
+                "/admin/pricing/import",
+                "/admin/fx/new",
+                "/admin/fx/import",
                 "/admin/record-choices?kind=owner&q=x",
             ):
                 r = await client.get(p)
@@ -1597,13 +1614,19 @@ def test_gate_admission_law_closed_sets():
                 assert r.headers["location"] == "/fakeadmin/login"
             # ...every other admin GET stays default-denied.
             for p in (
-                "/admin/routes",
                 "/admin/operations",
                 "/admin/key-batch",
-                "/admin/keys/create",
                 "/admin/branding",
                 "/admin/reports",
                 "/admin/accounts",
+                # 224-i negatives: keys/templates have no edit forms;
+                # action GETs and download GETs stay 404.
+                f"/admin/keys/{KEY_UUID}/edit",
+                f"/admin/templates/{KEY_UUID}/edit",
+                f"/admin/routes/{KEY_UUID}/configuration",
+                f"/admin/routes/{KEY_UUID}/codex-profile/base",
+                f"/admin/routes/{KEY_UUID}/codex-profile/profile",
+                f"/admin/routes/{KEY_UUID}/codex-profile/catalog",
             ):
                 r = await client.get(p)
                 assert r.status_code == 404, p
@@ -1623,6 +1646,7 @@ def test_gate_detail_requires_canonical_uuid():
                 "institutions",
                 "cohorts",
                 "providers",
+                "routes",
                 "pricing",
                 "templates",
                 "fx",
@@ -1640,9 +1664,53 @@ def test_gate_detail_requires_canonical_uuid():
                 f"/admin/keys/{{{KEY_UUID}}}",
                 f"/admin/keys/{KEY_UUID}/extra",
                 "/admin/keys/",
-                f"/admin/providers/{KEY_UUID}/edit",
                 f"/admin/fx/{KEY_UUID}/discover",
                 f"/admin/usage/{KEY_UUID}x",
+                # 224-i: edit-form middle-segment variants are denied.
+                f"/admin/owners/{KEY_UUID.upper()}/edit",
+                "/admin/owners/0123456789abcdef0123456789abcdef/edit",
+                f"/admin/owners/{KEY_UUID}/extra",
+                f"/admin/owners/{KEY_UUID}/edit/",
+                "/admin/owners/edit",
+            ):
+                r = await client.get(bad)
+                assert r.status_code == 404, bad
+
+    asyncio.run(run())
+
+
+def test_gate_224i_edit_and_discover_admission():
+    async def run():
+        app = _app(FakeFacade())
+        async with _client(app) as client:
+            # the seven edit families admit exactly one canonical UUID.
+            for family in (
+                "owners",
+                "institutions",
+                "cohorts",
+                "providers",
+                "routes",
+                "pricing",
+                "fx",
+            ):
+                r = await client.get(f"/admin/{family}/{KEY_UUID}/edit")
+                assert r.status_code == 303, family
+                assert r.headers["location"] == "/fakeadmin/login", family
+            # provider discover: the read-only form GET.
+            r = await client.get(f"/admin/providers/{KEY_UUID}/discover")
+            assert r.status_code == 303
+            assert r.headers["location"] == "/fakeadmin/login"
+            # denied: keys/templates edits, discover on other families,
+            # extra/missing segments, uppercase variants.
+            for bad in (
+                f"/admin/keys/{KEY_UUID}/edit",
+                f"/admin/templates/{KEY_UUID}/edit",
+                f"/admin/fx/{KEY_UUID}/discover",
+                f"/admin/providers/{KEY_UUID}/discover/extra",
+                "/admin/providers/discover",
+                f"/admin/providers/{KEY_UUID.upper()}/edit",
+                f"/admin/routes/{KEY_UUID}/edit/extra",
+                "/admin/keys/create/extra",
             ):
                 r = await client.get(bad)
                 assert r.status_code == 404, bad
@@ -1994,6 +2062,11 @@ def _minimal_gate_app(fake: FakeFacade):
     async def _usage_page():
         return "<html><body>usage</body></html>"
 
+    # 224-i: an admitted core form GET (stub; no DB needed).
+    @app.get("/admin/keys/create", response_class=HTMLResponse)
+    async def _key_create_form():
+        return "<html><body>create key form</body></html>"
+
     @app.get("/admin/record-choices")
     async def _choices():
         return {"kind": "owner", "choices": []}
@@ -2018,6 +2091,10 @@ def test_gate_no_store_on_admitted_success_json_and_error(monkeypatch):
             _session_cookie(client)
             # successful admitted HTML page
             r = await client.get("/admin/usage")
+            assert r.status_code == 200
+            assert r.headers["cache-control"] == "private, no-store"
+            # 224-i: admitted form GETs carry the same central guard
+            r = await client.get("/admin/keys/create")
             assert r.status_code == 200
             assert r.headers["cache-control"] == "private, no-store"
             # admitted JSON lookup
@@ -2065,6 +2142,110 @@ def test_gate_static_passthrough_serves_bundled_assets():
             # 224-f: the revisioned static passthrough bypasses the
             # dynamic no-store guard (its own cache policy is kept).
             assert r.headers.get("cache-control") is None
+
+    asyncio.run(run())
+
+
+def test_route_detail_demo_skips_codex_profile_artifacts(monkeypatch):
+    """224-i: demo route detail must not render Codex profile artifacts
+    (no localhost/live base URL, no profile TOML, no download links) and
+    must show the demo-only hint; normal admin still renders them."""
+    from types import SimpleNamespace
+
+    import slaif_gateway.api.admin as admin_mod
+
+    fake_route = SimpleNamespace(
+        id=KEY_UUID,
+        requested_model="224i-demo-model",
+        match_type="exact",
+        endpoint="/v1/chat/completions",
+        provider="openrouter",
+        upstream_model="224i-upstream-model",
+        priority=10,
+        enabled=True,
+        visible_in_models=True,
+        supports_streaming=True,
+        capabilities={},
+        capabilities_summary="none",
+        codex_qualification_badge="qualified",
+        codex_qualification_state="ready",
+        codex_qualification_reason_codes=None,
+        codex_profile_id="registered-profile",
+        codex_metadata_version=2,
+        codex_cli_version="0.147.0",
+        codex_provider_display_name=None,
+        codex_provider_kind="module",
+        codex_wire_api="responses",
+        codex_paired_route_id=None,
+        created_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        updated_at=datetime(2026, 1, 2, tzinfo=timezone.utc),
+        notes=None,
+        provider_config=None,
+        codex_protocol_ready=True,
+    )
+
+    class _FakeSvc:
+        async def get_route_detail(self, _route_id):
+            return fake_route
+
+    class _FakeScope:
+        async def __aenter__(self):
+            return _FakeSvc()
+
+        async def __aexit__(self, *exc):
+            return False
+
+    monkeypatch.setattr(
+        admin_mod, "_admin_catalog_dashboard_service_scope", lambda _req: _FakeScope()
+    )
+
+    async def run():
+        # DEMO: render_codex_profile must not run at all (a profile from
+        # the neutral localhost base URL would be misleading) and the
+        # hint replaces the artifact block.
+        def _explode(*_a, **_k):
+            raise AssertionError("render_codex_profile must not run in demo mode")
+
+        monkeypatch.setattr(admin_mod, "render_codex_profile", _explode)
+        demo_admin = SimpleNamespace(
+            nav=(),
+            session_context=damg._fictional_admin_context(),
+            csrf_token="demo-csrf",
+        )
+        request = _fake_admin_request(f"/admin/routes/{KEY_UUID}", demo_admin=demo_admin)
+        response = await admin_mod.admin_route_detail(request, KEY_UUID)
+        html = response.body.decode("utf-8")
+        assert "Codex profile artifacts are not rendered in this snapshot" in html
+        assert "localhost:8000" not in html
+        assert "codex-profile" not in html
+        assert "Credential-free Codex artifacts" not in html
+        assert "224i-upstream-model" in html
+        assert "Demo preview:" in html
+
+        # NORMAL: the artifact block (links + TOML) still renders.
+        def _fake_artifacts(*_a, **_k):
+            return SimpleNamespace(
+                profile_config_self_contained=True,
+                base_config_toml=None,
+                profile_config_toml='[model.224i-fake]\nname = "224i-fake"',
+                model_catalog_json=None,
+                client_module_id="224i-module",
+                client_module_version="1",
+            )
+
+        monkeypatch.setattr(admin_mod, "render_codex_profile", _fake_artifacts)
+
+        async def _fake_page_context(_req):
+            return damg._fictional_admin_context(), "normal-csrf"
+
+        monkeypatch.setattr(admin_mod, "_admin_page_context", _fake_page_context)
+        request = _fake_admin_request(f"/admin/routes/{KEY_UUID}")
+        response = await admin_mod.admin_route_detail(request, KEY_UUID)
+        html = response.body.decode("utf-8")
+        assert f'href="/admin/routes/{KEY_UUID}/codex-profile/profile"' in html
+        assert "224i-fake" in html
+        assert "Credential-free Codex artifacts" in html
+        assert "Demo preview:" not in html
 
     asyncio.run(run())
 
@@ -2137,7 +2318,7 @@ def test_base_template_normal_render_unchanged_and_demo_variant():
         assert "Demo preview:" not in out_normal
 
         # Demo mode: persistent read-only banner + ONLY the sections
-        # admitted through 224-f (twelve).
+        # admitted through 224-i (thirteen).
         demo_req = _fake_admin_request("/admin/keys", demo_admin=object())
         out_demo = await _render(demo_req)
         assert "Demo preview:" in out_demo
@@ -2150,6 +2331,7 @@ def test_base_template_normal_render_unchanged_and_demo_variant():
             "/admin/institutions",
             "/admin/cohorts",
             "/admin/providers",
+            "/admin/routes",
             "/admin/pricing",
             "/admin/templates",
             "/admin/fx",
@@ -2159,7 +2341,6 @@ def test_base_template_normal_render_unchanged_and_demo_variant():
         ):
             assert f'href="{href}"' in out_demo
         for href in (
-            "/admin/routes",
             "/admin/operations",
             "/admin/openai-assisted",
         ):

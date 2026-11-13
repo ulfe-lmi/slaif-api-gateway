@@ -13,7 +13,7 @@
       <p class="muted">Create and edit safe cohort metadata. Cohorts are standalone in the current schema.</p>
     </div>
     <div class="header-actions">
-{% if not demo_admin %}      <a class="button-link" href="/admin/cohorts/new">Create cohort</a>{% endif %}
+      <a class="button-link" href="/admin/cohorts/new">Create cohort</a>
       <a class="button-link secondary" href="/admin">Dashboard</a>
       <form method="post" action="/admin/logout">
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">

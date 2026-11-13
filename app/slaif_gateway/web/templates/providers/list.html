@@ -13,7 +13,7 @@
       <p class="muted">Local provider metadata. Provider key values are never stored or displayed.</p>
     </div>
     <div class="header-actions">
-{% if not demo_admin %}      <a class="button-link" href="/admin/providers/new">Create provider config</a>{% endif %}
+      <a class="button-link" href="/admin/providers/new">Create provider config</a>
       <a class="button-link secondary" href="/admin">Dashboard</a>
       <form method="post" action="/admin/logout">
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">

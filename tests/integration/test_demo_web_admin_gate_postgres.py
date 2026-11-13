@@ -16,10 +16,14 @@ Proves, behind the real reader role (SELECT-only, database-side
 read-only transactions):
 
 - EVERY admitted GET family renders 200 from the session's copy:
-  dashboard, all four list pages, each UUID detail type, and the
-  record-choices lookup;
-- the demo banner + five-section nav appear; unreviewed sections are
-  absent from the nav;
+  dashboard, every list page, each UUID detail type, the 224-i routes
+  list/detail, the 224-i core form GETs (create/import/edit/discover),
+  and the record-choices lookup;
+- the demo banner + restricted nav appear (224-i adds Routes);
+  unreviewed sections are absent from the nav;
+- 224-i: the route detail renders only the 222-fictionalized provider
+  base_url / api_key_env_var (the copied values), never the raw SOURCE
+  values;
 - every operational POST family (key create/revoke/rotate,
   owner/institution/cohort create/edit) and an unknown path are quiet
   204 no-ops with the body never parsed, and leave BOTH copies and the
@@ -83,6 +87,8 @@ _COUNT_TABLES = (
     "usage_ledger",
     # 224-f: the seven newly admitted database-backed families.
     "provider_configs",
+    # 224-i: the routes list/detail family.
+    "model_routes",
     "pricing_rules",
     "key_templates",
     "fx_rates",
@@ -148,6 +154,50 @@ def _rows_shown(html: str) -> int:
     m = re.search(r'id="institutions-rows-shown">(\d+) rows? shown', html)
     assert m is not None
     return int(m.group(1))
+
+
+async def _provider_by_slug(
+    san: _Env, which: str, slug: str, copy_db: str | None = None
+) -> tuple[str, str, str] | None:
+    """(row_id, base_url, api_key_env_var) for one preserved provider slug.
+
+    The 222 law preserves ``provider_configs.provider`` (P) while
+    remapping ``id`` (U) and fictionalizing ``base_url`` /
+    ``api_key_env_var`` (F), so the slug is the exact source/copy join.
+    """
+    src = san.source if which == "source" else san.target
+    database = copy_db if which == "copy" else str(san.source["database"])
+    assert database is not None
+    s = await asyncpg.connect(**_conn_kwargs(
+        src["host"], src["port"], src["user"], src["password"], database,
+    ))
+    try:
+        row = await s.fetchrow(
+            "SELECT id::text, base_url, api_key_env_var "
+            "FROM public.provider_configs WHERE provider = $1 "
+            "ORDER BY created_at LIMIT 1",
+            slug,
+        )
+        return (row["id"], row["base_url"], row["api_key_env_var"]) if row else None
+    finally:
+        await s.close()
+
+
+async def _copy_route_provider_slug(san: _Env, copy_db: str, route_id: str) -> str:
+    """The route's preserved provider slug (222: model_routes.provider = P)."""
+    s = await asyncpg.connect(**_conn_kwargs(
+        san.target["host"], san.target["port"],
+        san.target["user"], san.target["password"], copy_db,
+    ))
+    try:
+        row = await s.fetchrow(
+            "SELECT provider FROM public.model_routes WHERE id = $1",
+            route_id,
+        )
+        assert row is not None
+        return str(row["provider"])
+    finally:
+        await s.close()
 
 
 async def _first_id(san: _Env, copy_db: str, table: str) -> str:
@@ -328,7 +378,8 @@ def test_e2e_admin_gate_two_sessions_distinct_copies(
                         assert 'href="/admin/keys"' in r.text
                         assert 'href="/admin/providers"' in r.text
                         assert 'href="/admin/usage"' in r.text
-                        assert 'href="/admin/routes"' not in r.text
+                        # 224-i: the routes list/detail is admitted.
+                        assert 'href="/admin/routes"' in r.text
                         assert 'href="/admin/operations"' not in r.text
                         assert 'href="/admin/openai-assisted"' not in r.text
                         # canaries: no copy name, DSN fragment or credential.
@@ -358,6 +409,8 @@ def test_e2e_admin_gate_two_sessions_distinct_copies(
                             "/admin/cohorts",
                             # 224-f: the seven new database-backed families.
                             "/admin/providers",
+                            # 224-i: the routes list.
+                            "/admin/routes",
                             "/admin/pricing",
                             "/admin/templates",
                             "/admin/fx",
@@ -380,6 +433,30 @@ def test_e2e_admin_gate_two_sessions_distinct_copies(
                         _assert_demo_page("provider detail", r)
                         r = await client.get(f"/admin/pricing/{pricing_id}")
                         _assert_demo_page("pricing detail", r)
+                        # 224-i: route detail + fictionalized provider facts.
+                        route_id = await _first_id(san_env, target, "model_routes")
+                        r = await client.get(f"/admin/routes/{route_id}")
+                        _assert_demo_page("route detail", r)
+                        slug = await _copy_route_provider_slug(san_env, target, route_id)
+                        src = await _provider_by_slug(san_env, "source", slug)
+                        cp = await _provider_by_slug(san_env, "copy", slug, target)
+                        # both rows exist and the 222 law holds: the row
+                        # ID was remapped and the URL/env-name
+                        # fictionalized, so source and copy differ.
+                        assert src is not None, slug
+                        assert cp is not None, slug
+                        src_pid, src_url, src_env = src
+                        cp_pid, cp_url, cp_env = cp
+                        assert src_pid != cp_pid, (src_pid, cp_pid)
+                        assert src_url != cp_url, (src_url, cp_url)
+                        assert src_env != cp_env, (src_env, cp_env)
+                        # the rendered values are the COPIED
+                        # (fictionalized) ones, never the raw SOURCE
+                        # URL or env-var name.
+                        assert cp_url in r.text, (cp_url, r.text[:400])
+                        assert cp_env in r.text, (cp_env, r.text[:400])
+                        assert src_url not in r.text
+                        assert src_env not in r.text
                         r = await client.get(f"/admin/templates/{template_id}")
                         _assert_demo_page("template detail", r)
                         r = await client.get(f"/admin/fx/{fx_id}")
@@ -390,6 +467,38 @@ def test_e2e_admin_gate_two_sessions_distinct_copies(
                         _assert_demo_page("audit detail", r)
                         r = await client.get(f"/admin/email-deliveries/{email_id}")
                         _assert_demo_page("email delivery detail", r)
+                        # 224-i: the twelve fixed core form GETs.
+                        for form_path in (
+                            "/admin/keys/create",
+                            "/admin/keys/bulk-import",
+                            "/admin/owners/new",
+                            "/admin/institutions/new",
+                            "/admin/cohorts/new",
+                            "/admin/providers/new",
+                            "/admin/routes/new",
+                            "/admin/routes/import",
+                            "/admin/pricing/new",
+                            "/admin/pricing/import",
+                            "/admin/fx/new",
+                            "/admin/fx/import",
+                        ):
+                            r = await client.get(form_path)
+                            _assert_demo_page(form_path, r)
+                        # 224-i: the seven canonical-UUID edit forms.
+                        for edit_path in (
+                            f"/admin/owners/{owner_id}/edit",
+                            f"/admin/institutions/{inst_id}/edit",
+                            f"/admin/cohorts/{cohort_id}/edit",
+                            f"/admin/providers/{provider_id}/edit",
+                            f"/admin/routes/{route_id}/edit",
+                            f"/admin/pricing/{pricing_id}/edit",
+                            f"/admin/fx/{fx_id}/edit",
+                        ):
+                            r = await client.get(edit_path)
+                            _assert_demo_page(edit_path, r)
+                        # 224-i: the provider discover read-only form.
+                        r = await client.get(f"/admin/providers/{provider_id}/discover")
+                        _assert_demo_page("provider discover", r)
                         for kind in ("institution", "owner"):
                             r = await client.get(f"/admin/record-choices?kind={kind}&q=")
                             assert r.status_code == 200
@@ -398,6 +507,14 @@ def test_e2e_admin_gate_two_sessions_distinct_copies(
                             assert isinstance(body, dict)
                             assert body["kind"] == kind
                             assert isinstance(body["choices"], list)
+                        # 224-i: the routes list row count equals the
+                        # copied model_routes count (within the page limit).
+                        r = await client.get("/admin/routes")
+                        m = re.search(r'id="routes-rows-shown">([\d]+) rows? shown', r.text)
+                        assert m is not None
+                        shown = int(m.group(1))
+                        db_routes = await _count_table(san_env, target, "model_routes")
+                        assert shown == min(db_routes, 50), (shown, db_routes)
                         # 224-f: real usage quantities survive the copy -
                         # the rendered row count equals the copied table's
                         # count (within the page limit), and the label is
@@ -409,12 +526,16 @@ def test_e2e_admin_gate_two_sessions_distinct_copies(
                         db_usage = await _count_table(san_env, target, "usage_ledger")
                         assert shown == min(db_usage, 50), (shown, db_usage)
                         assert re.search(r">1 row shown<", r.text) is not None or shown != 1
-                        # still-gated families stay 404 behind the same session
+                        # still-gated families stay 404 behind the same
+                        # session (224-i: keys/templates have no edit forms;
+                        # route action/download GETs stay denied).
                         for gated in (
-                            "/admin/routes",
                             "/admin/operations",
                             "/admin/reports",
-                            f"/admin/providers/{provider_id}/edit",
+                            f"/admin/keys/{key_id}/edit",
+                            f"/admin/templates/{template_id}/edit",
+                            f"/admin/routes/{route_id}/configuration",
+                            f"/admin/routes/{route_id}/codex-profile/profile",
                             f"/admin/usage/{usage_id}/export.csv",
                         ):
                             assert (await client.get(gated)).status_code == 404, gated
@@ -630,12 +751,13 @@ def test_browser_smoke_demo_copy_pages(
             assert 'href="/admin/keys"' in content
             assert 'href="/admin/providers"' in content
             assert 'href="/admin/usage"' in content
-            assert 'href="/admin/routes"' not in content
+            # 224-i: the routes list/detail is in the demo nav.
+            assert 'href="/admin/routes"' in content
             assert 'href="/admin/operations"' not in content
             nav_labels = [a.inner_text() for a in page.locator("nav a").all()]
             assert nav_labels == [
                 "Dashboard", "Keys", "Owners", "Institutions", "Cohorts",
-                "Providers", "Pricing", "Templates", "FX", "Usage",
+                "Providers", "Routes", "Pricing", "Templates", "FX", "Usage",
                 "Audit", "Email",
             ]
             # asset_url appends ?v=<digest>: judge by URL path, not suffix.
@@ -678,8 +800,8 @@ def test_browser_smoke_demo_copy_pages(
             assert r.headers["cache-control"] == "private, no-store"
             content = page.content()
             assert "Demo preview:" in content
-            # the still-gated create form link is hidden in demo mode
-            assert 'href="/admin/providers/new"' not in content
+            # 224-i: the provider create form is admitted (read-only demo).
+            assert 'href="/admin/providers/new"' in content
             prov_sel = "table[data-sortable] tbody tr td:nth-child(2) a"
             prov_initial = [a.inner_text() for a in page.locator(prov_sel).all()]
             prov_link = page.locator('th:has-text("Provider") a[href="#ts-sort"]')
@@ -689,6 +811,48 @@ def test_browser_smoke_demo_copy_pages(
             prov_asc = [a.inner_text() for a in page.locator(prov_sel).all()]
             assert set(prov_asc) == set(prov_initial)
             assert page.locator('th[aria-sort="ascending"]').count() >= 1
+
+            # --- 224-i: follow the NEW nav link (Routes) -----------------
+            page.click('nav a[href="/admin/routes"]')
+            page.wait_for_selector("#routes-heading")
+            content = page.content()
+            assert "Demo preview:" in content
+            assert re.search(r"rows? shown", content) is not None
+            # ephemeral desktop-layout screenshot of the new Routes list
+            # (run-owned /tmp path; never committed, not in app logs).
+            shot_routes = Path(
+                f"/tmp/slaif-224i-browser-routes-{os.getpid()}-{uuid.uuid4().hex[:10]}.png"
+            )
+            page.screenshot(path=str(shot_routes))
+            print(f"DEMO_BROWSER_ROUTES_SCREENSHOT={shot_routes}")
+            # route detail via the first row link
+            detail_link = page.locator(
+                'table[data-sortable] tbody tr td a[href^="/admin/routes/"]'
+            ).first
+            if detail_link.count():
+                detail_link.click()
+                page.wait_for_selector("#route-heading")
+                assert "Demo preview:" in page.content()
+
+            # --- 224-i: an admitted form renders; the operational submit
+            # is a quiet 204 no-op that changes nothing -------------------
+            page.goto("/admin/cohorts")
+            rows_before = page.locator("table[data-sortable] tbody tr").count()
+            page.goto("/admin/cohorts/new")
+            assert "Demo preview:" in page.content()
+            page.fill('input[name="name"]', "224i-browser-probe")
+            page.fill('textarea[name="reason"]', "224-i no-op probe")
+            page.click('button[type="submit"]:has-text("Create cohort")')
+            page.wait_for_timeout(300)
+            posted = [
+                (u, st)
+                for (u, st, _cc) in all_responses
+                if u.endswith("/admin/cohorts/new") and st == 204
+            ]
+            assert posted, "no 204 no-op recorded for the demo form POST"
+            page.goto("/admin/cohorts")
+            rows_after = page.locator("table[data-sortable] tbody tr").count()
+            assert rows_after == rows_before
 
             # --- CSRF-verified sign-out back to the demo entry ------------
             page.click("button.signout")

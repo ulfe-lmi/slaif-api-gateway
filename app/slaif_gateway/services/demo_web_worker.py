@@ -122,11 +122,8 @@ _MAX_CANDIDATES = 100
 # source identifier, path, or free text can be represented.
 
 
-_DEMO_RUN_ID_RE = re.compile(r"^demo-run-[0-9a-f]{24}$")
-_DEMO_JOB_ID_RE = re.compile(r"^[0-9a-f]{32}$")
 _DEMO_RUN = r"demo-run-[0-9a-f]{24}"
 _DEMO_JOB = r"[0-9a-f]{32}"
-_DEMO_UPLOAD_BASENAME = r"(?:bundle|baseline|baseline-export)-[0-9a-f]{32}"
 _DEMO_PRESET = (
     r"(?:" + "|".join(OPENROUTER_PACKAGE_ORDER) + r")"
 )

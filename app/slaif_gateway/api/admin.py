@@ -352,6 +352,7 @@ _DEMO_NAV_SECTIONS: tuple[tuple[str, str], ...] = (
     ("/admin/institutions", "Institutions"),
     ("/admin/cohorts", "Cohorts"),
     ("/admin/providers", "Providers"),
+    ("/admin/routes", "Routes"),
     ("/admin/pricing", "Pricing"),
     ("/admin/templates", "Templates"),
     ("/admin/fx", "FX"),
@@ -6504,8 +6505,15 @@ async def admin_route_detail(request: Request, route_id: str) -> Response:
     except AdminCatalogNotFoundError:
         return _admin_error_page(request, status_code=404, message="Model route not found.")
 
+    # 224-i: the demo host cannot forward /v1, so a profile rendered
+    # from the neutral demo PUBLIC_BASE_URL would be misleading; skip
+    # artifact generation entirely and let the template show the hint.
     codex_profile_artifacts = None
-    if route.codex_protocol_ready and route.codex_profile_id:
+    if (
+        getattr(request.state, "demo_admin", None) is None
+        and route.codex_protocol_ready
+        and route.codex_profile_id
+    ):
         try:
             codex_profile_artifacts = render_codex_profile(
                 settings.PUBLIC_BASE_URL,

@@ -12,7 +12,7 @@
       <p class="muted signed-in">Signed in as <strong>{{ admin.display_name }}</strong></p>
     </div>
     <div class="header-actions">
-{% if not demo_admin %}      <a class="button-link" href="/admin/keys/create">Create gateway key</a>{% endif %}
+      <a class="button-link" href="/admin/keys/create">Create gateway key</a>
       <form method="post" action="/admin/logout">
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         <button type="submit" class="signout">Sign out</button>

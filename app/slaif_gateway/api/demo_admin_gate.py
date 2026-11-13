@@ -5,9 +5,9 @@ demo process; this wrapper sits in front of them so the reused handlers are
 reachable ONLY through the gate, BEFORE any admin handler or form/body
 parsing:
 
-- the admitted admin GET set (dashboard, the four core list pages, their
-  closed-UUID record detail pages, and the ``/admin/record-choices`` lookup)
-  dispatches only after the 224-a demo session is validated against the LIVE
+- the admitted admin GET set (dashboard, the core list pages, their
+  closed-UUID record detail pages, the 224-i core form GETs and the
+  ``/admin/record-choices`` lookup) dispatches only after the 224-a demo session is validated against the LIVE
   fake-admin account/generation/request fence AND bound to that session's
   exact verified/unexpired ``demo_snap_<20hex>`` copy under the 224-d
   SELECT-only reader credential;
@@ -69,13 +69,16 @@ from slaif_gateway.demo_web import (
 )
 from slaif_gateway.services.admin_session_service import AdminSessionContext
 
-# --- the fixed 224-e/224-f admission law (closed sets, never input-derived) ---
-# 224-f adds the seven reviewed DATABASE-BACKED list/detail families
-# (handlers verified: copied-public repositories only, no file/process/
-# network reads). Everything else - routes, operations, catalog,
-# compatibility, OpenAI-assisted, accounting-recovery, replay
-# maintenance, accounts, key batch/clone, form GETs, exports and
-# /admin/branding - stays default-denied.
+# --- the fixed 224-e/224-f/224-i admission law (closed sets, never
+# input-derived) ---
+# 224-f adds the seven reviewed DATABASE-BACKED list/detail families;
+# 224-i adds the routes list/detail, the fixed core form GETs, the
+# canonical-UUID edit forms (seven families, never keys/templates) and
+# the provider discover form (handlers verified: copied-public
+# repositories plus fixed package data only, no file/process/network
+# reads on GET). Everything else - operations, catalog, compatibility,
+# OpenAI-assisted, accounting-recovery, replay maintenance, accounts,
+# key batch/clone, exports and /admin/branding - stays default-denied.
 
 ADMITTED_DASHBOARD_PATHS = ("/admin", "/admin/")
 ADMITTED_LIST_PATHS = (
@@ -84,6 +87,7 @@ ADMITTED_LIST_PATHS = (
     "/admin/institutions",
     "/admin/cohorts",
     "/admin/providers",
+    "/admin/routes",
     "/admin/pricing",
     "/admin/templates",
     "/admin/fx",
@@ -97,6 +101,7 @@ ADMITTED_DETAIL_PREFIXES = (
     "/admin/institutions/",
     "/admin/cohorts/",
     "/admin/providers/",
+    "/admin/routes/",
     "/admin/pricing/",
     "/admin/templates/",
     "/admin/fx/",
@@ -105,6 +110,34 @@ ADMITTED_DETAIL_PREFIXES = (
     "/admin/email-deliveries/",
 )
 ADMITTED_RECORD_CHOICES_PATH = "/admin/record-choices"
+#: 224-i: the fixed core FORM GETs (positive closed set; their POST/PUT/
+#: PATCH/DELETE handlers remain cut to the uniform 204 no-op before
+#: routing and body parsing by the unsafe-method branch).
+ADMITTED_FORM_PATHS = (
+    "/admin/keys/create",
+    "/admin/keys/bulk-import",
+    "/admin/owners/new",
+    "/admin/institutions/new",
+    "/admin/cohorts/new",
+    "/admin/providers/new",
+    "/admin/routes/new",
+    "/admin/routes/import",
+    "/admin/pricing/new",
+    "/admin/pricing/import",
+    "/admin/fx/new",
+    "/admin/fx/import",
+)
+#: 224-i: the exact edit-form FAMILIES (never keys/templates); the
+#: middle segment must be exactly one canonical lowercase UUID.
+ADMITTED_EDIT_FAMILY_PREFIXES = (
+    "/admin/owners/",
+    "/admin/institutions/",
+    "/admin/cohorts/",
+    "/admin/providers/",
+    "/admin/routes/",
+    "/admin/pricing/",
+    "/admin/fx/",
+)
 #: Canonical lowercase 8-4-4-4-12 UUID syntax ONLY (the exact form the
 #: GUI generates from ``str(uuid)``); variant forms (no dashes, braces,
 #: URN, uppercase) are NOT admitted detail components.
@@ -201,11 +234,24 @@ def _scope_path(scope: dict) -> str:
 
 
 def _is_admitted_path(path: str) -> bool:
-    """The exact closed 224-e GET admission law."""
+    """The exact closed 224-e/224-f/224-i GET admission law."""
     if path in ADMITTED_DASHBOARD_PATHS or path in ADMITTED_LIST_PATHS:
         return True
     if path == ADMITTED_RECORD_CHOICES_PATH:
         return True
+    if path in ADMITTED_FORM_PATHS:
+        return True
+    for prefix in ADMITTED_EDIT_FAMILY_PREFIXES:
+        if path.startswith(prefix) and path.endswith("/edit"):
+            middle = path[len(prefix) : -len("/edit")]
+            # exactly ONE middle segment, canonical lowercase UUID
+            return _CANONICAL_UUID_RE.fullmatch(middle) is not None
+    if path.startswith("/admin/providers/"):
+        rest = path[len("/admin/providers/") :]
+        parts = rest.split("/")
+        # /admin/providers/<uuid>/discover : exactly two segments
+        if len(parts) == 2 and parts[1] == "discover":
+            return _CANONICAL_UUID_RE.fullmatch(parts[0]) is not None
     for prefix in ADMITTED_DETAIL_PREFIXES:
         if path.startswith(prefix):
             rest = path[len(prefix) :]
