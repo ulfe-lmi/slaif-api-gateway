@@ -2733,7 +2733,8 @@ def test_catalog_index_gate_admission_exact_path():
                 "/admin/operations/catalog2",         # prefix sibling
                 # 224-n: /admin/operations/catalog/proposals is now
                 # ADMITTED (exact path) - covered by the 224-n section.
-                "/admin/operations/catalog/collect",
+                # 224-o: /admin/operations/catalog/collect is now
+                # ADMITTED (exact path) - covered by the 224-o section.
                 "/admin/operations/catalog/review",
                 "/admin/operations/catalog/export-baseline",
                 f"/admin/operations/catalog/runs/{KEY_UUID}/",
@@ -4515,5 +4516,465 @@ def test_index_links_proposals_page(monkeypatch):
             assert (
                 'href="/admin/operations/catalog/proposals"' in r.text
             )
+
+    asyncio.run(run())
+
+
+# --- 224-o: demo-only copy-backed collect page + captured runs ----------------
+
+CO_SEED = b"224o-unit-seed"
+CO_ORIGINAL_RUN_A = "a5" * 16  # ORIGINAL (never displayed)
+CO_ORIGINAL_RUN_B = "b6" * 16
+CO_RUN_A = _rd_dsf._demo_run_id(CO_SEED, CO_ORIGINAL_RUN_A)  # demo-run-<24hex>
+CO_RUN_B = _rd_dsf._demo_run_id(CO_SEED, CO_ORIGINAL_RUN_B)
+CO_URL = "/admin/operations/catalog/collect"
+CO_FILE_DATA = b"{}"  # metadata-only fixture bodies (never loaded)
+
+
+def _co_run_rows(run_id: str, base_captured: float, count: int = 7):
+    """The closed seven worker-published sealed-run content rows for one
+    remapped run (consistent kind/size/sha/capture; bodies never read)."""
+    return [
+        _pn_leaf(
+            f"catalog/runs/{run_id}/{filename}",
+            kind,
+            CO_FILE_DATA,
+            base_captured + index,
+        )
+        for index, (filename, kind) in enumerate(dac._RUN_DETAIL_FILES[:count])
+    ]
+
+
+def _co_app(fake, monkeypatch, session, choices=_PN_DEFAULT_CHOICES):
+    fake.worker_target_db = COPY_OK
+    _preflight_case(monkeypatch, COPY_OK, "on")
+    _patch_sessionmaker(monkeypatch, session)
+
+    async def _fake_load_choices(session, kind, selected=()):
+        assert kind == "catalog_upstream"
+        return list(choices)
+
+    monkeypatch.setattr(dac, "load_choices", _fake_load_choices)
+    return _app(fake), fake
+
+
+def test_collect_gate_admission_exact_path():
+    async def run():
+        app = _app(FakeFacade())
+        async with _client(app) as client:
+            # The ONE exact path is ADMITTED (no session -> entry
+            # redirect, same law as the index)...
+            r = await client.get(CO_URL)
+            assert r.status_code == 303
+            assert r.headers["location"] == "/fakeadmin/login"
+            # ...and every near-miss / subpath stays default-denied 404.
+            for p in (
+                CO_URL + "/",                      # trailing slash
+                CO_URL + "s",                      # prefix sibling
+                CO_URL + "/submit",                # the POST subpath
+                CO_URL + "/extra",                 # deeper path
+                "/admin/operations/catalogx/collect",
+            ):
+                r = await client.get(p)
+                assert r.status_code == 404, p
+
+    asyncio.run(run())
+
+
+def test_collect_zero_active_404():
+    async def run():
+        fake = FakeFacade()
+        fake.active = 0
+        app = _app(fake)
+        async with _client(app) as client:
+            _session_cookie(client)
+            r = await client.get(CO_URL)
+            assert r.status_code == 404
+
+    asyncio.run(run())
+
+
+def test_collect_unsafe_methods_quiet_noop_body_not_parsed():
+    async def run():
+        app = _app(FakeFacade())
+        async with _client(app) as client:
+            _session_cookie(client)
+            paths = (CO_URL, CO_URL + "/submit", CO_URL + "/export-baseline")
+            for p in paths:
+                for method in ("POST", "PUT", "PATCH", "DELETE"):
+                    # 200 KB garbage body: a 204 proves the body was
+                    # never parsed before the cut.
+                    r = await client.request(
+                        method,
+                        p,
+                        content=b"x" * 200_000,
+                        headers={"content-type": "text/garbage"},
+                    )
+                    assert r.status_code == 204, (p, method)
+                    assert r.content == b""
+        async with _client(app) as anon:
+            r = await anon.post(
+                CO_URL,
+                content=b"y" * 200_000,
+                headers={"content-type": "text/garbage"},
+            )
+            assert r.status_code == 404
+
+    asyncio.run(run())
+
+
+def test_collect_query_law_404_no_db_access(monkeypatch):
+    async def run():
+        app = _app(FakeFacade())
+        demo = _PN_NS(target_db=COPY_OK)
+
+        calls: list = []
+
+        def _refusing_sessionmaker(_req):
+            calls.append(_req)
+            raise RuntimeError("no copy query before the query law")
+
+        # The demo collect page defines NO query parameters: ANY
+        # parameter (including the normal page's `job` value) refuses
+        # BEFORE any sessionmaker/copy access.
+        monkeypatch.setattr(
+            dac, "get_sessionmaker_from_app", _refusing_sessionmaker
+        )
+
+        # Missing demo state: defensive 404.
+        request = _pn_bare_request(app, {})
+        assert (await dac.demo_catalog_collect(request)).status_code == 404
+        for query in (
+            "job=" + CO_ORIGINAL_RUN_A,
+            "job=" + CO_RUN_A,
+            "x=1",
+            "job=",
+        ):
+            request = _pn_bare_request(app, {"demo_admin": demo}, query)
+            assert (
+                await dac.demo_catalog_collect(request)
+            ).status_code == 404, query
+        # Proven: no refusal path touched the copy seam.
+        assert calls == []
+
+    asyncio.run(run())
+
+
+def test_collect_page_no_sessionmaker_503(monkeypatch):
+    async def run():
+        app = _app(FakeFacade())
+        demo = _PN_NS(target_db=COPY_OK)
+
+        class _RaiseFactory:
+            def __call__(self):
+                raise RuntimeError("no sessionmaker in demo state")
+
+        monkeypatch.setattr(
+            dac, "get_sessionmaker_from_app", lambda _req: _RaiseFactory()
+        )
+        request = _pn_bare_request(app, {"demo_admin": demo})
+        response = await dac.demo_catalog_collect(request)
+        assert response.status_code == 503
+        assert dac._SAFE_COLLECT_UNAVAILABLE in response.body.decode()
+
+    asyncio.run(run())
+
+
+def test_collect_preflight_mismatch_503(monkeypatch):
+    async def run():
+        for db, ro in ((COPY_OK, "off"), ("some_other_db", "on")):
+            fake = FakeFacade()
+            session = _ArtifactFakeSession(
+                meta_rows=[], body_rows=[], db=db, ro=ro
+            )
+            app, _ = _co_app(fake, monkeypatch, session)
+            request = _pn_bare_request(
+                app, {"demo_admin": _PN_NS(target_db=COPY_OK)}
+            )
+            response = await dac.demo_catalog_collect(request)
+            assert response.status_code == 503
+            assert dac._SAFE_COLLECT_UNAVAILABLE in response.body.decode()
+            # The copy recheck happens BEFORE any copy query.
+            assert all("demo_display" not in t for t, _p in session.executed)
+
+    asyncio.run(run())
+
+
+def test_collect_inventory_bound_503_and_limit_param(monkeypatch):
+    async def run():
+        fake = FakeFacade()
+        # 4097 rows (all non-runs, so the bound trips before any
+        # per-group law): the bound LIMIT must make the page refuse.
+        rows = [
+            _pn_leaf(
+                f"catalog/jobs/{'a1' * 16}.json", "job_record", b"{}", 1750000000.0
+            )
+        ] * 4097
+        session = _ArtifactFakeSession(
+            meta_rows=rows, body_rows=[], db=COPY_OK, ro="on"
+        )
+        app, _ = _co_app(fake, monkeypatch, session)
+        request = _pn_bare_request(
+            app, {"demo_admin": _PN_NS(target_db=COPY_OK)}
+        )
+        response = await dac.demo_catalog_collect(request)
+        assert response.status_code == 503
+        # The inventory statement carries the BOUND limit parameter.
+        inventory = [
+            (t, p)
+            for t, p in session.executed
+            if "demo_display.leaves" in t and not t.lstrip().startswith("SELECT body")
+        ]
+        assert len(inventory) == 1
+        stmt, params = inventory[0]
+        assert "LIMIT :limit" in stmt
+        assert params == {"limit": dac._MAX_INDEX_ROWS + 1}
+
+    asyncio.run(run())
+
+
+def test_collect_empty_honest_200(monkeypatch):
+    async def run():
+        fake = FakeFacade()
+        # Only a NON-runs leaf: an honest empty complete-run list.
+        session = _ArtifactFakeSession(
+            meta_rows=[
+                _pn_leaf(
+                    f"catalog/jobs/{CAT_JOB_ID}.json",
+                    "job_record", b"{}", 1750000001.0,
+                )
+            ],
+            body_rows=[],
+            db=COPY_OK,
+            ro="on",
+        )
+        app, _ = _co_app(fake, monkeypatch, session)
+        async with _client(app) as client:
+            _session_cookie(client)
+            await _verified_session_client(fake, client)
+            r = await client.get(CO_URL)
+            assert r.status_code == 200
+            assert r.headers["cache-control"] == "private, no-store"
+            text = _norm(r.text)
+            assert "Sanitized demo snapshot display" in text
+            assert "ILLUSTRATIVE demo-only form" in text
+            assert "submitting has NO effect" in text
+            # No FALSE live-availability claim: the normal "shown as
+            # available/not configured" wording never renders in demo.
+            assert "shown as" not in r.text
+            assert "live setup (DATABASE_URL) is NOT available to this demo copy" in text
+            assert "research runner is NOT configured or available to this demo copy" in text
+            # The familiar form controls render (demo-labeled).
+            assert 'name="mode"' in r.text
+            assert 'name="providers"' in r.text
+            assert 'name="baseline"' in r.text
+            assert "gpt-test" in r.text  # copy-backed model choice
+            # The NORMAL custody-backed last-job section never renders.
+            assert "Last collect job" not in text
+            assert "Refresh status" not in text
+            # The honest empty complete-run state + no-inference note.
+            assert "No captured complete runs in this snapshot" in text
+            assert (
+                "This does not establish that no collect jobs exist or that live catalog storage is unconfigured"
+                in text
+            )
+            # No copy name or credential echo.
+            assert COPY_OK not in r.text
+
+    asyncio.run(run())
+
+
+def test_collect_positive_page(monkeypatch):
+    async def run():
+        # Two COMPLETE run groups: A (7 files) newer than B (7 files).
+        rows = (
+            _co_run_rows(CO_RUN_A, base_captured=1750000100.0)
+            + _co_run_rows(CO_RUN_B, base_captured=1750000000.0)
+            + [
+                _pn_leaf(
+                    f"catalog/jobs/{CAT_JOB_ID}.json",
+                    "job_record", b"{}", 1750000001.0,
+                )
+            ]
+        )
+        fake = FakeFacade()
+        session = _ArtifactFakeSession(
+            meta_rows=rows, body_rows=[], db=COPY_OK, ro="on"
+        )
+        app, _ = _co_app(fake, monkeypatch, session)
+        async with _client(app) as client:
+            _session_cookie(client)
+            await _verified_session_client(fake, client)
+            r = await client.get(CO_URL)
+            assert r.status_code == 200
+            assert r.headers["cache-control"] == "private, no-store"
+            text = _norm(r.text)
+            assert "Captured complete runs (historical, all acquisition paths)" in r.text
+            assert "NOT attributed to this collect form" in text
+            assert "100" in text  # the stated bound
+            # Both runs link to the EXACT 224-m historical run-detail
+            # page (never the original custody).
+            for run_id in (CO_RUN_A, CO_RUN_B):
+                assert (
+                    f'href="/admin/operations/catalog/runs/{run_id}/"' in r.text
+                ), run_id
+                assert f"<code>{run_id}</code>" in r.text
+            # A (newer) is listed BEFORE B.
+            assert r.text.index(f'runs/{CO_RUN_A}/') < r.text.index(f'runs/{CO_RUN_B}/')
+            # Per-group metadata: seven files, 7 * len(CO_FILE_DATA)
+            # bytes, captured UTC stamp.
+            assert "7 files" in text
+            assert f"{7 * len(CO_FILE_DATA):,}" in text or str(7 * len(CO_FILE_DATA)) in text
+            # No original run ID, no copy name, and NO body transfer
+            # (only metadata was ever queried).
+            assert CO_ORIGINAL_RUN_A not in r.text
+            assert CO_ORIGINAL_RUN_B not in r.text
+            assert COPY_OK not in r.text
+            assert not any(
+                t.lstrip().startswith("SELECT body") for t, _p in session.executed
+            )
+
+    asyncio.run(run())
+
+
+def test_collect_partial_run_group_503(monkeypatch):
+    async def run():
+        for count in (1, 6):  # every partial group is a fixed refusal
+            rows = _co_run_rows(CO_RUN_A, base_captured=1750000100.0, count=count)
+            fake = FakeFacade()
+            session = _ArtifactFakeSession(
+                meta_rows=rows, body_rows=[], db=COPY_OK, ro="on"
+            )
+            app, _ = _co_app(fake, monkeypatch, session)
+            async with _client(app) as client:
+                _session_cookie(client)
+                await _verified_session_client(fake, client)
+                r = await client.get(CO_URL)
+                assert r.status_code == 503, count
+                assert r.headers["cache-control"] == "private, no-store"
+                assert dac._SAFE_COLLECT_UNAVAILABLE in _norm(r.text)
+
+    asyncio.run(run())
+
+
+def test_collect_closed_file_law_corrupt_503(monkeypatch):
+    async def run():
+        good = _co_run_rows(CO_RUN_A, base_captured=1750000100.0)
+        cases = (
+            # an unknown top-level file name
+            good[:-1]
+            + [
+                _pn_leaf(
+                    f"catalog/runs/{CO_RUN_A}/evil.txt",
+                    "route_tsv", CO_FILE_DATA, 1750000100.0 + 6,
+                )
+            ],
+            # a deeper runs path is outside the closed set
+            good[:-1]
+            + [
+                _pn_leaf(
+                    f"catalog/runs/{CO_RUN_A}/REVIEW.html/inner",
+                    "review_html", CO_FILE_DATA, 1750000100.0 + 6,
+                )
+            ],
+            # kind disagrees with the worker-published file law
+            good[:-1]
+            + [
+                (
+                    f"catalog/runs/{CO_RUN_A}/REVIEW.html",
+                    "job_record",
+                    len(CO_FILE_DATA),
+                    hashlib.sha256(CO_FILE_DATA).hexdigest(),
+                    1750000100.0 + 6,
+                )
+            ],
+        )
+        for rows in cases:
+            fake = FakeFacade()
+            session = _ArtifactFakeSession(
+                meta_rows=rows, body_rows=[], db=COPY_OK, ro="on"
+            )
+            app, _ = _co_app(fake, monkeypatch, session)
+            async with _client(app) as client:
+                _session_cookie(client)
+                await _verified_session_client(fake, client)
+                r = await client.get(CO_URL)
+                assert r.status_code == 503, rows[-1][0]
+
+    asyncio.run(run())
+
+
+def test_collect_group_bound_100(monkeypatch):
+    async def run():
+        # 101 complete groups: the page lists at most 100, the OLDEST
+        # dropped, the bound stated.
+        rows: list = []
+        for i in range(101):
+            run_id = _rd_dsf._demo_run_id(
+                CO_SEED, ("%02x" % i) + "0" * 30
+            )
+            rows.extend(
+                _co_run_rows(run_id, base_captured=1740000000.0 + i)
+            )
+        fake = FakeFacade()
+        session = _ArtifactFakeSession(
+            meta_rows=rows, body_rows=[], db=COPY_OK, ro="on"
+        )
+        app, _ = _co_app(fake, monkeypatch, session)
+        async with _client(app) as client:
+            _session_cookie(client)
+            await _verified_session_client(fake, client)
+            r = await client.get(CO_URL)
+            assert r.status_code == 200
+            import re
+
+            links = re.findall(
+                r'href="/admin/operations/catalog/runs/(demo-run-[0-9a-f]{24})/"',
+                r.text,
+            )
+            assert len(links) == 100
+            # The oldest group (i=0) is the one dropped.
+            assert _rd_dsf._demo_run_id(CO_SEED, "00" + "0" * 30) not in links
+            assert "100" in _norm(r.text)
+
+    asyncio.run(run())
+
+
+def test_collect_html_canary_escaped(monkeypatch):
+    async def run():
+        canary = _PN_NS(
+            id="gpt-canary", label="<script>alert(1)</script>", sub="x&y"
+        )
+        rows = _co_run_rows(CO_RUN_A, base_captured=1750000100.0)
+        fake = FakeFacade()
+        session = _ArtifactFakeSession(
+            meta_rows=rows, body_rows=[], db=COPY_OK, ro="on"
+        )
+        app, _ = _co_app(fake, monkeypatch, session, choices=(canary,))
+        async with _client(app) as client:
+            _session_cookie(client)
+            await _verified_session_client(fake, client)
+            r = await client.get(CO_URL)
+            assert r.status_code == 200
+            assert "<script>alert(1)</script>" not in r.text
+            # The canary survives only as escaped/inert JSON.
+            assert "gpt-canary" in r.text
+
+    asyncio.run(run())
+
+
+def test_index_links_collect_page(monkeypatch):
+    async def run():
+        fake = FakeFacade()
+        fake.worker_target_db = COPY_OK
+        _preflight_case(monkeypatch, COPY_OK, "on")
+        factory, _made = _display_factory(leaves=[])
+        app = _app(fake, display_reader_factory=factory)
+        async with _client(app) as client:
+            _session_cookie(client)
+            await _verified_session_client(fake, client)
+            r = await client.get(CATALOG_INDEX_URL)
+            assert r.status_code == 200
+            assert 'href="/admin/operations/catalog/collect"' in r.text
 
     asyncio.run(run())

@@ -2308,3 +2308,117 @@ ID, manifest field, DSN, credential or copy name ever renders.
   artifact-group state (stated limit; the positive page is proven
   by owned-PG transport and mocked-ASGI coverage; the
   configured-file installed browser workflow remains objective 225).
+
+## Collect page and captured complete runs (objective 224-o)
+
+224-o (same PR #383) opens ONE existing GUI path as a demo-only
+`GET /admin/operations/catalog/collect` in the existing demo catalog
+router, admitted in the central gate by exact path only (near misses
+and subpaths such as `/collect/submit` stay refused; every unsafe
+`/admin` method remains the unchanged pre-body quiet 204 cut, and no
+body is ever parsed). The normal custody-backed collect handler,
+template behavior and route families are unchanged; the demo catalog
+index header links the page alongside the captured-proposals link
+(no new top-nav item).
+
+The page renders the familiar collect form controls and their help
+as ILLUSTRATIVE demo-only controls: the mode/provider options are
+fixed product vocabularies, the model-ID choices are COPY-BACKED
+(one SELECT-only read of `catalog_upstream` through the gate's SAME
+request-local copy engine; a failed copy query is a fixed safe 503
+refusal, never a silent empty dropdown), the optional baseline file
+input and the research control are displayed for inspection only,
+and a neutral banner states that submitting has NO effect (no source
+is collected, no baseline is imported, no provider or research is
+called). Live setup is never falsely claimed: the page does NOT
+display a live DATABASE_URL availability state and does NOT infer
+research-runner configuration from the absence of a demo secret —
+narrowly scoped demo text states that live setup (DATABASE_URL) and
+the research runner are NOT available to this copy. Ambient
+production settings, credentials, live catalog files, the provider
+network and the research runner are never read.
+
+Below the form, the page presents a bounded, clearly HISTORICAL list
+of at most the 100 most-recently-captured COMPLETE catalog run
+groups from the target-only `demo_display.leaves` metadata, labeled
+as covering ALL acquisition paths (the list is explicitly NOT
+attributed to the collect form): each group must contain the
+worker's closed seven sealed-run content files exactly once (exact
+remapped run ID, kind/size/capture-time metadata checked, no body
+transfer); a partial group (1..6 of the seven files), a wrong
+kind/size/time, a duplicate file row or the server-side row bound
+(transferring at most 4,097 metadata rows via a BOUND `LIMIT 4097`)
+is a fixed safe 503, never silently omitted. The 100-group bound is
+stated on the page. Each run links to the exact 224-m historical
+run-detail page (never the original custody). The label law is
+exact: an empty run list proves neither that no collect job exists
+nor that live catalog storage is unconfigured, and status-only jobs
+without captured complete runs are not listed; no live job state or
+original seal/apply readiness is shown. The read runs in ONE
+read-only transaction on the gate's SAME request-local copy engine
+with the independent `current_database()` / `transaction_read_only`
+recheck; the demo page defines NO query parameters, so ANY query
+string refuses with a fixed 404 before any copy-seam access. Every
+output is `private, no-store` and Jinja-escaped; no source path,
+original run ID, DSN, credential or copy name ever renders.
+
+### Evidence (224-o)
+
+* Focused unit (mocked ASGI, no database; all new `test_collect_*`
+  tests passed, exit 0): exact path admission and every near-miss /
+  subpath denial (including the `/submit` GET); zero-active 404;
+  every unsafe method on the page path and `/submit`/
+  `/export-baseline` paths the quiet 204 cut with a 200 KB body
+  never parsed; the query law (any parameter, including the normal
+  page's `job` value) a fixed 404 BEFORE any copy-seam access
+  (proven by a call-recording refusing sessionmaker plus the
+  zero-call assertion); a gate-admitted page whose demo state lacks
+  a usable sessionmaker a fixed 503; the in-transaction binding
+  recheck (wrong database or read-only off, after the gate passes) a
+  fixed 503 with zero copy queries; the inventory bound (a 4097-row
+  result) a fixed 503 with the bound `LIMIT :limit` parameter
+  verified on the recorded statement; the honest empty page (demo
+  banner, illustrative form with every familiar control, the
+  no-false-availability demo wording — the normal "shown as"
+  live-DB text never renders — the research "not available in this
+  copy" wording, the honest empty complete-run state with the
+  no-inference note, no custody last-job section, no copy-name
+  echo); the positive page (two complete seven-file groups) links
+  each run to the EXACT 224-m run-detail path, most-recently-
+  captured first, with the per-group file count/bytes/capture
+  metadata, the stated 100 bound, the all-acquisition-paths
+  labeling, and NEVER a body transfer (verified on the recorded
+  statements), no original run ID or copy name; every partial group
+  (1 and 6 of 7 files) a fixed 503; every closed-file-law
+  corruption (unknown file, deeper runs path, kind mismatch) a
+  fixed 503; a 101-group inventory lists exactly 100 with the
+  oldest dropped; a model-option HTML canary rendered escaped/inert;
+  the index header link.
+* Owned PostgreSQL 16 (real target-only `demo_display.leaves`, real
+  restricted reader role, two sessions on distinct copies): after
+  the worker run and its honest empty-index assertions, ONE
+  test-only captured complete run's seven sealed-run content leaves
+  are inserted into copy A through the owned target-owner
+  connection (honest label: ALL seven bodies are `b"{}"` test-only
+  placeholders and are NOT valid sealed-run content for their kinds
+  — the collect page reads only their metadata, never any run
+  body; this proves route/reader/inventory transport/binding, NOT
+  223 source capture, worker publication or sanitization of a real
+  run — the configured-file installed workflow remains objective
+  225). Session A gets the 200 page (demo banner, the one captured
+  complete run group linked to the exact 224-m run-detail path,
+  seven-file metadata, the stated bound, no original run ID or copy
+  name, no false live-availability claim); session B (its own exact
+  copy) renders the honest empty complete-run state with the
+  no-inference note (copy isolation); reducing the run to six of
+  the seven files is the fixed safe 503 with no run ID echo; the
+  path stays the quiet 204 cut; the seven leaves are deleted
+  afterwards by EXACT names (`ANY($1::text[])`, never a prefix
+  match) and the empty state re-proven.
+* Real Chromium: the owned browser fixture has NO configured run
+  leaves, so the collect page renders 200 in the real browser with
+  `private, no-store`, the demo banner, the illustrative form and
+  the honest empty complete-run state (stated limit; the positive
+  page is proven by owned-PG transport and mocked-ASGI coverage;
+  the configured-file installed browser workflow remains objective
+  225).

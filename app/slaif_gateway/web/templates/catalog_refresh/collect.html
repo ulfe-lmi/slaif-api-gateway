@@ -38,6 +38,20 @@
   </div>
   {% endif %}
 
+  {% if demo_admin %}
+  <div class="admin-flash" role="status">
+    <strong>Sanitized demo snapshot display:</strong> the collect form
+    below is an ILLUSTRATIVE demo-only form — its provider/mode
+    options are fixed product vocabularies, the model-ID choices are
+    copy-backed from your private demo copy, and live setup
+    (DATABASE_URL) and the research runner are NOT available to this
+    copy; submitting has NO effect (no source is collected, no
+    baseline is imported, no provider or research is called). The
+    captured runs further down are HISTORICAL sanitized snapshots
+    from this copy, not live jobs.
+  </div>
+  {% endif %}
+
   {% if setup.state != 'ready' %}
   <div class="admin-flash" role="status">
     <strong>Unavailable:</strong>
@@ -83,7 +97,9 @@
         <strong>Bootstrap:</strong> no baseline (the catalog is empty).
         <strong>Refresh:</strong> either upload a previously exported baseline document, or leave
         the field empty to use the deployment's configured live read-only database (DATABASE_URL) —
-        shown as {% if live_db_available %}<strong>available</strong>{% else %}<strong>not configured</strong>{% endif %}.
+        {% if demo_admin %}live setup (DATABASE_URL) is NOT available to this demo
+        copy, so the illustrative control has no effect.{% else %}shown as
+        {% if live_db_available %}<strong>available</strong>{% else %}<strong>not configured</strong>{% endif %}.{% endif %}
         The baseline is resolved and captured BEFORE any retrieval.
       </p>
     </fieldset>
@@ -98,6 +114,19 @@
         Uses the deployment's operator-configured isolated research runner (executable, HTTPS
         endpoint/model, and credential environment name all come from deployment settings, never
         from the browser). Opt-in; by default research stays NOT_RUN.
+      </p>
+    </fieldset>
+    {% elif demo_admin %}
+    <fieldset>
+      <legend>Optional assisted research (demo-only, not available in this copy)</legend>
+      <label class="checkbox-row" for="collect-research-demo">
+        <input type="checkbox" name="research" value="on" id="collect-research-demo" aria-describedby="collect-research-demo-help">
+        Enable assisted semantic research
+      </label>
+      <p class="help" id="collect-research-demo-help">
+        The research runner is NOT configured or available to this demo
+        copy, and its configuration is never inferred: this control is
+        illustrative only and has no effect.
       </p>
     </fieldset>
     {% endif %}
@@ -122,6 +151,41 @@
       {% if last_job.status in ('queued', 'running') %}
       <p><a href="/admin/operations/catalog/collect?job={{ last_job.job_id }}">Refresh status</a> — no automatic reload;
       the job state is server-side and updates as the worker progresses.</p>
+      {% endif %}
+    </div>
+  </div>
+  {% endif %}
+
+  {% if demo_admin %}
+  <div class="dash-groups">
+    <div class="dash-group">
+      <h2>Captured complete runs (historical, all acquisition paths)</h2>
+      <p class="muted" role="note">
+        Every captured COMPLETE run group from this copy is listed
+        below, whatever acquisition path produced it — the list is
+        NOT attributed to this collect form. Status-only jobs without
+        captured complete runs are not listed. At most the
+        {{ demo_run_bound }} most-recently-captured groups are shown
+        (bound). Each link opens the sanitized historical run detail
+        for that run (never the original custody).
+      </p>
+      {% if demo_run_groups %}
+      <ul aria-label="Captured complete run groups">
+        {% for g in demo_run_groups %}
+        <li>
+          <a href="/admin/operations/catalog/runs/{{ g.run_id }}/">
+            <code>{{ g.run_id }}</code>
+          </a>
+          <span class="muted">— {{ g.file_count }} files, {{ g.total_bytes | num }} bytes, captured {{ g.captured_utc }}</span>
+        </li>
+        {% endfor %}
+      </ul>
+      {% else %}
+      <p>No captured complete runs in this snapshot.</p>
+      <p class="muted" role="note">
+        This does not establish that no collect jobs exist or that
+        live catalog storage is unconfigured.
+      </p>
       {% endif %}
     </div>
   </div>

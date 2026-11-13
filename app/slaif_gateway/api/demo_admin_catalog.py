@@ -118,6 +118,11 @@ _MAX_PROPOSAL_GROUPS = 100  # at most the 100 most-recently-captured jobs
 _SAFE_PROPOSALS_UNAVAILABLE = (
     "The catalog proposals page is unavailable for this demo session."
 )
+# 224-o: the bounded captured complete-runs (collect) page law.
+_MAX_RUN_GROUPS = 100  # at most the 100 most-recently-captured runs
+_SAFE_COLLECT_UNAVAILABLE = (
+    "The catalog collect page is unavailable for this demo session."
+)
 
 
 def _proposals_not_found() -> Response:
@@ -126,6 +131,108 @@ def _proposals_not_found() -> Response:
 
 def _proposals_unavailable() -> Response:
     return _safe_unavailable(_SAFE_PROPOSALS_UNAVAILABLE)
+
+
+def _collect_not_found() -> Response:
+    return _safe_not_found()
+
+
+def _collect_unavailable() -> Response:
+    return _safe_unavailable(_SAFE_COLLECT_UNAVAILABLE)
+
+
+def _project_complete_run_groups(rows: Any) -> list[dict[str, object]]:
+    """Project the closed remapped ``catalog/runs/...`` leaves into
+    bounded COMPLETE run groups (all acquisition paths).
+
+    Every runs-area row must satisfy the SAME closed projection law as
+    the 224-k index (name, kind shape, bounded size, finite
+    representable capture time) PLUS the worker's closed seven-file law
+    (``_RUN_FILE_KINDS``: exactly one top-level sealed run content file
+    per name, with its exact worker-published kind). A group is
+    COMPLETE only when all seven closed files are present exactly
+    once; a partial group (1..6 files), any other runs-area shape, or
+    a duplicate file row is a corrupt display index: ``ValueError``
+    (the caller answers with the fixed safe 503, never a silent
+    omission). Non-catalog (branding/profile) leaves share the table
+    and are skipped, exactly as in the 224-k projection.
+    """
+    groups: dict[str, dict[str, object]] = {}
+    for row in rows:
+        name, kind, size, _sha, captured = row
+        if not isinstance(name, str) or not name.startswith("catalog/"):
+            continue
+        try:
+            area, demo_id, parts = _catalog_name_parts(name)
+        except ValueError:
+            raise ValueError("invalid display index") from None
+        if area != "runs":
+            continue
+        if not isinstance(kind, str) or _KIND.fullmatch(kind) is None:
+            raise ValueError("invalid catalog kind")
+        if isinstance(size, bool) or not isinstance(size, int) or not 0 <= size <= 2**31:
+            raise ValueError("invalid catalog size")
+        if isinstance(captured, bool) or not isinstance(captured, (int, float)):
+            raise ValueError("invalid capture time")
+        captured_float = float(captured)
+        if not math.isfinite(captured_float) or not 0 <= captured_float < _MAX_CAPTURE_AT:
+            raise ValueError("invalid capture time")
+        # The capture time must convert to a representable UTC
+        # datetime (validity probe only; the group's own max is
+        # rendered later).
+        try:
+            datetime.fromtimestamp(captured_float, tz=UTC)
+        except (OverflowError, OSError, ValueError):
+            raise ValueError("invalid capture time") from None
+        # The worker's closed seven sealed-run content files: exactly
+        # one top-level file per run leaf, no deeper shape exists.
+        if len(parts) != 1:
+            raise ValueError("invalid catalog file")
+        filename = parts[0]
+        expected_kind = dsf._RUN_FILE_KINDS.get(filename)
+        if expected_kind is None or kind != expected_kind:
+            raise ValueError("invalid catalog file")
+        group = groups.get(demo_id)
+        if group is None:
+            group = {
+                "run_id": demo_id,
+                "files": {},
+                "captured_max": captured_float,
+                "total_bytes": 0,
+            }
+            groups[demo_id] = group
+        if filename in group["files"]:
+            raise ValueError("duplicate run file")
+        group["files"][filename] = True
+        group["captured_max"] = max(group["captured_max"], captured_float)
+        group["total_bytes"] = int(group["total_bytes"]) + int(size)
+    complete: list[dict[str, object]] = []
+    for group in groups.values():
+        # The COMPLETE law: all seven closed files, each exactly once.
+        # A partial group is a fixed safe refusal, never omitted.
+        if set(group["files"]) != {filename for filename, _k in _RUN_DETAIL_FILES}:
+            raise ValueError("incomplete run group")
+        best_captured = group["captured_max"]
+        complete.append(
+            {
+                "run_id": group["run_id"],
+                "file_count": len(_RUN_DETAIL_FILES),
+                "total_bytes": group["total_bytes"],
+                "captured_utc": datetime.fromtimestamp(
+                    float(best_captured), tz=UTC
+                ).strftime("%Y-%m-%d %H:%M:%S UTC"),
+                "captured_sort": float(best_captured),
+            }
+        )
+    ordered = sorted(
+        complete, key=lambda g: (float(g["captured_sort"]), str(g["run_id"])),
+        reverse=True,
+    )
+    # Most-recently-captured first (reverse); the 100-group bound is
+    # stated on the page, never hidden.
+    for index, group in enumerate(ordered):
+        group["ordinal"] = index + 1
+    return ordered[:_MAX_RUN_GROUPS]
 
 
 def _project_proposal_groups(rows: Any) -> list[dict[str, object]]:
@@ -932,6 +1039,131 @@ async def demo_catalog_proposals(request: Request) -> Response:
             "demo_proposal_bound": _MAX_PROPOSAL_GROUPS,
             "demo_selected": selected,
             "demo_job_status": job_status,
+        },
+        status_code=200,
+    )
+    response.headers["Cache-Control"] = "private, no-store"
+    return response
+
+
+# --- 224-o: demo-only copy-backed collect page + captured runs ---------------
+
+
+@router.get("/collect", response_class=HTMLResponse)
+async def demo_catalog_collect(request: Request) -> Response:
+    """224-o: ONE collect page from this visitor's exact verified copy.
+
+    Exact path only (gate-admitted). The page renders the familiar
+    collect form controls as ILLUSTRATIVE demo-only controls (fixed
+    provider/mode vocabularies, copy-backed ``catalog_upstream``
+    model-ID choices; live setup - DATABASE_URL and the research
+    runner - is not available to this copy and is never inferred;
+    submitting has NO effect - the gate's quiet 204 cut ends every
+    unsafe method and no body is ever parsed) plus a bounded, clearly
+    HISTORICAL list of at most the 100 most-recently-captured
+    COMPLETE catalog run groups from the target-only display index
+    (all acquisition paths - never attributed to the collect form):
+    the worker's closed seven sealed-run content files per group,
+    exact remapped run ID, kind/size/time metadata checked, no body
+    transfer, each linked to the 224-m historical run-detail page
+    (never the original custody). A partial run group (1..6 of the
+    seven files), wrong kind/size/time or the server-side row bound
+    is a fixed safe 503, never silently omitted; an empty run list
+    proves neither that no collect job exists nor that live catalog
+    storage is unconfigured (status-only jobs without captured
+    complete runs are not listed). One read-only transaction on the
+    gate's SAME request-local copy engine with the independent
+    ``current_database()`` / ``transaction_read_only`` recheck and a
+    BOUND inventory limit; the normal custody-backed collect handler,
+    template and routes are unchanged.
+    """
+    demo = getattr(request.state, "demo_admin", None)
+    if demo is None:
+        return _collect_not_found()
+    # Query law: NO query parameters are defined for the demo collect
+    # page; ANY parameter (including a normal-page `job` value)
+    # refuses safely (fixed 404, no echo, no fallback).
+    if request.query_params.multi_items():
+        return _collect_not_found()
+    # The gate's SAME request-local copy engine (demo_mode seam): the
+    # only copy binding this request may use; absent state fails
+    # closed to the safe 503, never to an app-global factory.
+    try:
+        session_factory = get_sessionmaker_from_app(request)
+    except Exception:
+        return _collect_unavailable()
+    model_options: list[Any]
+    run_groups: list[dict[str, object]]
+    try:
+        async with session_factory() as session, session.begin():
+            # Independently re-verify, INSIDE this read-only
+            # transaction, that the engine is bound to this session's
+            # exact copy and the server holds it read-only.
+            current = await session.scalar(text("SELECT current_database()"))
+            read_only = await session.scalar(text("SHOW transaction_read_only"))
+            if current != demo.target_db or read_only != "on":
+                return _collect_unavailable()
+            # Copy-backed model choices (SELECT-only copy table; the
+            # pure credential-shape guard still applies). A failed
+            # copy query is a fixed safe refusal, never a silent
+            # empty dropdown.
+            model_options = await load_choices(
+                session, "catalog_upstream", selected=()
+            )
+            # Bounded METADATA inventory (no body transfer at all):
+            # the LIMIT is a BOUND parameter, so even a corrupt copy
+            # can never transfer more than the existing 4096-row
+            # display bound plus one (the extra row proves the bound
+            # tripped).
+            rows = (
+                await session.execute(
+                    text(
+                        "SELECT logical_name, kind, byte_count, sha256, "
+                        "captured_at FROM demo_display.leaves "
+                        "LIMIT :limit"
+                    ),
+                    {"limit": _MAX_INDEX_ROWS + 1},
+                )
+            ).all()
+            if (
+                not isinstance(rows, (list, tuple))
+                or len(rows) > _MAX_INDEX_ROWS
+            ):
+                return _collect_unavailable()
+            run_groups = _project_complete_run_groups(list(rows))
+    except Exception:
+        # Driver, connection, statement or projection failure: one
+        # fixed safe refusal. Cancellation is a BaseException and is
+        # not swallowed.
+        return _collect_unavailable()
+
+    response = templates.TemplateResponse(
+        request,
+        "catalog_refresh/collect.html",
+        {
+            "admin": demo.session_context.admin_user,
+            "csrf_token": demo.csrf_token,
+            # Demo context: the FAMILIAR form renders with fixed
+            # product option vocabularies and copy-backed choices;
+            # the demo banner labels it illustrative (no operational
+            # effect). last_job stays None, so the NORMAL custody-
+            # backed last-job section never renders in demo.
+            # `dispatched` must be defined (the template tests
+            # `is not none`); live setup and the research runner are
+            # NOT evaluated and NOT inferred for this copy.
+            "setup": {"state": "ready"},
+            "errors": {},
+            "dispatched": None,
+            "dispatch_note": None,
+            "providers": ("openai", "openrouter"),
+            "model_options": model_options,
+            "last_job": None,
+            "job_refusal": None,
+            "live_db_available": False,
+            "research_available": False,
+            "demo_admin": True,
+            "demo_run_groups": run_groups,
+            "demo_run_bound": _MAX_RUN_GROUPS,
         },
         status_code=200,
     )

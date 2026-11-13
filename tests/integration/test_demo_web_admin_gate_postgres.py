@@ -639,7 +639,10 @@ def test_e2e_admin_gate_two_sessions_distinct_copies(
                             # ADMITTED (proven just below); its
                             # near-misses stay denied.
                             "/admin/operations/catalog/proposals/extra",
-                            "/admin/operations/catalog/collect",
+                            # 224-o: the exact /collect GET is now
+                            # ADMITTED (proven just below); its
+                            # subpaths stay denied.
+                            "/admin/operations/catalog/collect/submit",
                             "/admin/operations/catalog/export-baseline",
                             f"/admin/operations/catalog/runs/{uuid.uuid4()}/",
                             f"/admin/operations/catalog/runs/{uuid.uuid4()}/apply-status",
@@ -674,6 +677,19 @@ def test_e2e_admin_gate_two_sessions_distinct_copies(
                     assert r.headers["cache-control"] == "private, no-store"
                     assert (
                         "No captured proposal artifact groups in this snapshot"
+                        in " ".join(r.text.split())
+                    )
+
+                    # 224-o: the admitted collect page renders for this
+                    # verified session; the worker-published fixture
+                    # carries NO configured catalog leaves, so this is
+                    # the honest empty complete-run state (before the
+                    # 224-o test-only insertion further down).
+                    r = await client.get("/admin/operations/catalog/collect")
+                    assert r.status_code == 200
+                    assert r.headers["cache-control"] == "private, no-store"
+                    assert (
+                        "No captured complete runs in this snapshot"
                         in " ".join(r.text.split())
                     )
 
@@ -1185,6 +1201,134 @@ def test_e2e_admin_gate_two_sessions_distinct_copies(
                         )
                         assert f'value="{_pn_job}"' not in r.text
 
+                    # --- 224-o: captured complete runs (collect) -------
+                    # TARGET-SIDE INSERTION (honest label): the test
+                    # inserts ONE test-only captured COMPLETE run's
+                    # seven sealed-run content leaves into copy A's
+                    # worker-published demo_display.leaves through the
+                    # owned target-owner connection. ALL seven bodies
+                    # are b"{}" test-only placeholders (NOT valid
+                    # sealed-run content for their kinds) - the collect
+                    # page reads ONLY their metadata, never any run
+                    # body. This proves route/reader/inventory
+                    # transport/binding through the real target-only
+                    # table, the restricted reader role and the
+                    # gate-bound session - NOT 223 source capture,
+                    # worker publication or sanitization of a real run
+                    # (the configured-file installed workflow remains
+                    # objective 225).
+                    _co_orig_run = "c7" * 16  # ORIGINAL id (never stored)
+                    _co_run = _rd_dsf._demo_run_id(b"224o-pg-seed", _co_orig_run)
+                    _co_files = [
+                        (
+                            f"catalog/runs/{_co_run}/{filename}",
+                            kind,
+                            b"{}",
+                        )
+                        for filename, kind in (
+                            ("catalog-refresh.json", "refresh_bundle"),
+                            ("catalog-baseline.json", "baseline_document"),
+                            ("routes-proposal.tsv", "route_tsv"),
+                            ("pricing-proposal.tsv", "pricing_tsv"),
+                            ("fx-proposal.json", "fx_json"),
+                            ("validation.json", "validation_json"),
+                            ("REVIEW.html", "review_html"),
+                        )
+                    ]
+                    _co_url = "/admin/operations/catalog/collect"
+                    try:
+                        s = await _target_conn()
+                        for _co_index, (_co_name, _co_kind, _co_data) in enumerate(_co_files):
+                            await s.execute(
+                                "INSERT INTO demo_display.leaves "
+                                "(logical_name, kind, sha256, byte_count, "
+                                "captured_at, body) "
+                                "VALUES ($1, $2, $3, $4, $5, $6)",
+                                _co_name,
+                                _co_kind,
+                                _art_hashlib.sha256(_co_data).hexdigest(),
+                                len(_co_data),
+                                1750000300.0 + _co_index,
+                                _co_data,
+                            )
+                        await s.close()
+                        # Session A: the collect page from its OWN exact
+                        # copy (demo banner, the ONE captured complete
+                        # run group linked to the exact 224-m run-detail
+                        # page, the stated bound, no original run id and
+                        # no copy name, no false live-availability claim).
+                        r = await client_a.get(_co_url)
+                        assert r.status_code == 200
+                        assert r.headers["cache-control"] == "private, no-store"
+                        _co_text = " ".join(r.text.split())
+                        assert "Sanitized demo snapshot display" in _co_text
+                        assert "ILLUSTRATIVE demo-only form" in _co_text
+                        assert "shown as" not in r.text
+                        assert "Captured complete runs (historical, all acquisition paths)" in _co_text
+                        assert "NOT attributed to this collect form" in _co_text
+                        assert (
+                            f'href="/admin/operations/catalog/runs/{_co_run}/"'
+                        ) in r.text
+                        assert "7 files" in _co_text
+                        assert _co_orig_run not in r.text
+                        assert target_a not in r.text
+                        # Session B: the SAME page against its OWN exact
+                        # copy (which has NO run leaves) renders the
+                        # honest empty complete-run state (copy
+                        # isolation) with the no-inference note.
+                        r = await client_b.get(_co_url)
+                        assert r.status_code == 200
+                        assert (
+                            "No captured complete runs in this snapshot"
+                            in " ".join(r.text.split())
+                        )
+                        assert (
+                            "This does not establish that no collect jobs exist or that live catalog storage is unconfigured"
+                            in " ".join(r.text.split())
+                        )
+                        assert f'runs/{_co_run}/' not in r.text
+                        # Partial run group (six of the seven files) is
+                        # the fixed safe 503, never a silent omission.
+                        s = await _target_conn()
+                        await s.execute(
+                            "DELETE FROM demo_display.leaves "
+                            "WHERE logical_name = $1",
+                            f"catalog/runs/{_co_run}/REVIEW.html",
+                        )
+                        await s.close()
+                        r = await client_a.get(_co_url)
+                        assert r.status_code == 503
+                        assert r.headers["cache-control"] == "private, no-store"
+                        assert _co_run not in r.text
+                        # The page path is the SAME quiet 204 cut.
+                        r = await client_a.post(
+                            _co_url,
+                            content=b"x" * 200_000,
+                            headers={"content-type": "text/garbage"},
+                        )
+                        assert r.status_code == 204
+                        assert r.content == b""
+                    finally:
+                        # Remove EXACTLY the seven test-inserted run
+                        # leaves (exact names, never a prefix match -
+                        # a pre-existing run sharing a prefix must
+                        # never be touched); the worker-published state
+                        # returns exactly.
+                        s = await _target_conn()
+                        await s.execute(
+                            "DELETE FROM demo_display.leaves "
+                            "WHERE logical_name = ANY($1::text[])",
+                            [_co_name for _co_name, _k, _d in _co_files],
+                        )
+                        await s.close()
+                        # Cleanup proven: the honest empty state returns.
+                        r = await client_a.get(_co_url)
+                        assert r.status_code == 200
+                        assert (
+                            "No captured complete runs in this snapshot"
+                            in " ".join(r.text.split())
+                        )
+
                     # --- operational POST families: quiet 204 no-ops -----
                     key_id = await _first_id(san_env, target_b, "gateway_keys")
                     for client in (client_a, client_b):
@@ -1643,6 +1787,19 @@ def test_browser_smoke_demo_copy_pages(
             assert "Sanitized demo snapshot display" in " ".join(_pn_page.split())
             assert "No captured proposal artifact groups in this snapshot" in " ".join(_pn_page.split())
             assert 'name="provider_scope"' in _pn_page  # illustrative form
+            # 224-o: the owned browser fixture has NO configured run
+            # leaves, so the collect page renders the honest empty
+            # complete-run state in the real browser (demo banner +
+            # illustrative form; the positive page is proven by owned-PG
+            # transport + mocked-ASGI unit coverage; the configured-file
+            # installed browser workflow remains objective 225).
+            r = page.goto("/admin/operations/catalog/collect")
+            assert r is not None and r.status == 200
+            assert r.headers["cache-control"] == "private, no-store"
+            _co_page = page.content()
+            assert "Sanitized demo snapshot display" in " ".join(_co_page.split())
+            assert "No captured complete runs in this snapshot" in " ".join(_co_page.split())
+            assert 'name="mode"' in _co_page  # illustrative form
             assert target not in content
             assert 'href="/admin/operations"' not in content  # still no nav item
             # ephemeral desktop-layout screenshot (run-owned /tmp path;
