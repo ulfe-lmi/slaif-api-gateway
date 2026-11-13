@@ -6,7 +6,8 @@ reachable ONLY through the gate, BEFORE any admin handler or form/body
 parsing:
 
 - the admitted admin GET set (dashboard, the core list pages, their
-  closed-UUID record detail pages, the 224-i core form GETs and the
+  closed-UUID record detail pages, the 224-i core form GETs, the 224-j
+  reporting/accounting/accounts/key-batch read GETs and the
   ``/admin/record-choices`` lookup) dispatches only after the 224-a demo session is validated against the LIVE
   fake-admin account/generation/request fence AND bound to that session's
   exact verified/unexpired ``demo_snap_<20hex>`` copy under the 224-d
@@ -76,9 +77,12 @@ from slaif_gateway.services.admin_session_service import AdminSessionContext
 # canonical-UUID edit forms (seven families, never keys/templates) and
 # the provider discover form (handlers verified: copied-public
 # repositories plus fixed package data only, no file/process/network
-# reads on GET). Everything else - operations, catalog, compatibility,
-# OpenAI-assisted, accounting-recovery, replay maintenance, accounts,
-# key batch/clone, exports and /admin/branding - stays default-denied.
+# reads on GET); 224-j adds the fixed reporting, accounting
+# candidate/review entry, administrator-account read and key-batch
+# entry GETs (frozen copied rows; request-time calculations carry a
+# demo-only hint). Everything else - operations, catalog,
+# compatibility, OpenAI-assisted, replay maintenance, key clone,
+# exports and /admin/branding - stays default-denied.
 
 ADMITTED_DASHBOARD_PATHS = ("/admin", "/admin/")
 ADMITTED_LIST_PATHS = (
@@ -138,6 +142,26 @@ ADMITTED_EDIT_FAMILY_PREFIXES = (
     "/admin/pricing/",
     "/admin/fx/",
 )
+#: 224-j: the fixed reporting, accounting candidate/review entry,
+#: administrator-account read and key-batch entry GETs. Positive closed
+#: set of EXACT paths - no prefix passthrough: every missing-slash,
+#: extra-suffix, export-attachment or file-backed GET stays denied.
+ADMITTED_REPORTING_PATHS = (
+    "/admin/reports/",
+    "/admin/reports/live-burn",
+    "/admin/reports/export",
+    "/admin/reports/pricing-disable",
+    "/admin/reports/fx-lookup",
+    "/admin/accounting-operations/",
+    "/admin/accounting-operations/expired-reservations",
+    "/admin/accounting-operations/external-tool-fences",
+    "/admin/accounting-operations/external-tool-holds",
+    "/admin/accounting-operations/provider-completed-recovery",
+    "/admin/accounts",
+    "/admin/accounts/create",
+    "/admin/accounts/reset",
+    "/admin/key-batch",
+)
 #: Canonical lowercase 8-4-4-4-12 UUID syntax ONLY (the exact form the
 #: GUI generates from ``str(uuid)``); variant forms (no dashes, braces,
 #: URN, uppercase) are NOT admitted detail components.
@@ -191,7 +215,12 @@ def _fictional_admin_context() -> AdminSessionContext:
         email=DEMO_ADMIN_EMAIL,
         display_name=DEMO_ADMIN_DISPLAY_NAME,
         password_hash="demo-fixture: not a credential",
-        role="viewer",
+        # 224-j: display role ONLY - lets the isolated demo session pass
+        # the existing superadmin GET gate on the copied admin-account
+        # read pages. Never persisted; real admin roles, source accounts
+        # and every auth decision outside this demo process are
+        # untouched, and the central 204 no-op boundary is unchanged.
+        role="superadmin",
         mfa_secret=None,
         is_active=True,
         last_login_at=None,
@@ -234,12 +263,14 @@ def _scope_path(scope: dict) -> str:
 
 
 def _is_admitted_path(path: str) -> bool:
-    """The exact closed 224-e/224-f/224-i GET admission law."""
+    """The exact closed 224-e/224-f/224-i/224-j GET admission law."""
     if path in ADMITTED_DASHBOARD_PATHS or path in ADMITTED_LIST_PATHS:
         return True
     if path == ADMITTED_RECORD_CHOICES_PATH:
         return True
     if path in ADMITTED_FORM_PATHS:
+        return True
+    if path in ADMITTED_REPORTING_PATHS:
         return True
     for prefix in ADMITTED_EDIT_FAMILY_PREFIXES:
         if path.startswith(prefix) and path.endswith("/edit"):

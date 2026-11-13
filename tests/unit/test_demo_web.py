@@ -1607,6 +1607,22 @@ def test_gate_admission_law_closed_sets():
                 "/admin/pricing/import",
                 "/admin/fx/new",
                 "/admin/fx/import",
+                # 224-j: the fourteen exact reporting/accounting/
+                # accounts/key-batch read GETs.
+                "/admin/reports/",
+                "/admin/reports/live-burn",
+                "/admin/reports/export",
+                "/admin/reports/pricing-disable",
+                "/admin/reports/fx-lookup",
+                "/admin/accounting-operations/",
+                "/admin/accounting-operations/expired-reservations",
+                "/admin/accounting-operations/external-tool-fences",
+                "/admin/accounting-operations/external-tool-holds",
+                "/admin/accounting-operations/provider-completed-recovery",
+                "/admin/accounts",
+                "/admin/accounts/create",
+                "/admin/accounts/reset",
+                "/admin/key-batch",
                 "/admin/record-choices?kind=owner&q=x",
             ):
                 r = await client.get(p)
@@ -1615,10 +1631,18 @@ def test_gate_admission_law_closed_sets():
             # ...every other admin GET stays default-denied.
             for p in (
                 "/admin/operations",
-                "/admin/key-batch",
                 "/admin/branding",
+                # 224-j near-misses: missing slash, extra suffix,
+                # export attachment, unknown account action.
                 "/admin/reports",
-                "/admin/accounts",
+                "/admin/reports/export.csv",
+                "/admin/reports/usage",
+                "/admin/accounting-operations",
+                "/admin/accounting-operations/expired-reservations/preview",
+                "/admin/accounts/",
+                "/admin/accounts/reset/",
+                "/admin/accounts/revoke",
+                "/admin/key-batch/plan",
                 # 224-i negatives: keys/templates have no edit forms;
                 # action GETs and download GETs stay 404.
                 f"/admin/keys/{KEY_UUID}/edit",
@@ -1885,6 +1909,15 @@ def test_gate_unsafe_operational_families_quiet_noop():
                 f"/admin/owners/{OWNER_UUID}/edit",
                 "/admin/institutions/new",
                 "/admin/cohorts/new",
+                # 224-j: admitted read GETs stay a uniform 204 cut for
+                # every unsafe method, body never parsed.
+                "/admin/reports/export",
+                "/admin/reports/fx-lookup",
+                "/admin/accounting-operations/expired-reservations",
+                "/admin/accounting-operations/provider-completed-recovery",
+                "/admin/accounts/create",
+                "/admin/accounts/reset",
+                "/admin/key-batch",
             ]
             for p in paths:
                 # 200 KB body + garbage content type: a 204 proves the

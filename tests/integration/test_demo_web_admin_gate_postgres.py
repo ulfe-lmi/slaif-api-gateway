@@ -93,6 +93,9 @@ _COUNT_TABLES = (
     "key_templates",
     "fx_rates",
     "email_deliveries",
+    # 224-j: the accounting candidate views read quota_reservations
+    # (fence/hold facts live on gateway_keys rows, already counted).
+    "quota_reservations",
 )
 
 
@@ -380,6 +383,8 @@ def test_e2e_admin_gate_two_sessions_distinct_copies(
                         assert 'href="/admin/usage"' in r.text
                         # 224-i: the routes list/detail is admitted.
                         assert 'href="/admin/routes"' in r.text
+                        # 224-j: the administrator accounts section is in.
+                        assert 'href="/admin/accounts"' in r.text
                         assert 'href="/admin/operations"' not in r.text
                         assert 'href="/admin/openai-assisted"' not in r.text
                         # canaries: no copy name, DSN fragment or credential.
@@ -507,6 +512,70 @@ def test_e2e_admin_gate_two_sessions_distinct_copies(
                             assert isinstance(body, dict)
                             assert body["kind"] == kind
                             assert isinstance(body["choices"], list)
+                        # 224-j: the fourteen exact reporting/accounting/
+                        # accounts/key-batch read GETs (frozen copied rows).
+                        admin_id = await _first_id(san_env, target, "admin_users")
+                        for get_path in (
+                            "/admin/reports/",
+                            "/admin/reports/live-burn",
+                            "/admin/reports/export",
+                            "/admin/reports/pricing-disable",
+                            "/admin/reports/fx-lookup",
+                            "/admin/accounting-operations/",
+                            "/admin/accounting-operations/expired-reservations",
+                            "/admin/accounting-operations/external-tool-fences",
+                            "/admin/accounting-operations/external-tool-holds",
+                            "/admin/accounting-operations/provider-completed-recovery",
+                            "/admin/accounts",
+                            "/admin/accounts/create",
+                            f"/admin/accounts/reset?admin_id={admin_id}",
+                            "/admin/key-batch",
+                        ):
+                            r = await client.get(get_path)
+                            _assert_demo_page(get_path, r)
+                        # 224-j: copied (222-anonymized) account identities
+                        # ARE shown; SOURCE emails and credential material
+                        # (copied dummy hashes) are NOT rendered.
+                        src_admin = await _admin_creds(san_env, "source")
+                        cp_admin = await _admin_creds(san_env, "copy", target)
+                        assert cp_admin, "no copied admin accounts"
+                        r = await client.get("/admin/accounts")
+                        for email, _name, _phash in cp_admin:
+                            assert email in r.text, (email, r.text[:400])
+                        for email, _name, _phash in src_admin:
+                            assert email not in r.text, email
+                        for _email, _name, phash in cp_admin:
+                            assert phash not in r.text, "credential hash rendered"
+                        # 224-j: report row count matches the copied data
+                        # (distinct provider:model groups, page limit 50).
+                        r = await client.get("/admin/reports/")
+                        m = re.search(
+                            r'id="usage-summary-rows-shown">(\d+) groups shown', r.text
+                        )
+                        assert m is not None, r.text[:400]
+                        shown = int(m.group(1))
+                        db_groups = await _usage_group_count(san_env, target)
+                        assert shown == min(db_groups, 50), (shown, db_groups)
+                        # The owned fixture has one group: compare the report's
+                        # exact sortable amounts with this session's COPY.
+                        assert db_groups == 1
+                        db_tokens, db_cost = await _usage_amounts(san_env, target)
+                        assert db_tokens == 200 and db_cost > 0
+                        assert f'data-sort-value="{db_tokens}" title="{db_tokens}"' in r.text
+                        assert f'data-sort-value="{format(db_cost.normalize(), "f")}"' in r.text
+                        # 224-j: accounting candidate row count matches the
+                        # copied quota rows (view limit 200).
+                        r = await client.get(
+                            "/admin/accounting-operations/expired-reservations"
+                        )
+                        shown = r.text.count('name="target_id"')
+                        db_expired = await _expired_pending_count(san_env, target)
+                        assert shown == min(db_expired, 200), (shown, db_expired)
+                        # 224-j: the request-time pages carry the demo-only
+                        # current-time hint (normal labels are unchanged).
+                        assert "calculated at view time against the snapshot" in r.text
+                        r = await client.get("/admin/reports/fx-lookup")
+                        assert "resolved at view time against the snapshot" in r.text
                         # 224-i: the routes list row count equals the
                         # copied model_routes count (within the page limit).
                         r = await client.get("/admin/routes")
@@ -531,7 +600,17 @@ def test_e2e_admin_gate_two_sessions_distinct_copies(
                         # route action/download GETs stay denied).
                         for gated in (
                             "/admin/operations",
+                            # 224-j near-misses: missing slash, extra
+                            # suffix, export attachment, unknown action.
                             "/admin/reports",
+                            "/admin/reports/export.csv",
+                            "/admin/reports/usage",
+                            "/admin/accounting-operations",
+                            "/admin/accounting-operations/expired-reservations/preview",
+                            "/admin/accounts/",
+                            "/admin/accounts/reset/",
+                            "/admin/accounts/revoke",
+                            "/admin/key-batch/plan",
                             f"/admin/keys/{key_id}/edit",
                             f"/admin/templates/{template_id}/edit",
                             f"/admin/routes/{route_id}/configuration",
@@ -563,6 +642,14 @@ def test_e2e_admin_gate_two_sessions_distinct_copies(
                             "/admin/owners/new",
                             "/admin/institutions/new",
                             "/admin/cohorts/new",
+                            # 224-j: report export, accounting review,
+                            # account create/reset and batch plan stay
+                            # silent no-ops, body never parsed.
+                            "/admin/reports/export",
+                            "/admin/accounting-operations/expired-reservations",
+                            "/admin/accounts/create",
+                            "/admin/accounts/reset",
+                            "/admin/key-batch",
                             "/admin/definitely-not-a-route",
                         ):
                             r = await client.post(
@@ -679,6 +766,78 @@ async def _count_table(san: _Env, copy_db: str, table: str) -> int:
         await s.close()
 
 
+async def _admin_creds(
+    san: _Env, which: str, copy_db: str | None = None
+) -> list[tuple[str, str, str]]:
+    """(email, display_name, password_hash) for the 224-j canaries."""
+    t = san.source if which == "source" else san.target
+    db = copy_db if which == "copy" else str(t["database"])
+    s = await asyncpg.connect(**_conn_kwargs(
+        t["host"], t["port"], t["user"], t["password"], db,
+    ))
+    try:
+        rows = await s.fetch(
+            "SELECT email, display_name, password_hash FROM public.admin_users"
+        )
+        return [
+            (str(r["email"]), str(r["display_name"]), str(r["password_hash"]))
+            for r in rows
+        ]
+    finally:
+        await s.close()
+
+
+async def _usage_group_count(san: _Env, copy_db: str) -> int:
+    """Distinct provider:model groups (the report's grouping law)."""
+    s = await asyncpg.connect(**_conn_kwargs(
+        san.target["host"], san.target["port"],
+        san.target["user"], san.target["password"], copy_db,
+    ))
+    try:
+        row = await s.fetchrow(
+            "SELECT count(*)::int AS c FROM (SELECT DISTINCT "
+            "(CASE WHEN provider IS NULL THEN 'None' ELSE provider END) || ':' || "
+            "COALESCE(resolved_model, requested_model, 'unknown') AS k "
+            "FROM public.usage_ledger) g"
+        )
+        return row["c"]
+    finally:
+        await s.close()
+
+
+async def _usage_amounts(san: _Env, copy_db: str):
+    """Exact token and EUR cost totals from the selected disposable COPY."""
+    s = await asyncpg.connect(**_conn_kwargs(
+        san.target["host"], san.target["port"],
+        san.target["user"], san.target["password"], copy_db,
+    ))
+    try:
+        row = await s.fetchrow(
+            "SELECT COALESCE(sum(total_tokens), 0)::bigint AS tokens, "
+            "COALESCE(sum(actual_cost_eur), 0)::numeric AS cost "
+            "FROM public.usage_ledger"
+        )
+        return int(row["tokens"]), row["cost"]
+    finally:
+        await s.close()
+
+
+async def _expired_pending_count(san: _Env, copy_db: str) -> int:
+    """Copied quota rows the expired-reservations view would list."""
+    s = await asyncpg.connect(**_conn_kwargs(
+        san.target["host"], san.target["port"],
+        san.target["user"], san.target["password"], copy_db,
+    ))
+    try:
+        row = await s.fetchrow(
+            "SELECT count(*)::int AS c FROM public.quota_reservations "
+            "WHERE status = 'pending' AND expires_at <= now()"
+        )
+        return row["c"]
+    finally:
+        await s.close()
+
+
 async def _inst_names(san: _Env, copy_db: str) -> list[str]:
     s = await asyncpg.connect(**_conn_kwargs(
         san.target["host"], san.target["port"],
@@ -758,7 +917,7 @@ def test_browser_smoke_demo_copy_pages(
             assert nav_labels == [
                 "Dashboard", "Keys", "Owners", "Institutions", "Cohorts",
                 "Providers", "Routes", "Pricing", "Templates", "FX", "Usage",
-                "Audit", "Email",
+                "Audit", "Email", "Accounts",
             ]
             # asset_url appends ?v=<digest>: judge by URL path, not suffix.
             static_by_path = {urlparse(u).path: st for u, st in _static()}
@@ -833,6 +992,34 @@ def test_browser_smoke_demo_copy_pages(
                 detail_link.click()
                 page.wait_for_selector("#route-heading")
                 assert "Demo preview:" in page.content()
+
+            # --- 224-j: one report, one accounting page, accounts and
+            # key-batch navigation (desktop layout, no-store) -------------
+            page.click('nav a[href="/admin/accounts"]')
+            page.wait_for_selector("#admin-main")
+            content = page.content()
+            assert "Demo preview:" in content
+            assert 'href="/admin/accounts"' in content
+            r = page.goto("/admin/reports/")
+            assert r is not None and r.status == 200
+            assert r.headers["cache-control"] == "private, no-store"
+            content = page.content()
+            assert "Demo preview:" in content
+            assert "groups shown" in content
+            # ephemeral desktop-layout screenshot of the new report page
+            # (run-owned /tmp path; never committed, not in app logs).
+            shot_reports = Path(
+                f"/tmp/slaif-224j-browser-reports-{os.getpid()}-{uuid.uuid4().hex[:10]}.png"
+            )
+            page.screenshot(path=str(shot_reports))
+            print(f"DEMO_BROWSER_REPORTS_SCREENSHOT={shot_reports}")
+            r = page.goto("/admin/accounting-operations/expired-reservations")
+            assert r is not None and r.status == 200
+            assert r.headers["cache-control"] == "private, no-store"
+            assert "calculated at view time against the snapshot" in page.content()
+            r = page.goto("/admin/key-batch")
+            assert r is not None and r.status == 200
+            assert "Demo preview:" in page.content()
 
             # --- 224-i: an admitted form renders; the operational submit
             # is a quiet 204 no-op that changes nothing -------------------

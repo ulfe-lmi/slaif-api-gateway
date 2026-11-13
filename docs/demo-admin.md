@@ -1685,3 +1685,130 @@ demonstrations; objective 225 is the installed acceptance gate.
   versus the immutable 224-h order's title suffix) is recovered by
   this identifier-only order: the unchanged governance suite passes
   9/9 locally against `oap/active=224-i`.
+## Database-backed reporting and administrator review GETs (objective 224-j)
+
+224-j (same PR #383) admits, through the same closed default-deny
+gate, the next closed set of EXISTING database-backed reporting and
+administrator review GET pages. Every one reads ONLY the
+session's verified disposable copy through the 224-e request-local
+sessionmaker; none reads the source/owner DB, Redis, providers,
+operator files or live credentials, and none mutates on GET:
+
+* reporting (5): `/admin/reports/` (usage summary report),
+  `/admin/reports/live-burn`, `/admin/reports/export` (the export
+  FORM page; the export attachment GETs stay denied),
+  `/admin/reports/pricing-disable`, `/admin/reports/fx-lookup`;
+* accounting candidate/review entry (5):
+  `/admin/accounting-operations/`,
+  `/admin/accounting-operations/expired-reservations`,
+  `/admin/accounting-operations/external-tool-fences`,
+  `/admin/accounting-operations/external-tool-holds`,
+  `/admin/accounting-operations/provider-completed-recovery`;
+* administrator accounts (3): `/admin/accounts`,
+  `/admin/accounts/create`, `/admin/accounts/reset` (the existing
+  validated `admin_id` query semantics unchanged);
+* key batch entry (1): `/admin/key-batch`.
+
+These are EXACT positive paths, not prefix passthrough:
+missing-slash paths (`/admin/reports`,
+`/admin/accounting-operations`), extra suffixes
+(`/admin/reports/usage`, `/admin/accounts/reset/`), export
+attachments (`/admin/reports/export.csv`) and unknown account
+actions (`/admin/accounts/revoke`) stay 404.
+
+### Display superadmin for the demo-only session
+
+The three account GETs carry the existing server-side
+`superadmin` role gate. The demo session's isolated fictional
+identity (never persisted, never written to any database) is now
+presented with `role="superadmin"`, so the demo administrator sees
+the copied account list and the create/reset forms like a real
+superadmin. This never alters real admin roles, source accounts,
+auth decisions outside this demo process, or the central 204
+no-op boundary. The copied `admin_users` records remain
+222-anonymized (fictional email/display name, fixed dummy password
+hash, NULL MFA secret, preserved role). The account pages render
+safe metadata only: no password hash, MFA secret, session token or
+source email appears in the HTML (proved by the owned-PG canaries).
+
+### Request-time calculations carry a demo-only hint
+
+The reports and accounting candidate lists operate on FROZEN
+copied rows. Two handlers evaluate a window at REQUEST TIME
+(expired-reservations compares `expires_at` with the current time;
+fx-lookup resolves the effective rate at UTC now). Each of those
+two pages carries one concise demo-only hint that the rows are
+snapshot data and the derived value is calculated/resolved at view
+time against the snapshot - not at snapshot time. They are never
+presented as live production metrics, and the hint does not imply
+the derived value was frozen at login. Normal-admin behavior and
+labels are unchanged.
+
+### Links restored in this stage
+
+* Usage list: "Usage reports" to `/admin/reports/`;
+* Keys list: "Change existing keys" to `/admin/key-batch`;
+* FX list: "Effective rate lookup" to `/admin/reports/fx-lookup`;
+* Pricing list and detail: "Review pricing disable" to
+  `/admin/reports/pricing-disable`;
+* the demo nav gains an **Accounts** entry (last), and the
+  create/reset pages are reached from the account list.
+
+Still hidden in demo mode: replay maintenance, diagnostics,
+operations (including the "Operations" header link on the
+accounting index), OpenAI-assisted, catalog, compatibility,
+branding, clone/receipts, process-configuration, downloads, and
+the accounting review ACTION pages. Every unsafe method on the
+admitted pages - report export, account create/reset, batch plan
+and accounting review - stays the SAME silent 204 no-op BEFORE
+body parsing/handler dispatch.
+
+### Remaining 404 families after 224-j (still default-denied)
+
+Operations (all subpaths), replay maintenance, diagnostics,
+catalog, compatibility, branding, process-configuration,
+OpenAI-assisted, key clone (and specifically
+`/admin/keys/{uuid}/edit` and `/admin/templates/{uuid}/edit`),
+route configuration-change and codex-profile downloads, export
+attachments and file-backed GETs, the accounting review action
+pages, and every unknown/non-canonical path shape. All file-backed
+admin panels remain unmounted (their read data is published by
+224-g; wiring is a later 224 suffix). The demo remains NOT usable
+for company demonstrations; objective 225 is the installed
+acceptance gate.
+
+### Evidence (224-j)
+
+* Focused unit (`test_demo_web.py`): the closed admission law
+  admits all fourteen exact GETs (no session -> demo-entry
+  redirect) and denies the near-misses (missing slash, extra
+  suffix, export attachment, unknown account action); every unsafe
+  method on the admitted pages - report export, account
+  create/reset, batch plan, accounting review - is the quiet 204
+  cut with a 200 KB garbage body that is never parsed; the demo
+  nav includes Accounts (fourteen sections).
+* Owned PostgreSQL 16 (real reader role, real worker chain, two
+  concurrent sessions on distinct copies): all fourteen GETs
+  render 200 with the banner and `private, no-store`; the account
+  list shows the 222-anonymized COPIED emails while the SOURCE
+  emails and the copied dummy password hashes are absent from the
+  HTML; the usage summary report's rendered group count equals the
+  copied ledger's distinct provider:model group count (page limit
+  50) and the report's sole fixture group renders the COPIED
+  amounts: its token total `data-sort-value` equals
+  `SELECT sum(total_tokens)` over the session's copied
+  `usage_ledger` (200) and its actual-cost `data-sort-value`
+  equals `SELECT sum(actual_cost_eur)` (0.0023 EUR), compared with
+  the copy, never the source; the expired-reservations row count
+  equals the copied
+  `quota_reservations` pending-and-expired row count (view limit
+  200); both request-time pages carry the demo-only view-time
+  hint; the near-misses stay 404; the unsafe methods stay quiet
+  204; and the whole read/POST/logout phase leaves the source and
+  BOTH copies unchanged (`quota_reservations` added to the
+  invariance set).
+* Real Chromium at desktop width: the nav -> Accounts entry, the
+  usage summary report, the expired-reservations page and the key
+  batch entry render with the banner and no-store. One screenshot
+  is saved to a run-owned /tmp path (never committed and not in
+  ordinary application logs).

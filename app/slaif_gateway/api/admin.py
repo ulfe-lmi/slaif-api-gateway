@@ -359,6 +359,7 @@ _DEMO_NAV_SECTIONS: tuple[tuple[str, str], ...] = (
     ("/admin/usage", "Usage"),
     ("/admin/audit", "Audit"),
     ("/admin/email-deliveries", "Email"),
+    ("/admin/accounts", "Accounts"),
 )
 
 

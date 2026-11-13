@@ -13,7 +13,7 @@
       <p class="muted">Read-only accounting metadata. Prompts, completions, and raw request or response bodies are not displayed.</p>
     </div>
     <div class="header-actions">
-{% if not demo_admin %}      <a class="button-link secondary" href="/admin/reports/">Usage reports</a>{% endif %}
+      <a class="button-link secondary" href="/admin/reports/">Usage reports</a>
       <a class="button-link secondary" href="/admin">Dashboard</a>
       <form method="post" action="/admin/logout">
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">

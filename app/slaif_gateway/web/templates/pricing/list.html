@@ -15,7 +15,7 @@
     <div class="header-actions">
       <a class="button-link" href="/admin/pricing/new">Create pricing rule</a>
       <a class="button-link secondary" href="/admin/pricing/import">Import pricing</a>
-{% if not demo_admin %}      <a class="button-link secondary" href="/admin/reports/pricing-disable">Review pricing disable</a>{% endif %}
+      <a class="button-link secondary" href="/admin/reports/pricing-disable">Review pricing disable</a>
       <a class="button-link secondary" href="/admin">Dashboard</a>
       <form method="post" action="/admin/logout">
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
