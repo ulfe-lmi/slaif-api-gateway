@@ -162,6 +162,8 @@ ADMITTED_REPORTING_PATHS = (
     "/admin/accounts/reset",
     "/admin/key-batch",
 )
+# 224-k: only the safe, target-copy catalog metadata index.
+ADMITTED_CATALOG_INDEX_PATH = "/admin/operations/catalog/"
 #: Canonical lowercase 8-4-4-4-12 UUID syntax ONLY (the exact form the
 #: GUI generates from ``str(uuid)``); variant forms (no dashes, braces,
 #: URN, uppercase) are NOT admitted detail components.
@@ -263,7 +265,7 @@ def _scope_path(scope: dict) -> str:
 
 
 def _is_admitted_path(path: str) -> bool:
-    """The exact closed 224-e/224-f/224-i/224-j GET admission law."""
+    """The exact closed 224-e/224-f/224-i/224-j/224-k GET admission law."""
     if path in ADMITTED_DASHBOARD_PATHS or path in ADMITTED_LIST_PATHS:
         return True
     if path == ADMITTED_RECORD_CHOICES_PATH:
@@ -271,6 +273,8 @@ def _is_admitted_path(path: str) -> bool:
     if path in ADMITTED_FORM_PATHS:
         return True
     if path in ADMITTED_REPORTING_PATHS:
+        return True
+    if path == ADMITTED_CATALOG_INDEX_PATH:
         return True
     for prefix in ADMITTED_EDIT_FAMILY_PREFIXES:
         if path.startswith(prefix) and path.endswith("/edit"):

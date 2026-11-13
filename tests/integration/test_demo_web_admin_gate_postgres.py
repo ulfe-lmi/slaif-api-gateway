@@ -576,6 +576,38 @@ def test_e2e_admin_gate_two_sessions_distinct_copies(
                         assert "calculated at view time against the snapshot" in r.text
                         r = await client.get("/admin/reports/fx-lookup")
                         assert "resolved at view time against the snapshot" in r.text
+                        # 224-k: the ONE exact catalog index path renders
+                        # from the real target-only reader against this
+                        # session's exact verified copy. The owned
+                        # fixture has NO configured catalog source, so
+                        # the honest state is the empty-catalog note -
+                        # no real catalog artifact is displayed or
+                        # claimed (the full configured-file installed
+                        # workflow is objective 225).
+                        r = await client.get("/admin/operations/catalog/")
+                        _assert_demo_page("catalog index", r)
+                        cat_text = " ".join(r.text.split())
+                        assert "Catalog snapshot index" in cat_text
+                        assert "0 captured catalog artifacts" in cat_text
+                        assert "This copy has no captured catalog artifacts." in cat_text
+                        # No inference about operator storage.
+                        assert (
+                            "does not establish whether operator catalog "
+                            "storage was configured"
+                        ) in cat_text
+                        # Bounded index + separate file-capture phase +
+                        # no seal/apply authority wording.
+                        assert "at most 4,096 entries" in cat_text
+                        assert "no completeness claim" in cat_text
+                        assert "separate, bounded phase" in cat_text
+                        assert "no original seal or apply authority" in cat_text
+                        # Source-side canaries: the source database, the
+                        # custody path and the worker credential never
+                        # appear (copy/reader canaries are in
+                        # _assert_demo_page).
+                        assert str(san_env.source["database"]) not in r.text
+                        assert str(custody) not in r.text
+                        assert env["worker_pw"] not in r.text
                         # 224-i: the routes list row count equals the
                         # copied model_routes count (within the page limit).
                         r = await client.get("/admin/routes")
@@ -600,6 +632,15 @@ def test_e2e_admin_gate_two_sessions_distinct_copies(
                         # route action/download GETs stay denied).
                         for gated in (
                             "/admin/operations",
+                            # 224-k near-misses: missing slash and every
+                            # deeper catalog GET stay default-denied.
+                            "/admin/operations/catalog",
+                            "/admin/operations/catalog/proposals",
+                            "/admin/operations/catalog/collect",
+                            "/admin/operations/catalog/export-baseline",
+                            f"/admin/operations/catalog/runs/{uuid.uuid4()}/",
+                            f"/admin/operations/catalog/runs/{uuid.uuid4()}/apply-status",
+                            f"/admin/operations/catalog/jobs/{'a' * 32}/artifact/x",
                             # 224-j near-misses: missing slash, extra
                             # suffix, export attachment, unknown action.
                             "/admin/reports",
@@ -650,6 +691,10 @@ def test_e2e_admin_gate_two_sessions_distinct_copies(
                             "/admin/accounts/create",
                             "/admin/accounts/reset",
                             "/admin/key-batch",
+                            # 224-k: the exact catalog index path and a
+                            # deeper catalog path are the SAME quiet cut.
+                            "/admin/operations/catalog/",
+                            "/admin/operations/catalog/proposals",
                             "/admin/definitely-not-a-route",
                         ):
                             r = await client.post(
@@ -1020,6 +1065,42 @@ def test_browser_smoke_demo_copy_pages(
             r = page.goto("/admin/key-batch")
             assert r is not None and r.status == 200
             assert "Demo preview:" in page.content()
+
+            # --- 224-k: dashboard Catalog snapshot card -> index page --
+            page.goto("/admin")
+            card = page.locator('a[href="/admin/operations/catalog/"]')
+            assert card.count() == 1, "demo dashboard card must appear once"
+            card.click()
+            page.wait_for_selector("#demo-catalog-heading")
+            tracked_cat = [
+                (u, st, cc)
+                for (u, st, cc) in all_responses
+                if u.endswith("/admin/operations/catalog/")
+            ]
+            assert tracked_cat, "no tracked response for the catalog index"
+            assert tracked_cat[-1][1] == 200
+            assert tracked_cat[-1][2] == "private, no-store"
+            content = page.content()
+            assert "Demo preview:" in content
+            assert "Catalog snapshot index" in content
+            # Desktop-width layout check (default 1280x720 context): the
+            # bounded-index note, the empty-state table row and the
+            # no-storage-inference note are all visible in one screen.
+            assert "0 captured catalog artifacts" in content
+            assert "This copy has no captured catalog artifacts." in content
+            assert "does not establish whether operator catalog storage was configured" in " ".join(content.split())
+            assert "at most 4,096 entries" in content
+            assert "separate, bounded phase" in content
+            assert "no original seal or apply authority" in content
+            assert target not in content
+            assert 'href="/admin/operations"' not in content  # still no nav item
+            # ephemeral desktop-layout screenshot (run-owned /tmp path;
+            # never committed, not in app logs).
+            shot_cat = Path(
+                f"/tmp/slaif-224k-browser-catalog-{os.getpid()}-{uuid.uuid4().hex[:10]}.png"
+            )
+            page.screenshot(path=str(shot_cat))
+            print(f"DEMO_BROWSER_CATALOG_SCREENSHOT={shot_cat}")
 
             # --- 224-i: an admitted form renders; the operational submit
             # is a quiet 204 no-op that changes nothing -------------------

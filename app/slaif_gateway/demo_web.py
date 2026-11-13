@@ -853,6 +853,7 @@ def _mount_demo_admin_routers(app: FastAPI) -> None:
         router as admin_accounting_operations_router,
     )
     from slaif_gateway.api.admin_accounts import router as admin_accounts_router
+    from slaif_gateway.api.demo_admin_catalog import router as demo_admin_catalog_router
     from slaif_gateway.api.admin_catalog_refresh import (
         router as admin_catalog_refresh_router,
     )
@@ -889,6 +890,8 @@ def _mount_demo_admin_routers(app: FastAPI) -> None:
     app.include_router(admin_email_operations_router)
     app.include_router(admin_accounting_operations_router)
     app.include_router(admin_accounts_router)
+    # Demo-specific copy-only catalog index wins over the normal custody route.
+    app.include_router(demo_admin_catalog_router)
     app.include_router(admin_catalog_refresh_router)
     app.include_router(admin_key_clone_router)
     app.include_router(admin_key_batch_router)

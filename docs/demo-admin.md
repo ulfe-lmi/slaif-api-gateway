@@ -1812,3 +1812,134 @@ acceptance gate.
   batch entry render with the banner and no-store. One screenshot
   is saved to a run-owned /tmp path (never committed and not in
   ordinary application logs).
+
+## Catalog snapshot index (objective 224-k)
+
+224-k (same PR #383) makes the captured catalog's SAFE FILE INDEX
+visible inside the demo GUI: ONE demo-only read handler for the
+exact `GET /admin/operations/catalog/`, mounted ahead of the normal
+catalog router only in `create_demo_app` (the normal custody-backed
+handler is never reached for that path in the demo process). Only
+that exact path is added to the central gate; all deeper catalog
+GETs, downloads, original apply-status, preview/verify endpoints and
+unknown variants remain 404, and every unsafe method on `/admin`
+remains the unchanged quiet 204 cut before body parsing and
+dispatch.
+
+This is NOT full catalog browsing: body previews, run detail,
+uploads/proposals, attachments, downloads, live apply status and
+process settings remain closed for later same-PR suffixes. The page
+is built ONLY from the gate-validated request-local demo state and
+its exact session target through the existing
+`demo_display_reader_factory(...).read_index()` seam (the reader's
+database-side read-only / `current_database()` checks stay
+authoritative). To be precise about credentials: reaching the
+handler first required the gate's LIVE demo-control authorization
+(reads on the `demo_control` rows under the demo web role), and the
+index read itself uses the operator's restricted SELECT-only
+copy-reader credential against the verified target copy only. What
+the handler never touches: source public business tables, live
+operator custody, the catalog HMAC seal, Redis, the worker
+filesystem, provider network or provider credentials.
+
+### What the page shows
+
+* only the closed `catalog/...` remapped leaves of the verified
+  target-only display index (runs, jobs, uploads, proposals), each
+  projected to: area, remapped demo run/job ID, bounded remapped
+  artifact name, closed kind, byte count and the per-leaf capture
+  time (UTC);
+* a structural first-column ordinal and the current link-based
+  sortable headers (the shared `table-sort.js`);
+* the bounded-index wording: at most 4,096 entries (the existing
+  display-index cap) with an explicit no-completeness-claim beyond
+  that bound;
+* the separate-phase wording: each capture time belongs to that
+  file's own bounded file-capture phase, distinct from the database
+  snapshot time;
+* the explicit no-authority wording: the sanitized display copy
+  carries no original seal or apply authority and proves nothing
+  about live operator state;
+* if no catalog leaves are present: exactly "This copy has no
+  captured catalog artifacts" plus the note that this does not
+  establish whether operator catalog storage was configured (no
+  inference);
+* if the display index is missing/corrupt/unreadable, or a row
+  violates the closed remapped name law (bounded areas, remapped
+  run/job ID shapes, bounded ASCII artifact segments, no dot
+  traversal), the bounded kind/size law or the finite
+  representable-time law: the whole page fails to ONE fixed safe
+  unavailable note (503, no raw DB value, path or traceback).
+
+Source paths, original run/job IDs, seal/HMAC values and secret
+material never exist in the index and are never rendered; no
+download URL is derived.
+
+### Reachability
+
+The demo-only dashboard carries one "Catalog snapshot" card
+linking the exact index path (the normal dashboard is unchanged and
+the top navigation gains no item). No other link or route was
+added; no body reader, download endpoint, background job or worker
+change exists in this round.
+
+### Remaining closed surface after 224-k
+
+Every catalog path except the exact index (proposals, collect,
+review, export-baseline, run/job artifacts, apply-status, package
+downloads, verify) stays default-denied (404 GET / quiet 204
+unsafe), and body previews, run detail, uploads/proposals browsing,
+downloads and live apply status remain closed for later same-PR
+suffixes. Objective 225 remains the installed acceptance gate.
+
+### Evidence (224-k)
+
+* Focused unit (new `test_demo_catalog_index.py` + `test_demo_web.py`
+  224-k section): the pure projection accepts the four canonical
+  remapped catalog areas (24-hex `demo-run-...` ids, 32-hex job
+  ids, bounded artifact segments, closed kinds, bounded sizes,
+  finite representable capture times) and fails the whole index
+  safely on source-like ids, overlong names (>200 chars), dot
+  traversal, unknown areas, bad kinds/sizes/times (bool, negative,
+  NaN/Inf, unrepresentable, above the size bound), non-dict leaves
+  and >4096 rows; the gate admits EXACTLY `/admin/operations/catalog/`
+  (no session -> demo-entry redirect) and keeps every near-miss
+  404; the exact path and deeper catalog paths answer every unsafe
+  method with the quiet 204 cut (200 KB garbage body never
+  parsed); the gated positive page (mocked reader) renders the
+  remapped metadata with comma byte counts and per-leaf UTC capture
+  times, `private, no-store`, the bounded-index / separate-phase /
+  no-seal wording, and no copy name or credential; the
+  empty-catalog and reader-failure states render their exact
+  honest notes; corrupt-row canaries (source-like id, secret-shaped
+  kind, traversal, oversized name) fail the whole page to the safe
+  note without rendering any raw value; the handler refuses
+  without gate-validated request-local state (404); the demo
+  dashboard shows the card once while the normal dashboard stays
+  unchanged; the usability/table-rows inventories accept the new
+  table (57 sortable tables, structural ordinal + authored
+  empty-state row).
+* Owned PostgreSQL 16 (real reader role, real worker chain, two
+  concurrent sessions on distinct copies): for BOTH sessions the
+  exact index path renders 200 with the banner and
+  `private, no-store`; the owned fixture has NO configured catalog
+  source, so the honest state is the empty-catalog note ("0
+  captured catalog artifacts", "This copy has no captured catalog
+  artifacts", "does not establish whether operator catalog storage
+  was configured") — no real catalog artifact was displayed or
+  claimed, and positive artifact rendering is proven by the mocked
+  unit coverage only (the complete configured-file installed
+  workflow is reserved for objective 225); the source database,
+  custody path, worker credential, copy names and reader role never
+  appear in the HTML; the near-misses stay 404; the unsafe methods
+  stay quiet 204; and the whole read/POST/logout phase leaves the
+  source and BOTH copies unchanged (existing invariance counts).
+* Real Chromium at desktop width (1280x720): the dashboard
+  "Catalog snapshot" card navigates to the index page, which
+  renders 200 with `private, no-store`, the demo banner/nav, the
+  bounded-index note, the sortable table with the authored
+  empty-state row and the no-storage-inference note; the top
+  navigation still lists the same fourteen sections (no 15th item).
+  One screenshot is saved to a run-owned /tmp path (never committed
+  and not in ordinary application logs) and was visually
+  inspected.

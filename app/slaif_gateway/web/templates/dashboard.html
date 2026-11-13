@@ -47,6 +47,16 @@
         </li>{% endif %}
       </ul>
     </div>
+{% if demo_admin %}    <div class="dash-group">
+      <h2>Catalog snapshot</h2>
+      <p class="dash-group-intro">Bounded, metadata-only index of the catalog artifacts captured into this private copy.</p>
+      <ul>
+        <li>
+          <a href="/admin/operations/catalog/">Catalog snapshot index</a>
+          <p>Read-only remapped names, kinds, sizes, and capture times.</p>
+        </li>
+      </ul>
+    </div>{% endif %}
 {% if not demo_admin %}    <div class="dash-group">
       <h2>Providers and models</h2>
       <p class="dash-group-intro">Configure the services behind the gateway.</p>

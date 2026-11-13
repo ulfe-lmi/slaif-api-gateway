@@ -2685,3 +2685,310 @@ def test_files_preview_out_of_range_capture_time_safe_note():
             assert len(made) == 1
 
     asyncio.run(run())
+
+
+# --- 224-k: demo-only catalog snapshot index ----------------------------------
+
+from slaif_gateway.api import demo_admin_catalog as dac  # noqa: E402
+
+CAT_RUN_ID = "demo-run-" + "a1" * 12  # remapped run id (24 hex)
+CAT_JOB_ID = "b2" * 16  # remapped job id (32 hex)
+CAT_LEAF_RUN = {
+    "logical_name": f"catalog/runs/{CAT_RUN_ID}/catalog-refresh.json",
+    "kind": "refresh_bundle",
+    "byte_count": 1234567,
+    "captured_at": 1750000000.0,
+}
+CAT_LEAF_JOB = {
+    "logical_name": f"catalog/jobs/{CAT_JOB_ID}.json",
+    "kind": "job_record",
+    "byte_count": 42,
+    "captured_at": 1750000010.0,
+}
+CAT_LEAF_PKG = {
+    "logical_name": (
+        f"catalog/proposals/{CAT_JOB_ID}"
+        "/packages/openrouter-chat-text/routes-proposal.tsv"
+    ),
+    "kind": "route_tsv",
+    "byte_count": 88,
+    "captured_at": 1750000020.0,
+}
+CATALOG_INDEX_URL = "/admin/operations/catalog/"
+
+
+def test_catalog_index_gate_admission_exact_path():
+    async def run():
+        app = _app(FakeFacade())
+        async with _client(app) as client:
+            # The ONE exact path is admitted (no session -> entry
+            # redirect)...
+            r = await client.get(CATALOG_INDEX_URL)
+            assert r.status_code == 303
+            assert r.headers["location"] == "/fakeadmin/login"
+            # ...every near-miss catalog GET stays default-denied.
+            for p in (
+                "/admin/operations/catalog",          # missing slash
+                "/admin/operations/catalog//",        # doubled slash
+                "/admin/operations/catalog2",         # prefix sibling
+                "/admin/operations/catalog/proposals",
+                "/admin/operations/catalog/collect",
+                "/admin/operations/catalog/review",
+                "/admin/operations/catalog/export-baseline",
+                f"/admin/operations/catalog/runs/{KEY_UUID}/",
+                f"/admin/operations/catalog/runs/{KEY_UUID}/apply-status",
+                f"/admin/operations/catalog/runs/{KEY_UUID}/artifact/x",
+                f"/admin/operations/catalog/jobs/{CAT_JOB_ID}/artifact/x",
+                f"/admin/operations/catalog/jobs/{CAT_JOB_ID}/package/openrouter-chat-text/x",
+                "/admin/operations/catalogx/",
+            ):
+                r = await client.get(p)
+                assert r.status_code == 404, p
+
+    asyncio.run(run())
+
+
+def test_catalog_index_zero_active_404():
+    async def run():
+        fake = FakeFacade()
+        fake.active = 0
+        app = _app(fake)
+        async with _client(app) as client:
+            _session_cookie(client)
+            r = await client.get(CATALOG_INDEX_URL)
+            assert r.status_code == 404
+
+    asyncio.run(run())
+
+
+def test_catalog_index_unsafe_methods_quiet_noop_body_not_parsed():
+    async def run():
+        app = _app(FakeFacade())
+        async with _client(app) as client:
+            _session_cookie(client)
+            paths = [
+                CATALOG_INDEX_URL,
+                "/admin/operations/catalog/proposals",
+                f"/admin/operations/catalog/runs/{CAT_RUN_ID}/apply",
+            ]
+            for p in paths:
+                for method in ("POST", "PUT", "PATCH", "DELETE"):
+                    # 200 KB garbage body: a 204 proves the body was
+                    # never parsed before the cut.
+                    r = await client.request(
+                        method,
+                        p,
+                        content=b"x" * 200_000,
+                        headers={"content-type": "text/garbage"},
+                    )
+                    assert r.status_code == 204, (p, method)
+                    assert r.content == b""
+            # Without a session the SAME cut is default denial.
+        async with _client(app) as anon:
+            r = await anon.post(
+                CATALOG_INDEX_URL,
+                content=b"y" * 200_000,
+                headers={"content-type": "text/garbage"},
+            )
+            assert r.status_code == 404
+
+    asyncio.run(run())
+
+
+def _norm(text: str) -> str:
+    # Template line wraps insert whitespace; assert phrases on the
+    # rendered TEXT, not the raw markup.
+    return " ".join(text.split())
+
+
+def test_catalog_index_positive_gated_page(monkeypatch):
+    async def run():
+        fake = FakeFacade()
+        fake.worker_target_db = COPY_OK
+        engine = _preflight_case(monkeypatch, COPY_OK, "on")
+        factory, made = _display_factory(
+            leaves=[CAT_LEAF_RUN, CAT_LEAF_JOB, CAT_LEAF_PKG, LEAF_TWO]
+        )
+        app = _app(fake, display_reader_factory=factory)
+        async with _client(app) as client:
+            await _verified_session_client(fake, client)
+            r = await client.get(CATALOG_INDEX_URL)
+            assert r.status_code == 200
+            assert r.headers.get("cache-control") == "private, no-store"
+            text = _norm(r.text)
+            # The DEMO handler served it (not the custody-backed
+            # normal handler): the demo template + banner...
+            assert "Catalog snapshot index" in text
+            assert "Demo preview:" in text
+            # ...with the remapped metadata only: every area's
+            # remapped id and artifact, closed kinds, comma bytes,
+            # per-leaf capture times.
+            assert CAT_RUN_ID in text
+            assert f"{CAT_JOB_ID}.json" in text
+            assert "packages/openrouter-chat-text/routes-proposal.tsv" in text
+            assert "refresh_bundle" in text
+            assert "job_record" in text
+            assert "1,234,567" in text
+            assert "2025-06-15 15:06:40 UTC" in text
+            assert "3 captured catalog artifacts" in text
+            assert "at most 4,096 entries" in text
+            assert "no completeness claim" in text
+            # The bounded-index / separate-phase / no-seal wording.
+            assert "separate, bounded phase" in text
+            assert "no original seal or apply authority" in text
+            # Non-catalog leaves are NOT catalog artifacts: the
+            # branding leaf stays off this page...
+            assert "branding/logo" not in text
+            # ...and no copy name, DSN or credential escapes.
+            assert COPY_OK not in text
+            assert "unit-test-copy-password" not in text
+        # The factory was called EXACTLY once with the session's exact
+        # target (no re-read, no other copy).
+        assert len(made) == 1
+        assert made[0][1] == COPY_OK
+        assert engine.disposed == 1
+
+    asyncio.run(run())
+
+
+def test_catalog_index_empty_catalog_leaves(monkeypatch):
+    async def run():
+        fake = FakeFacade()
+        fake.worker_target_db = COPY_OK
+        _preflight_case(monkeypatch, COPY_OK, "on")
+        factory, made = _display_factory(leaves=[LEAF_TWO])  # branding only
+        app = _app(fake, display_reader_factory=factory)
+        async with _client(app) as client:
+            await _verified_session_client(fake, client)
+            r = await client.get(CATALOG_INDEX_URL)
+            assert r.status_code == 200
+            assert r.headers.get("cache-control") == "private, no-store"
+            text = _norm(r.text)
+            assert "0 captured catalog artifacts" in text
+            assert "This copy has no captured catalog artifacts." in text
+            # No inference about operator storage configuration.
+            assert (
+                "does not establish whether operator catalog "
+                "storage was configured"
+            ) in text
+            assert len(made) == 1
+
+    asyncio.run(run())
+
+
+def test_catalog_index_reader_failure_safe_note(monkeypatch):
+    async def run():
+        fake = FakeFacade()
+        fake.worker_target_db = COPY_OK
+        _preflight_case(monkeypatch, COPY_OK, "on")
+        factory, made = _display_factory(raise_code="copy_binding_unavailable")
+        app = _app(fake, display_reader_factory=factory)
+        async with _client(app) as client:
+            await _verified_session_client(fake, client)
+            r = await client.get(CATALOG_INDEX_URL)
+            assert r.status_code == 503
+            assert r.headers.get("cache-control") == "private, no-store"
+            assert dac._SAFE_UNAVAILABLE in r.text
+            # No raw DB value, path or traceback.
+            assert COPY_OK not in r.text
+            assert "demo_display" not in r.text
+            assert "Traceback" not in r.text
+            assert len(made) == 1
+
+    asyncio.run(run())
+
+
+def test_catalog_index_corrupt_row_canaries_safe_note(monkeypatch):
+    # A corrupted target row must fail the WHOLE page to the fixed
+    # safe note; its raw values (source-like ids, traversal, secret-
+    # shaped kinds, oversized names) never render.
+    async def run():
+        canary_cases = [
+            (
+                {
+                    "logical_name": f"catalog/runs/demo-run-{CAT_JOB_ID}/catalog-refresh.json",
+                    "kind": "refresh_bundle",
+                    "byte_count": 1,
+                    "captured_at": 1750000000.0,
+                },
+                "demo-run-" + CAT_JOB_ID,
+            ),
+            (
+                {
+                    "logical_name": f"catalog/jobs/{CAT_JOB_ID}.json",
+                    "kind": "sk-slaif-KINDCANARY",
+                    "byte_count": 1,
+                    "captured_at": 1750000000.0,
+                },
+                "sk-slaif-KINDCANARY",
+            ),
+            (
+                {
+                    "logical_name": f"catalog/proposals/{CAT_JOB_ID}/../../../etc/slaif-passwd",
+                    "kind": "markdown",
+                    "byte_count": 1,
+                    "captured_at": 1750000000.0,
+                },
+                "etc/slaif-passwd",
+            ),
+            (
+                {
+                    "logical_name": f"catalog/jobs/{CAT_JOB_ID}.json" + "z" * 300,
+                    "kind": "job_record",
+                    "byte_count": 1,
+                    "captured_at": 1750000000.0,
+                },
+                "z" * 300,
+            ),
+        ]
+        for bad_leaf, canary in canary_cases:
+            fake = FakeFacade()
+            fake.worker_target_db = COPY_OK
+            _preflight_case(monkeypatch, COPY_OK, "on")
+            factory, made = _display_factory(leaves=[CAT_LEAF_RUN, bad_leaf])
+            app = _app(fake, display_reader_factory=factory)
+            async with _client(app) as client:
+                await _verified_session_client(fake, client)
+                r = await client.get(CATALOG_INDEX_URL)
+                assert r.status_code == 503
+                assert r.headers.get("cache-control") == "private, no-store"
+                assert dac._SAFE_UNAVAILABLE in r.text
+                assert canary not in r.text
+                assert len(made) == 1
+
+    asyncio.run(run())
+
+
+def test_catalog_index_handler_without_demo_state_404():
+    # Defensive: the handler itself refuses without gate-validated
+    # request-local demo state (the gate guarantees it in practice).
+    async def run():
+        app = _app(FakeFacade())
+        request = _bare_request(app)
+        response = await dac.demo_catalog_index(request)
+        assert response.status_code == 404
+
+    asyncio.run(run())
+
+
+def test_dashboard_demo_only_catalog_card():
+    # The demo dashboard links the exact index path; the normal
+    # dashboard is unchanged (no catalog card, no 15th nav item).
+    from slaif_gateway.api.admin import templates as admin_templates
+
+    async def _render(request):
+        response = admin_templates.TemplateResponse(
+            request,
+            "dashboard.html",
+            {"admin": object(), "csrf_token": "x" * 40, "admin_status_message": None},
+        )
+        return response.body.decode("utf-8")
+
+    async def run():
+        normal = await _render(_fake_admin_request("/admin"))
+        assert CATALOG_INDEX_URL not in normal
+        demo = await _render(_fake_admin_request("/admin", demo_admin=object()))
+        assert f'href="{CATALOG_INDEX_URL}"' in demo
+        assert "Catalog snapshot index" in demo
+
+    asyncio.run(run())
