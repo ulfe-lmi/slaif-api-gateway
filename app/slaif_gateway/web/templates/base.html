@@ -29,7 +29,8 @@
         >Menu</button>
         <nav id="admin-nav" class="admin-nav" aria-label="Admin sections">
           {%- set nav_path = request.url.path %}
-          {%- for href, label, is_current in [
+          {#- 224-e: the demo host lists ONLY this stage's usable sections. -#}
+          {%- set nav_items = demo_admin.nav if demo_admin else [
             ("/admin", "Dashboard", nav_path in ("/admin", "/admin/")),
             ("/admin/keys", "Keys", nav_path == "/admin/keys" or nav_path.startswith("/admin/keys/")),
             ("/admin/owners", "Owners", nav_path == "/admin/owners" or nav_path.startswith("/admin/owners/")),
@@ -46,13 +47,18 @@
             ("/admin/email-deliveries", "Email", nav_path == "/admin/email-deliveries" or nav_path.startswith("/admin/email-deliveries/")),
             ("/admin/openai-assisted", "OpenAI", nav_path == "/admin/openai-assisted" or nav_path.startswith("/admin/openai-assisted/")),
           ] -%}
+          {%- for href, label, is_current in nav_items -%}
           <a href="{{ href }}"{% if is_current %} aria-current="page"{% endif %}>{{ label }}</a>
           {%- endfor %}
         </nav>
         {%- endif %}
       </div>
     </header>
-    <main id="admin-main" class="page-shell">
+    <main id="admin-main" class="page-shell">{% if demo_admin %}<div class="admin-flash admin-flash-success" role="note">
+        Demo preview: identity-masked snapshot data. Read-only -
+        operational actions have no effect. This is an incomplete
+        core preview.
+      </div>{% endif %}
       {% if admin_status_message %}
       <div class="admin-flash admin-flash-{{ admin_status_message.level }}" role="status">
         {{ admin_status_message.text }}

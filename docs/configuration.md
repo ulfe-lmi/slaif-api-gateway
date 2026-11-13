@@ -1857,8 +1857,22 @@ clears all demo cookies. 224-d adds the read-only copy preview
 verified copy under the SELECT-only reader role, per-request
 read-only connection (disposed after use, `Cache-Control: no-store`),
 and one safe note for any unreadable/expired/wrong binding — no target
-name, DSN or internal error ever reaches the page. Full copy-backed
-GUI browsing remains a later 224 suffix.
+name, DSN or internal error ever reaches the page.
+
+### Demo admin core read gate (objective 224-e)
+
+224-e introduces NO new settings. The standalone demo web process
+additionally mounts the existing admin routers behind a central
+server-side default-deny gate and serves a first, bounded set of
+database-backed admin pages (dashboard, the four core lists, their
+canonical-UUID detail pages and the record-choices lookup) read-only
+from the session's verified copy under the same `DEMO_WEB_COPY_*`
+reader connection (request-local sessionmaker, database-side
+read-only, disposed after each response). Every other admin path
+stays default-denied, every unsafe method is a pre-handler no-op,
+and the demo remains an incomplete core preview rather than the
+full admin GUI (see `docs/demo-admin.md`, Demo admin core read
+gate).
 
 ## Production Notes
 

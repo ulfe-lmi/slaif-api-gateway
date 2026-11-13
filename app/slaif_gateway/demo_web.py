@@ -35,7 +35,7 @@ import time
 import uuid
 from pathlib import Path
 from dataclasses import dataclass, field
-from typing import Callable, Protocol
+from typing import TYPE_CHECKING, Callable, Protocol
 
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
@@ -46,6 +46,10 @@ from sqlalchemy.ext.asyncio import (
     create_async_engine,
 )
 from sqlalchemy.pool import NullPool
+
+if TYPE_CHECKING:
+    from slaif_gateway.api.demo_admin_gate import DemoAdminGate
+    from slaif_gateway.config import Settings
 
 from slaif_gateway.db.repositories.fake_admin_accounts import (
     FakeAdminAccountsRepository,
@@ -664,27 +668,111 @@ class CopyReader:
 # --- the standalone ASGI entrypoint -----------------------------------------------
 
 
+def _default_copy_reader_factory(cfg: DemoWebConfig, target_db: str) -> CopyReader:
+    """Default per-request copy-reader factory (224-d)."""
+    return CopyReader(cfg, target_db)
+
+
+def _demo_display_settings() -> Settings:
+    """Fixed neutral display settings for the reused admin templates (224-e).
+
+    Constructed from the model's FIXED DEFAULTS only: ``model_construct``
+    bypasses validation and never reads ambient ``get_settings()`` /
+    production environment, so the demo process carries no source DB,
+    worker, Redis or provider credential. Branding stays disabled
+    (packaged neutral assets only) and the dashboard is explicitly on.
+    """
+    from slaif_gateway.config import Settings
+
+    return Settings.model_construct(
+        ENABLE_ADMIN_DASHBOARD=True,
+        SLAIF_BRANDING_DIR="",
+        DATABASE_URL=None,
+    )
+
+
+def _mount_demo_admin_routers(app: FastAPI) -> None:
+    """Mount the EXISTING admin routers in the demo process only (224-e).
+
+    Same fixed-literal order as the ordinary app (branding and
+    record-choices register before admin so their literals win). No
+    ``/v1``, provider, mail or worker route is imported or mounted.
+    """
+    from slaif_gateway.api.admin import router as admin_router
+    from slaif_gateway.api.admin_accounting_operations import (
+        router as admin_accounting_operations_router,
+    )
+    from slaif_gateway.api.admin_accounts import router as admin_accounts_router
+    from slaif_gateway.api.admin_catalog_refresh import (
+        router as admin_catalog_refresh_router,
+    )
+    from slaif_gateway.api.admin_compatibility import (
+        router as admin_compatibility_router,
+    )
+    from slaif_gateway.api.admin_email_operations import (
+        router as admin_email_operations_router,
+    )
+    from slaif_gateway.api.admin_key_batch import router as admin_key_batch_router
+    from slaif_gateway.api.admin_key_clone import router as admin_key_clone_router
+    from slaif_gateway.api.admin_operations import router as admin_operations_router
+    from slaif_gateway.api.admin_record_choices import (
+        router as admin_record_choices_router,
+    )
+    from slaif_gateway.api.admin_replay_maintenance import (
+        router as admin_replay_maintenance_router,
+    )
+    from slaif_gateway.api.admin_reports import router as admin_reports_router
+    from slaif_gateway.api.branding import router as branding_router
+    from slaif_gateway.api.admin_provider_route_configuration import (
+        router as admin_provider_route_configuration_router,
+    )
+
+    static_dir = Path(__file__).resolve().parent / "web" / "static"
+    app.mount(
+        "/admin/static",
+        StaticFiles(directory=str(static_dir)),
+        name="admin_static",
+    )
+    app.include_router(branding_router)
+    app.include_router(admin_record_choices_router)
+    app.include_router(admin_router)
+    app.include_router(admin_email_operations_router)
+    app.include_router(admin_accounting_operations_router)
+    app.include_router(admin_accounts_router)
+    app.include_router(admin_catalog_refresh_router)
+    app.include_router(admin_key_clone_router)
+    app.include_router(admin_key_batch_router)
+    app.include_router(admin_provider_route_configuration_router)
+    app.include_router(admin_operations_router)
+    app.include_router(admin_compatibility_router)
+    app.include_router(admin_replay_maintenance_router)
+    app.include_router(admin_reports_router)
+
+
 def create_demo_app(
     config: DemoWebConfig | None = None,
     *,
     facade: DemoWebFacade | None = None,
-    copy_reader_factory: "Callable[[DemoWebConfig, str], CopyReader] | None" = None,
-) -> FastAPI:
-    """Build the standalone demo web ASGI app (224-c).
+    copy_reader_factory: Callable[[DemoWebConfig, str], CopyReader] | None = None,
+) -> DemoAdminGate:
+    """Build the standalone demo web ASGI app (224-c; 224-e gated).
 
     Default OFF: with no config the app reads the demo-web environment
     and REFUSES to start (safe finite error) unless it is explicitly
-    enabled and fully configured. The returned app registers ONLY the
-    ``/fakeadmin`` routes and the static assets under
-    ``/fakeadmin/static`` - ``/v1``, ``/admin`` and every ordinary
-    admin route are absent (404). ``main.create_app`` is never
-    imported or called.
+    enabled and fully configured. ``/v1``, provider, mail and worker
+    routes are absent (404) and ``main.create_app`` is never imported
+    or called. 224-e: the EXISTING admin routers are mounted here ONLY
+    and wrapped in the central default-deny ``DemoAdminGate`` - the
+    admitted core GET set browses the session's exact verified copy
+    through the 224-d reader credential; every other admin route stays
+    gated (the gate table is enumerated by the focused tests).
     """
     from contextlib import asynccontextmanager
 
     from fastapi import Request
     from fastapi.responses import JSONResponse
 
+    from slaif_gateway.api.demo_admin_gate import DemoAdminGate
     from slaif_gateway.api.fake_admin import fake_admin_router
 
     cfg = config if config is not None else DemoWebConfig.from_env()
@@ -713,12 +801,21 @@ def create_demo_app(
     app.state.demo_config = cfg
     app.state.demo_facade = demo_facade
     app.state.demo_templates = templates
+    # 224-e fixed marker: the sessionmaker seam (db/session.py) fails
+    # every demo request closed to the app-global factory on this app.
+    app.state.demo_mode = True
+    # 224-e: fixed neutral display settings for the reused admin pages
+    # (model defaults only - no ambient env/production config read).
+    app.state.settings = _demo_display_settings()
+    # 224-e: the existing admin GUI, mounted in this process only and
+    # reachable exclusively through the central default-deny gate.
+    _mount_demo_admin_routers(app)
     # 224-d: per-request copy-reader factory (the purpose-built
     # reader by default; tests may substitute a fake).
     app.state.demo_copy_reader_factory = (
         copy_reader_factory
         if copy_reader_factory is not None
-        else (lambda cfg, target_db: CopyReader(cfg, target_db))
+        else _default_copy_reader_factory
     )
 
     static_dir = Path(__file__).resolve().parent / "web" / "static"
@@ -738,4 +835,7 @@ def create_demo_app(
             content={"detail": "Something went wrong. Please try again."},
         )
 
-    return app
+    # 224-e: the central server-side default-deny gate wraps the whole
+    # app; non-/admin traffic (the /fakeadmin flow, static assets)
+    # passes through unchanged.
+    return DemoAdminGate(app)

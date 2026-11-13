@@ -12,6 +12,7 @@ from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Annotated
 from urllib.parse import quote, urlencode, urlparse
 
@@ -344,9 +345,40 @@ def _branding_context(request: Request) -> dict[str, object]:
     }
 
 
+_DEMO_NAV_SECTIONS: tuple[tuple[str, str], ...] = (
+    ("/admin", "Dashboard"),
+    ("/admin/keys", "Keys"),
+    ("/admin/owners", "Owners"),
+    ("/admin/institutions", "Institutions"),
+    ("/admin/cohorts", "Cohorts"),
+)
+
+
+def _demo_admin_context(request: Request) -> dict[str, object]:
+    """224-e demo-host presentation values (always empty on a normal app).
+
+    Only the standalone demo process sets ``request.state.demo_admin``
+    (its central gate does); the normal app never does, so this
+    processor contributes no value there and normal rendering is
+    unchanged. The demo nav lists ONLY this stage's usable sections.
+    """
+    demo = getattr(request.state, "demo_admin", None)
+    if demo is None:
+        return {"demo_admin": None}
+    path = request.url.path
+    nav: list[tuple[str, str, bool]] = []
+    for href, label in _DEMO_NAV_SECTIONS:
+        if href == "/admin":
+            current = path in ("/admin", "/admin/")
+        else:
+            current = path == href or path.startswith(href + "/")
+        nav.append((href, label, current))
+    return {"demo_admin": SimpleNamespace(nav=tuple(nav))}
+
+
 templates = Jinja2Templates(
     directory=str(Path(__file__).resolve().parents[1] / "web" / "templates"),
-    context_processors=[_branding_context],
+    context_processors=[_branding_context, _demo_admin_context],
 )
 
 
@@ -965,6 +997,21 @@ async def dashboard(request: Request) -> Response:
     settings = _settings(request)
     if not settings.ENABLE_ADMIN_DASHBOARD:
         return _admin_not_found(request)
+
+    # 224-e demo host: equally guarded demo branch for the dashboard's
+    # direct normal-session path - the central gate already validated
+    # the session and stored the request-local fictional context, so
+    # no real admin cookie read, no service call, no CSRF refresh.
+    demo = getattr(request.state, "demo_admin", None)
+    if demo is not None:
+        return templates.TemplateResponse(
+            request,
+            "dashboard.html",
+            {
+                "admin": demo.session_context.admin_user,
+                "csrf_token": demo.csrf_token,
+            },
+        )
 
     session_token = request.cookies.get(settings.ADMIN_SESSION_COOKIE_NAME)
     if not session_token:
@@ -8681,6 +8728,13 @@ async def _get_current_admin_context(request: Request) -> AdminSessionContext | 
 
 
 async def _admin_page_context(request: Request) -> tuple[AdminSessionContext, str] | Response:
+    # 224-e demo host: the central gate validated the demo session and
+    # stored the request-local fictional context; return it directly.
+    # No real admin cookie read, no copied admin_sessions access, no
+    # CSRF refresh write. Normal requests never carry the state.
+    demo = getattr(request.state, "demo_admin", None)
+    if demo is not None:
+        return demo.session_context, demo.csrf_token
     settings = _settings(request)
     session_token = request.cookies.get(settings.ADMIN_SESSION_COOKIE_NAME)
     if not session_token:

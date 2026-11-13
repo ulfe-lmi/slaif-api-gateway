@@ -12,7 +12,7 @@
       <p class="muted signed-in">Signed in as <strong>{{ admin.display_name }}</strong></p>
     </div>
     <div class="header-actions">
-      <a class="button-link" href="/admin/keys/create">Create gateway key</a>
+{% if not demo_admin %}      <a class="button-link" href="/admin/keys/create">Create gateway key</a>{% endif %}
       <form method="post" action="/admin/logout">
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         <button type="submit" class="signout">Sign out</button>
@@ -41,13 +41,13 @@
           <a href="/admin/cohorts">Cohorts</a>
           <p>Manage groups and workshops.</p>
         </li>
-        <li>
+{% if not demo_admin %}        <li>
           <a href="/admin/templates">Key templates</a>
           <p>Reuse key configuration and policies.</p>
-        </li>
+        </li>{% endif %}
       </ul>
     </div>
-    <div class="dash-group">
+{% if not demo_admin %}    <div class="dash-group">
       <h2>Providers and models</h2>
       <p class="dash-group-intro">Configure the services behind the gateway.</p>
       <ul>
@@ -68,8 +68,8 @@
           <p>Prepare and review catalog proposals.</p>
         </li>
       </ul>
-    </div>
-    <div class="dash-group">
+    </div>{% endif %}
+{% if not demo_admin %}    <div class="dash-group">
       <h2>Usage and operations</h2>
       <p class="dash-group-intro">Review activity, costs, and delivery.</p>
       <ul>
@@ -94,7 +94,7 @@
           <p>Manage currency conversion rates.</p>
         </li>
       </ul>
-    </div>
+    </div>{% endif %}
   </div>
 </section>
 {% endblock %}

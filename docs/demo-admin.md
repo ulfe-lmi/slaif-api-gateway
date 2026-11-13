@@ -1188,3 +1188,128 @@ The preview response is `Cache-Control: no-store`.
   `REVOKE CONNECT ON DATABASE "<copy>" FROM "<reader role>"` plus
   `REVOKE USAGE, SELECT` on the schema/tables; the role itself can be
   dropped by the operator once no demo copy needs it.
+
+## Demo admin core read gate (objective 224-e, first admin page set)
+
+224-e mounts the EXISTING admin router/template implementation ONLY in
+the standalone `create_demo_app` process and makes a bounded FIRST set
+of existing database-backed admin pages browse the session's 224-d
+verified copy behind a central, server-side, default-deny gate. This
+is an incomplete core preview, not full GUI coverage: the remaining
+DB/file-backed families (providers, routes, pricing, usage,
+operations, audit, email, catalog refresh, accounts, key batch, key
+clone, compatibility, replay maintenance, reports, and the
+file-backed display panels) are still default-denied 404 behind the
+gate and belong to a later same-PR suffix. The demo is still NOT
+usable for company demonstrations at the end of 224-e.
+
+### Gate law (default-deny, before handlers and body parsing)
+
+The gate wraps the mounted admin app and is evaluated BEFORE any
+admin handler and BEFORE form/body parsing:
+
+* with ZERO active fake-admin accounts, every `/admin` path 404s
+  (fail-closed; no credential or existence oracle);
+* `GET /admin/login` redirects to `/fakeadmin/login`; the real
+  login POST is never dispatched;
+* the ONLY admitted admin GETs this suffix: dashboard `/admin` (and
+  the harmless trailing slash), the list pages `/admin/keys`,
+  `/admin/owners`, `/admin/institutions`, `/admin/cohorts`, their
+  record detail pages where the path component is EXACTLY one
+  canonical lowercase `8-4-4-4-12` UUID (uppercase, no-dash, `urn:`
+  and braced forms are refused), and the `GET /admin/record-choices`
+  lookup their existing filters need;
+* every other admin GET is 404 until explicitly reviewed in a later
+  suffix (nothing is silently rerouted to the live gateway);
+* the packaged `/admin/static` assets are served from the package
+  (fixed neutral branding; no live branding directory or catalog
+  file is ever read by the demo process).
+
+Every unsafe method (POST/PUT/PATCH/DELETE, ...) on any `/admin`
+path - KNOWN or UNKNOWN - is cut before the handler as a quiet
+204 no-content: the request body is never parsed, no fake success
+page renders, and there is no audit, accounting, mail, provider or
+custody effect. The ONE explicit exception is demo sign-out:
+`POST /admin/logout` parses a bounded form, verifies the page-issued
+CSRF token with a constant-time compare, and revokes the demo
+session through the 224-c control service; it clears the demo
+cookies and returns to the demo login flow ONLY when the revocation
+is confirmed (or the session is already absent). A failed or
+unconfirmed revocation is a safe 400 retry refusal that keeps the
+session valid - never a false sign-out success. It never calls the
+production admin logout service.
+
+### Per-request copy binding (no app-global factory)
+
+On EACH admitted admin read:
+
+* the 224-a session is revalidated against live fake-admin
+  account/generation/request state;
+* the exact request is re-read and must be `verified_unpublished`
+  and unexpired, with id AND account matching the session;
+* the control row's closed `demo_snap_<20hex>` target database name
+  is required (no other shape is ever interpolated);
+* a REQUEST-LOCAL sessionmaker is created under the 224-d reader
+  credential (`NullPool`, bounded connect/statement timeouts,
+  explicit no-TLS `ssl=False` stage boundary - trusted private
+  network only, NO verified TLS guarantee), and a preflight on the
+  connection verifies `current_database()` equals the bound name
+  AND `transaction_read_only` is `on` before any handler may query;
+* the engine is disposed after the response completes - and on
+  every refusal path.
+
+Demo requests never consult the app-global sessionmaker:
+`get_sessionmaker_from_app` branches FIRST on a fixed `demo_mode`
+app marker and fails closed when the validated request-local factory
+is absent. Concurrent visitors read DISTINCT copies. A missing,
+expired, revoked, disabled or cleanup-racing copy returns a fixed
+safe no-store refusal note - no DSN, copy name or error traceback -
+and never falls back to the source database. Admitted pages query
+ONLY copied `public` rows with the existing filtering, sorting,
+paging and record-choice behavior (no new CRUD surface).
+
+### Display identity and GUI treatment (demo mode only)
+
+Admitted pages render a fixed fictional administrator display
+identity ("Demo Administrator", `demo-admin@example.invalid`,
+deterministic uuid5 placeholder identifiers) and a
+non-authoritative form token, without reading or mutating copied
+`admin_sessions` or the normal `AdminSessionService`; the normal
+production branch is unchanged in behavior, visible DOM content and
+auth/action semantics (one whitespace-only line in the base template
+HTML aside - regression verified). In demo mode only: every admitted page carries a
+persistent banner (identity-masked snapshot data, read-only,
+operational actions have no effect, incomplete core preview); the
+nav shows exactly the five usable sections (Dashboard, Keys,
+Owners, Institutions, Cohorts); and unimplemented action links
+(create/batch/clone/calibration/config-download, the
+providers-and-models and usage-and-operations groups, replay
+maintenance) are hidden with honest read-only hints where a hint
+is warranted. Normal-mode markup renders as before.
+
+### Evidence
+
+* Focused unit: closed admission sets (admitted vs 404 vs 303),
+  canonical-UUID-only detail law, zero-account 404, pre-handler
+  unsafe 204 (oversized garbage body never parsed; no unsafe
+  handler dispatches across the whole mounted route table),
+  CSRF-verified logout with no false success (failed/unconfirmed
+  revocation keeps the session live), binding refusals with no
+  DSN/copy-name leak, preflight wrong-database and
+  read-only-off dispose-and-refuse, request-local factory
+  fail-closed with a deliberately populated global factory,
+  ambient-environment-free display settings, and normal-vs-demo
+  base-template rendering.
+* Owned PostgreSQL 16: two concurrent sessions produce two
+  DISTINCT verified copies - proven by one extra institution row in
+  the second copy's database and in its rendered list (222
+  fictionalizes institution names, so a raw source marker name
+  never appears in either page); every admitted GET family renders
+  behind the real SELECT-only reader role; operational POST
+  families and an unknown path are zero-effect no-ops; source and
+  both copies are count-invariant; CSRF sign-out revokes and
+  bounces. A real Chromium smoke (loopback uvicorn) additionally
+  proves packaged CSS/JS loading, the banner/nav, table sorting and
+  logout, saving one screenshot to a run-owned `/tmp` path (never
+  committed; its path is printed to local test stdout only and never
+  appears in ordinary application logs).

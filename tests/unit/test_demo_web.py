@@ -13,9 +13,12 @@ the precomputed dummy-Argon2 uniform path, CSRF and pending-cookie
 tamper refusal, the live account fence on every wait poll (disable and
 credential reset deny immediately), bounded form bodies (oversized
 413, wrong content type 400), exact one-session issuance, per-use
-session validation, logout revocation, /v1+/admin absence, the
-login attempt bound, and web-path import isolation (no privileged
-worker module in the web process).
+session validation, logout revocation, /v1 absence, the 224-e
+default-deny /admin gate (closed admission law, canonical-UUID detail
+components, session-binding refusals, preflight dispose, unsafe-method
+no-op cuts, CSRF-verified demo sign-out with confirmed-revocation
+law), and web-path import isolation (no privileged worker module in
+the web process).
 """
 
 from __future__ import annotations
@@ -32,6 +35,7 @@ import pytest
 from argon2 import PasswordHasher, Type
 from httpx import ASGITransport, AsyncClient
 
+from slaif_gateway.api import demo_admin_gate as damg
 from slaif_gateway.api import fake_admin as fa
 from slaif_gateway.db.repositories.fake_admin_accounts import (
     FakeAdminAccountFacts,
@@ -355,6 +359,52 @@ def test_create_app_refuses_when_disabled():
         create_demo_app(_config(enabled=False), facade=FakeFacade())
 
 
+# --- 224-e: request-local sessionmaker seam -------------------------------------
+
+
+def _bare_request(app, state: dict | None = None):
+    from starlette.requests import Request
+
+    scope = {"type": "http", "app": app, "state": dict(state or {})}
+    return Request(scope)
+
+
+def test_demo_sessionmaker_uses_request_local_factory_only():
+    from types import SimpleNamespace
+
+    from slaif_gateway.db.session import get_sessionmaker_from_app
+
+    app = _app(FakeFacade())
+    local_factory = object()
+    request = _bare_request(app, {"demo_admin": SimpleNamespace(sessionmaker=local_factory)})
+    assert get_sessionmaker_from_app(request) is local_factory
+
+
+def test_demo_sessionmaker_fails_closed_despite_populated_global_factory():
+    # 224-e: a demo request that never passed the central gate (no
+    # request.state.demo_admin) must fail closed even if an app-
+    # GLOBAL factory were accidentally present.
+    from slaif_gateway.db.session import get_sessionmaker_from_app
+
+    app = _app(FakeFacade())
+    app.state.db_sessionmaker = object()  # deliberate misconfiguration
+    request = _bare_request(app)
+    with pytest.raises(RuntimeError):
+        get_sessionmaker_from_app(request)
+
+
+def test_normal_app_sessionmaker_unchanged():
+    # A normal (marker-free) app keeps the exact global-factory law.
+    from fastapi import FastAPI
+
+    from slaif_gateway.db.session import get_sessionmaker_from_app
+
+    app = FastAPI()
+    global_factory = object()
+    app.state.db_sessionmaker = global_factory
+    assert get_sessionmaker_from_app(_bare_request(app)) is global_factory
+
+
 def test_create_app_refuses_direct_enabled_config_missing_copy_binding():
     # The SAME fail-closed law for a directly supplied config (not
     # only from_env): an enabled app cannot start without the
@@ -366,15 +416,80 @@ def test_create_app_refuses_direct_enabled_config_missing_copy_binding():
     assert exc.value.code == "demo_web_misconfigured"
 
 
-def test_demo_app_routes_are_fakeadmin_only():
+def _mounted_admin_family_paths() -> set[str]:
+    """The exact mounted /admin route table (the same router modules
+    ``create_demo_app`` mounts; each router's own route list carries the
+    full prefixed paths)."""
+    from slaif_gateway.api import (
+        admin,
+        admin_accounting_operations,
+        admin_accounts,
+        admin_catalog_refresh,
+        admin_compatibility,
+        admin_email_operations,
+        admin_key_batch,
+        admin_key_clone,
+        admin_operations,
+        admin_provider_route_configuration,
+        admin_record_choices,
+        admin_replay_maintenance,
+        admin_reports,
+        branding,
+    )
+
+    routers = (
+        branding.router,
+        admin_record_choices.router,
+        admin.router,
+        admin_email_operations.router,
+        admin_accounting_operations.router,
+        admin_accounts.router,
+        admin_catalog_refresh.router,
+        admin_key_clone.router,
+        admin_key_batch.router,
+        admin_provider_route_configuration.router,
+        admin_operations.router,
+        admin_compatibility.router,
+        admin_replay_maintenance.router,
+        admin_reports.router,
+    )
+    paths: set[str] = set()
+    for router in routers:
+        for route in router.routes:
+            p = getattr(route, "path", None)
+            if isinstance(p, str):
+                paths.add(p)
+    return paths
+
+
+def test_demo_app_route_table_gated_admin_only():
+    """224-e route-table enumeration: /fakeadmin plus the mounted
+    (gate-controlled) /admin family only - no /v1, provider, mail or
+    worker route exists in the demo process."""
     app = _app(FakeFacade())
-    paths = {getattr(r, "path", "") for r in app.routes}
-    for p in paths:
+    top_paths = {getattr(r, "path", "") for r in app.routes}
+    for p in top_paths:
         assert p == "" or p.startswith(
-            ("/fakeadmin", "/docs", "/openapi.json", "/redoc")
+            ("/fakeadmin", "/admin", "/docs", "/openapi.json", "/redoc")
         ), p
-    assert "/v1" not in paths
-    assert "/admin" not in paths
+    assert "/v1" not in top_paths
+    # the mounted admin family is /admin-only by construction...
+    family = _mounted_admin_family_paths()
+    assert family
+    for p in family:
+        assert p.startswith("/admin"), p
+    # ...and includes the 224-e admitted set plus the unreviewed
+    # families (mounted, gate-default-denied).
+    for p in (
+        "/admin/keys",
+        "/admin/owners",
+        "/admin/institutions",
+        "/admin/cohorts",
+        "/admin/record-choices",
+        "/admin/providers",
+        "/admin/login",
+    ):
+        assert p in family, p
 
 
 def test_disabled_env_app_refuses_without_env_vars(monkeypatch):
@@ -383,12 +498,19 @@ def test_disabled_env_app_refuses_without_env_vars(monkeypatch):
         create_demo_app(None)
 
 
-def test_v1_and_admin_404_on_demo_app():
+def test_v1_absent_admin_gated_on_demo_app():
     async def run():
         app = _app(FakeFacade())
         async with _client(app) as client:
             assert (await client.get("/v1/models")).status_code == 404
-            assert (await client.get("/admin")).status_code == 404
+            # 224-e: an admitted admin page WITHOUT a session redirects
+            # to the demo entry (never the copied tables)...
+            r = await client.get("/admin")
+            assert r.status_code == 303
+            assert r.headers["location"] == "/fakeadmin/login"
+            # ...and unreviewed admin GETs stay default-denied.
+            assert (await client.get("/admin/providers")).status_code == 404
+            assert (await client.get("/admin/usage")).status_code == 404
 
     asyncio.run(run())
 
@@ -1424,3 +1546,531 @@ def test_preview_disabled_account_bounces():
             assert made == []
 
     asyncio.run(run())
+
+
+# --- 224-e central default-deny admin gate ----------------------------------------
+
+COPY_OK = "demo_snap_a1b2c3d4e5f60718293a"
+KEY_UUID = "01234567-89ab-4cde-8f01-23456789abcd"
+OWNER_UUID = "11111111-2222-4333-8444-555555555555"
+
+
+def _session_cookie(client) -> None:
+    client.cookies.set("slaif_demo_session", "unit-token-1", domain="demo.test", path="/")
+
+
+def _demo_csrf() -> str:
+    return damg._demo_csrf_token(SECRET, "unit-token-1")
+
+
+def test_gate_admission_law_closed_sets():
+    async def run():
+        app = _app(FakeFacade())
+        async with _client(app) as client:
+            # admitted without a session -> demo entry redirect...
+            for p in (
+                "/admin",
+                "/admin/",
+                "/admin/keys",
+                "/admin/owners",
+                "/admin/institutions",
+                "/admin/cohorts",
+                "/admin/record-choices?kind=owner&q=x",
+            ):
+                r = await client.get(p)
+                assert r.status_code == 303, p
+                assert r.headers["location"] == "/fakeadmin/login"
+            # ...every other admin GET stays default-denied.
+            for p in (
+                "/admin/providers",
+                "/admin/routes",
+                "/admin/pricing",
+                "/admin/usage",
+                "/admin/operations",
+                "/admin/audit",
+                "/admin/email-deliveries",
+                "/admin/key-batch",
+                "/admin/keys/create",
+                "/admin/fx",
+            ):
+                r = await client.get(p)
+                assert r.status_code == 404, p
+
+    asyncio.run(run())
+
+
+def test_gate_detail_requires_canonical_uuid():
+    async def run():
+        app = _app(FakeFacade())
+        async with _client(app) as client:
+            # canonical lowercase 8-4-4-4-12 is admitted (redirect: no
+            # session in this test)...
+            r = await client.get(f"/admin/keys/{KEY_UUID}")
+            assert r.status_code == 303
+            # ...variant forms are NOT admitted detail components.
+            for bad in (
+                f"/admin/keys/{KEY_UUID.upper()}",
+                "/admin/keys/0123456789abcdef0123456789abcdef",
+                f"/admin/keys/urn:uuid:{KEY_UUID}",
+                f"/admin/keys/{{{KEY_UUID}}}",
+                f"/admin/keys/{KEY_UUID}/extra",
+                "/admin/keys/",
+            ):
+                r = await client.get(bad)
+                assert r.status_code == 404, bad
+
+    asyncio.run(run())
+
+
+def test_gate_zero_active_404s_every_admin_path():
+    async def run():
+        fake = FakeFacade()
+        fake.active = 0
+        app = _app(fake)
+        async with _client(app) as client:
+            _session_cookie(client)
+            for p in (
+                "/admin",
+                "/admin/keys",
+                "/admin/login",
+                "/admin/static/css/admin.css",
+                f"/admin/keys/{KEY_UUID}",
+            ):
+                r = await client.get(p)
+                assert r.status_code == 404, p
+            r = await client.post("/admin/keys/create", data={"x": "1"})
+            assert r.status_code == 404
+
+    asyncio.run(run())
+
+
+def test_gate_login_get_redirects_to_demo_entry():
+    async def run():
+        app = _app(FakeFacade())
+        async with _client(app) as client:
+            r = await client.get("/admin/login")
+            assert r.status_code == 303
+            assert r.headers["location"] == "/fakeadmin/login"
+
+    asyncio.run(run())
+
+
+def test_gate_binding_refusals_503_safe_no_leak():
+    async def run():
+        cases = [
+            dict(worker_target_db=None),                       # unbound
+            dict(request_state="pending", worker_target_db=COPY_OK),  # unverified
+            dict(request_state="verified_unpublished", worker_target_db="demo_snap_ZZ"),  # bad name
+            dict(
+                request_state="verified_unpublished",
+                worker_target_db=COPY_OK,
+                expires_delta=timedelta(seconds=-1),           # expired
+            ),
+        ]
+        for knobs in cases:
+            fake = FakeFacade()
+            state = knobs.pop("request_state", "verified_unpublished")
+            fake.request_state = state
+            fake.worker_target_db = knobs.get("worker_target_db")
+            if "expires_delta" in knobs:
+                fake.expires_delta = knobs["expires_delta"]
+            app = _app(fake)
+            async with _client(app) as client:
+                _session_cookie(client)
+                r = await client.get("/admin/keys")
+                assert r.status_code == 503
+                assert r.headers.get("cache-control") == "no-store"
+                assert "not available right now" in r.text
+                # no DSN fragment, copy name or credential may leak.
+                assert "unit-test-copy-password" not in r.text
+                assert COPY_OK not in r.text
+
+    asyncio.run(run())
+
+
+class _FakeConn:
+    def __init__(self, db: str, ro: str) -> None:
+        self.db = db
+        self.ro = ro
+
+    async def scalar(self, query: str):
+        if "current_database" in query:
+            return self.db
+        return self.ro
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *a):
+        return False
+
+
+class _FakeEngine:
+    def __init__(self, db: str, ro: str) -> None:
+        self.db = db
+        self.ro = ro
+        self.disposed = 0
+
+    def connect(self):
+        return _FakeConn(self.db, self.ro)
+
+    async def dispose(self):
+        self.disposed += 1
+
+
+def _preflight_case(monkeypatch, db: str, ro: str):
+    engine = _FakeEngine(db, ro)
+    monkeypatch.setattr(damg, "create_async_engine", lambda *a, **k: engine)
+    return engine
+
+
+def test_gate_preflight_wrong_db_disposes_and_refuses(monkeypatch):
+    async def run():
+        fake = FakeFacade()
+        fake.request_state = "verified_unpublished"
+        fake.worker_target_db = COPY_OK
+        engine = _preflight_case(monkeypatch, "some_other_db", "on")
+        app = _app(fake)
+        async with _client(app) as client:
+            _session_cookie(client)
+            r = await client.get("/admin/keys")
+            assert r.status_code == 503
+            assert engine.disposed == 1
+
+    asyncio.run(run())
+
+
+def test_gate_preflight_read_only_off_disposes_and_refuses(monkeypatch):
+    async def run():
+        fake = FakeFacade()
+        fake.request_state = "verified_unpublished"
+        fake.worker_target_db = COPY_OK
+        engine = _preflight_case(monkeypatch, COPY_OK, "off")
+        app = _app(fake)
+        async with _client(app) as client:
+            _session_cookie(client)
+            r = await client.get("/admin/keys")
+            assert r.status_code == 503
+            assert engine.disposed == 1
+
+    asyncio.run(run())
+
+
+def test_gate_unsafe_known_no_session_404_body_not_parsed():
+    async def run():
+        app = _app(FakeFacade())
+        async with _client(app) as client:
+            # a lying oversized body with a garbage content type: if the
+            # gate parsed it we would see 413/400, not the default denial.
+            r = await client.post(
+                "/admin/keys/create",
+                content=b"x" * (fa.FORM_BODY_MAX_BYTES + 1024),
+                headers={"content-type": "text/garbage"},
+            )
+            assert r.status_code == 404
+
+    asyncio.run(run())
+
+
+def test_gate_unsafe_operational_families_quiet_noop():
+    async def run():
+        app = _app(FakeFacade())
+        async with _client(app) as client:
+            _session_cookie(client)
+            paths = [
+                "/admin/keys/create",
+                f"/admin/keys/{KEY_UUID}/revoke",
+                f"/admin/keys/{KEY_UUID}/rotate",
+                f"/admin/keys/{KEY_UUID}/reset-usage",
+                "/admin/owners/new",
+                f"/admin/owners/{OWNER_UUID}/edit",
+                "/admin/institutions/new",
+                "/admin/cohorts/new",
+            ]
+            for p in paths:
+                # 200 KB body + garbage content type: a 204 proves the
+                # body was never parsed before the cut.
+                r = await client.post(
+                    p,
+                    content=b"x" * 200_000,
+                    headers={"content-type": "text/garbage"},
+                )
+                assert r.status_code == 204, p
+                assert r.content == b""
+
+    asyncio.run(run())
+
+
+def test_gate_unsafe_unknown_path_uniform_law():
+    async def run():
+        app = _app(FakeFacade())
+        async with _client(app) as client:
+            # unknown + no session: default denied...
+            r = await client.post("/admin/definitely-not-a-route", data={"x": "1"})
+            assert r.status_code == 404
+            # unknown + authenticated session: the SAME uniform quiet
+            # no-content cut (nothing is dispatched, no fake success).
+            _session_cookie(client)
+            r = await client.post("/admin/definitely-not-a-route", data={"x": "1"})
+            assert r.status_code == 204
+            assert r.content == b""
+
+    asyncio.run(run())
+
+
+def test_gate_no_unsafe_handler_dispatch_across_mounted_table():
+    """Representative mounted /admin routes (GET-only and POST-only)
+    plus an unknown path: every authenticated unsafe method is a 204
+    cut. A dispatched GET-only route would answer 405 and a dispatched
+    POST handler would fail without the request-local sessionmaker
+    (500) - neither outcome can occur behind the gate."""
+    async def run():
+        app = _app(FakeFacade())
+        async with _client(app) as client:
+            _session_cookie(client)
+            cases = [
+                # (path, unsafe method) - path is a mounted route
+                ("/admin/owners", "POST"),
+                ("/admin/keys", "DELETE"),
+                ("/admin/record-choices?kind=owner", "PATCH"),
+                ("/admin/keys/create", "POST"),
+                f"/admin/keys/{KEY_UUID}/revoke",
+                f"/admin/keys/{KEY_UUID}/rotate",
+                "/admin/owners/new",
+                "/admin/institutions/new",
+                "/admin/cohorts/new",
+                "/admin/definitely-not-a-route",
+            ]
+            for case in cases:
+                p, method = case if isinstance(case, tuple) else (case, "POST")
+                r = await client.request(
+                    method,
+                    p,
+                    content=b"y" * 10_000,
+                    headers={"content-type": "text/garbage"},
+                )
+                assert r.status_code == 204, (p, method)
+                assert r.content == b""
+
+    asyncio.run(run())
+
+
+def test_gate_logout_confirmed_revocation_303_clears_all_cookies():
+    async def run():
+        fake = FakeFacade()
+        app = _app(fake)
+        async with _client(app) as client:
+            _session_cookie(client)
+            r = await client.post(
+                "/admin/logout", data={"csrf_token": _demo_csrf()}
+            )
+            assert r.status_code == 303
+            assert r.headers["location"] == "/fakeadmin/login"
+            assert r.headers.get("cache-control") == "no-store"
+            cleared = {
+                h.split("=", 1)[0]
+                for h in r.headers.get_list("set-cookie")
+            }
+            assert {"slaif_demo_session", "slaif_demo_pending", "slaif_demo_csrf"} <= cleared
+            assert fake.revoked == 1
+
+    asyncio.run(run())
+
+
+def test_gate_logout_revoke_runtime_error_refuses_no_false_success():
+    async def run():
+        class Boom(FakeFacade):
+            async def revoke_session(self, *, account_id, token):
+                raise RuntimeError("driver exploded: host=secret detail")
+
+        fake = Boom()
+        app = _app(fake)
+        async with _client(app) as client:
+            _session_cookie(client)
+            r = await client.post(
+                "/admin/logout", data={"csrf_token": _demo_csrf()}
+            )
+            assert r.status_code == 400
+            assert "location" not in r.headers
+            # the session cookie must NOT be cleared (retry allowed).
+            cleared = {h.split("=", 1)[0] for h in r.headers.get_list("set-cookie")}
+            assert "slaif_demo_session" not in cleared
+            # and the session still validates (no false sign-out).
+            r2 = await client.get("/admin")
+            assert r2.status_code == 503  # bound copy readable path reached
+
+    asyncio.run(run())
+
+
+def test_gate_logout_unconfirmed_cas_refuses():
+    async def run():
+        class Unconfirmed(FakeFacade):
+            async def revoke_session(self, *, account_id, token):
+                now = datetime.now(timezone.utc)
+                return DemoWebSessionProjection(
+                    id=uuid.uuid4(),
+                    account_id=ACC,
+                    credential_generation=1,
+                    request_id=REQ,
+                    created_at=now,
+                    expires_at=now + timedelta(minutes=5),
+                    revoked_at=None,  # the CAS did not confirm
+                )
+
+        fake = Unconfirmed()
+        app = _app(fake)
+        async with _client(app) as client:
+            _session_cookie(client)
+            r = await client.post(
+                "/admin/logout", data={"csrf_token": _demo_csrf()}
+            )
+            assert r.status_code == 400
+            assert "location" not in r.headers
+            cleared = {h.split("=", 1)[0] for h in r.headers.get_list("set-cookie")}
+            assert "slaif_demo_session" not in cleared
+
+    asyncio.run(run())
+
+
+def test_gate_logout_csrf_mismatch_refuses_without_revocation():
+    async def run():
+        fake = FakeFacade()
+        app = _app(fake)
+        async with _client(app) as client:
+            _session_cookie(client)
+            r = await client.post("/admin/logout", data={"csrf_token": "wrong" * 10})
+            assert r.status_code == 400
+            assert "location" not in r.headers
+            assert fake.revoked == 0
+            # missing field is refused the same way.
+            r2 = await client.post("/admin/logout", data={})
+            assert r2.status_code == 400
+            assert fake.revoked == 0
+
+    asyncio.run(run())
+
+
+def test_gate_static_passthrough_serves_bundled_assets():
+    async def run():
+        app = _app(FakeFacade())
+        async with _client(app) as client:
+            r = await client.get("/admin/static/css/admin.css")
+            assert r.status_code == 200
+            assert "admin" in r.text
+
+    asyncio.run(run())
+
+
+def _fake_admin_request(path: str = "/admin/keys", demo_admin: object | None = None):
+    """Minimal real starlette Request for template render regression."""
+    from types import SimpleNamespace
+
+    from starlette.requests import Request
+
+    from slaif_gateway.demo_web import _demo_display_settings
+
+    scope = {
+        "type": "http",
+        "method": "GET",
+        "path": path,
+        "root_path": "",
+        "headers": [],
+        "query_string": b"",
+        "server": ("demo.test", 443),
+        "client": ("127.0.0.1", 1234),
+        "app": SimpleNamespace(state=SimpleNamespace(settings=_demo_display_settings())),
+    }
+    if demo_admin is not None:
+        scope["state"] = {"demo_admin": demo_admin}
+    return Request(scope)
+
+
+def test_base_template_normal_render_unchanged_and_demo_variant():
+    """Render regression for the 224-e base.html edits through the REAL
+    Starlette TemplateResponse path (context processors active):
+    normal mode keeps the full nav and no demo banner; demo mode shows
+    the persistent read-only banner and ONLY the five usable nav
+    sections (asserted on visible nav/banner, not whitespace)."""
+    from slaif_gateway.api.admin import templates as admin_templates
+
+    async def _render(request):
+        response = admin_templates.TemplateResponse(
+            request,
+            "base.html",
+            {
+                "admin": object(),  # base.html only tests truthiness
+                "admin_status_message": None,
+            },
+        )
+        return response.body.decode("utf-8")
+
+    async def run():
+        # Normal mode: the FULL nav is present (every section link,
+        # including the ones the demo host hides) and no demo banner.
+        out_normal = await _render(_fake_admin_request("/admin/keys"))
+        for href in (
+            "/admin",
+            "/admin/keys",
+            "/admin/owners",
+            "/admin/institutions",
+            "/admin/cohorts",
+            "/admin/providers",
+            "/admin/routes",
+            "/admin/pricing",
+            "/admin/templates",
+            "/admin/fx",
+            "/admin/usage",
+            "/admin/operations",
+            "/admin/audit",
+            "/admin/email-deliveries",
+            "/admin/openai-assisted",
+        ):
+            assert f'href="{href}"' in out_normal
+        assert "Demo preview:" not in out_normal
+
+        # Demo mode: persistent read-only banner + ONLY the five usable
+        # nav sections.
+        demo_req = _fake_admin_request("/admin/keys", demo_admin=object())
+        out_demo = await _render(demo_req)
+        assert "Demo preview:" in out_demo
+        assert "Read-only" in out_demo
+        assert "incomplete" in out_demo
+        for href in (
+            "/admin",
+            "/admin/keys",
+            "/admin/owners",
+            "/admin/institutions",
+            "/admin/cohorts",
+        ):
+            assert f'href="{href}"' in out_demo
+        for href in (
+            "/admin/providers",
+            "/admin/routes",
+            "/admin/pricing",
+            "/admin/templates",
+            "/admin/fx",
+            "/admin/usage",
+            "/admin/operations",
+            "/admin/audit",
+            "/admin/email-deliveries",
+            "/admin/openai-assisted",
+        ):
+            assert f'href="{href}"' not in out_demo
+
+    asyncio.run(run())
+
+
+def test_demo_display_settings_ignores_ambient_env(monkeypatch):
+    from slaif_gateway.demo_web import _demo_display_settings
+
+    monkeypatch.setenv("DATABASE_URL", "postgresql+asyncpg://amb:amb@amb/ambient")
+    monkeypatch.setenv("SLAIF_BRANDING_DIR", "/etc/ambient-branding")
+    monkeypatch.setenv("GATEWAY_KEY_PREFIX", "sk-ambient-")
+    s = _demo_display_settings()
+    assert s.DATABASE_URL is None
+    assert s.SLAIF_BRANDING_DIR == ""
+    assert s.ENABLE_ADMIN_DASHBOARD is True
+    app = _app(FakeFacade())
+    assert app.state.settings is not None
+    assert app.state.settings.DATABASE_URL is None
+    assert app.state.demo_mode is True

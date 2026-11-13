@@ -14,8 +14,8 @@
     </div>
     <div class="header-actions">
       <a class="button-link secondary" href="/admin/keys">All keys</a>
-      <a class="button-link secondary" href="/admin/operations/compatibility/key/{{ key.id }}">Codex compatibility</a>
-      <a class="button-link secondary" href="/admin/operations/replay-maintenance/key/{{ key.id }}">Replay maintenance</a>
+{% if not demo_admin %}      <a class="button-link secondary" href="/admin/operations/compatibility/key/{{ key.id }}">Codex compatibility</a>{% endif %}
+{% if not demo_admin %}      <a class="button-link secondary" href="/admin/operations/replay-maintenance/key/{{ key.id }}">Replay maintenance</a>{% endif %}
       <form method="post" action="/admin/logout">
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         <button type="submit" class="signout">Sign out</button>
@@ -26,8 +26,9 @@
   {% if key.key_purpose == "trusted_calibration" %}
   <section class="action-panel" aria-labelledby="trusted-calibration-warning-heading">
     <h2 id="trusted-calibration-warning-heading">Trusted Calibration Key</h2>
-    <p class="warning-text">This key is for trusted organizer/admin discovery only. It is a real gateway key with normal authentication, routing, PostgreSQL accounting, usage ledger, and safe usage profiling, but it is not a participant key.</p>
-    <p><a class="button-link" href="/admin/keys/{{ key.id }}/calibration">Preview calibration policy</a></p>
+{% if demo_admin %}    <p class="warning-text">Demo snapshot: this key cannot authenticate requests or route traffic, and no demo action changes live accounting; displayed usage is historical snapshot data.</p>
+{% else %}    <p class="warning-text">This key is for trusted organizer/admin discovery only. It is a real gateway key with normal authentication, routing, PostgreSQL accounting, usage ledger, and safe usage profiling, but it is not a participant key.</p>{% endif %}
+{% if not demo_admin %}    <p><a class="button-link" href="/admin/keys/{{ key.id }}/calibration">Preview calibration policy</a></p>{% endif %}
   </section>
   {% endif %}
 
@@ -47,11 +48,11 @@
   <section class="action-panel" aria-labelledby="key-clone-heading">
     <h2 id="key-clone-heading">Clone This Key</h2>
     <p class="muted">Clone an eligible standard key into a NEW independent key for an existing owner or cohort: the configured policy is copied, never usage, remaining balance, replay rows, or holds. The clone starts with UNUSED configured limits - the source's remaining balance is not transferred.</p>
-    <p>
+{% if not demo_admin %}    <p>
       <a class="button-link" href="/admin/keys/{{ key.id }}/clone">Clone this key</a>
       ·
       <a class="button-link secondary" href="/admin/keys/{{ key.id }}/clone/receipts">Check a clone outcome</a>
-    </p>
+    </p>{% endif %}
   </section>
 
   <div class="detail-grid">
@@ -292,7 +293,7 @@
     <h2 id="key-advanced-configuration-heading">Advanced Configuration (versioned JSON)</h2>
     <p class="muted">The SAME strict version-1 document the CLI uses: download the key's current allowlisted projection, edit it, and apply a presence-aware partial update. Omitted fields preserve the current state; explicit <code>null</code> and <code>[]</code> keep their distinct meanings. Key material, status, owner/cohort, validity, usage counters, and reservations are never touched. Bound client-module changes remain blocked and must use the reviewed migration path, not this editor.</p>
     <p>
-      <a class="button-link secondary" href="/admin/keys/{{ key.id }}/configuration.json">Download current configuration (JSON)</a>
+{% if not demo_admin %}      <a class="button-link secondary" href="/admin/keys/{{ key.id }}/configuration.json">Download current configuration (JSON)</a>{% endif %}
     </p>
     <form method="post" action="/admin/keys/{{ key.id }}/configuration">
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
