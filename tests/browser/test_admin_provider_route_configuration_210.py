@@ -214,6 +214,10 @@ async def _seed_route_data(database_url: str) -> dict[str, Any]:
                         {"chat_completions": {"chat_text": True}},
                     )
                 )
+                r_codex = await routes.create_model_route(
+                    **(_route_args("codex", {"responses": {"text": True, "json_mode": True}})
+                       | {"endpoint": "/v1/responses"})
+                )
                 return {
                     "suffix": suffix,
                     "admin_id": str(admin.id),
@@ -223,6 +227,7 @@ async def _seed_route_data(database_url: str) -> dict[str, Any]:
                     "r_keyboard": str(r_keyboard.id),
                     "r_full": str(r_full.id),
                     "r_nojs": str(r_nojs.id),
+                    "r_codex": str(r_codex.id),
                 }
     finally:
         await engine.dispose()
@@ -1206,3 +1211,40 @@ def test_help_associations_resolve(chromium, route_env) -> None:
         # This plan HAS changed fields, so the empty-state row must NOT be
         # present (the authored empty row exists only for zero-change plans).
         assert review_help["empty_state_row"] is False
+
+
+def test_route_codex_checkbox_enable_and_restore(chromium, route_env) -> None:
+    env = route_env
+    route_id = env["r_codex"]
+    before = _route_snapshot(env["database_url"], (route_id,))[route_id]
+    provider_before = _provider_state(env["database_url"], env["provider_id"])
+    with chromium.new_context(base_url=env["base_url"], viewport={"width": 1440, "height": 1000}) as context:
+        page = context.new_page()
+        _login(page, env)
+        page.goto(f"/admin/routes/{route_id}/edit")
+        form = f'form[action="/admin/routes/{route_id}/edit"]'
+        assert not page.get_by_label("Enable Codex", exact=True).is_checked()
+        page.get_by_label("Enable Codex", exact=True).check()
+        page.get_by_label("Context ceiling (tokens)").fill("131072")
+        page.get_by_label("Default output allowance (tokens)").fill("4096")
+        page.get_by_label("Maximum output allowance (tokens)").fill("8192")
+        page.locator(f"{form} input[name='reason']").fill("Enable Codex from GUI")
+        page.locator(f"{form} button[type='submit']").click()
+        page.wait_for_url(re.compile(rf"/admin/routes/{route_id}\?message="))
+        assert "Codex access" in _flat(page)
+        after = _route_snapshot(env["database_url"], (route_id,))[route_id]
+        assert after["capabilities"]["responses"]["codex_client_tools"] is True
+        assert after["capabilities"]["responses"]["json_mode"] is True
+        assert "codex_profile" not in after["capabilities"]
+        page.goto(f"/admin/routes/{route_id}/edit")
+        assert page.get_by_label("Enable Codex", exact=True).is_checked()
+        page.get_by_label("Enable Codex", exact=True).uncheck()
+        page.locator(f"{form} input[name='reason']").fill("Disable Codex from GUI")
+        page.locator(f"{form} button[type='submit']").click()
+        page.wait_for_url(re.compile(rf"/admin/routes/{route_id}\?message="))
+    assert _route_snapshot(env["database_url"], (route_id,))[route_id] == before
+    assert _provider_state(env["database_url"], env["provider_id"]) == provider_before
+    assert _entity_audits(env["database_url"], "model_route", route_id, env["admin_id"]) == [
+        {"action": "model_route_updated", "note": "Enable Codex from GUI"},
+        {"action": "model_route_updated", "note": "Disable Codex from GUI"},
+    ]

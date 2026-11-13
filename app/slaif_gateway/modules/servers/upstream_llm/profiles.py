@@ -29,7 +29,7 @@ class LLMProfile(BaseModel):
     profile_id: str = Field(pattern=r"^[a-z0-9][a-z0-9-]{0,63}$")
     revision: int = Field(ge=1, le=2147483647)
     instruction_placement: Literal["preserve", "leading_system_developer"]
-    tool_encoding: Literal["preserve", "native_vllm"]
+    tool_encoding: Literal["preserve", "native_vllm", "function_tools"]
 
     @field_validator("revision", mode="before")
     @classmethod
@@ -100,6 +100,11 @@ def load_profiles(filename: str = "") -> Mapping[str, LLMProfile]:
 _active_profiles = load_profiles()
 
 
+def active_profiles() -> Mapping[str, LLMProfile]:
+    """Return the immutable process snapshot used for route resolution."""
+    return _active_profiles
+
+
 def bootstrap_upstream_llm_profiles(filename: str = "") -> Mapping[str, LLMProfile]:
     """Bind one process snapshot at HTTP/CLI startup, before route selection."""
     global _active_profiles
@@ -144,7 +149,8 @@ def validate_route(capabilities: object) -> LLMProfile:
     try:
         contract = parse_local_coding_route_contract(capabilities)
         if contract is None or (
-            profile.tool_encoding == "native_vllm" and contract.identity_mode != "static"
+            profile.tool_encoding in {"native_vllm", "function_tools"}
+            and contract.identity_mode != "static"
         ):
             raise ValueError("Profile requires compatible transport")
     except (TypeError, ValueError) as exc:

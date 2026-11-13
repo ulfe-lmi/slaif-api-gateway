@@ -125,7 +125,7 @@ def test_passthrough_is_identity_on_supported_input_shapes(value):
 
 def test_shipped_profiles_are_strict_immutable_and_data_selected():
     profiles = load_profiles()
-    assert len(profiles) == 3
+    assert len(profiles) == 4
     assert profiles["native-vllm-v1"].instruction_placement == "preserve"
     assert profiles["native-vllm-v1"].tool_encoding == "native_vllm"
     with pytest.raises(TypeError):
@@ -256,8 +256,8 @@ def test_read_only_cli_prints_exact_selectors_and_rejects_bad_file(tmp_path):
     result = runner.invoke(cli, ["upstream-llm", "profiles"])
     assert result.exit_code == 0
     rows = json.loads(result.stdout)["profiles"]
-    assert len(rows) == 3
-    assert rows[1]["route_selector"] == capabilities()["upstream_llm"]
+    assert len(rows) == 4
+    assert next(row for row in rows if row["route_selector"]["profile"] == "llama-cpp-qwen-v1")["route_selector"] == capabilities()["upstream_llm"]
     path = tmp_path / "bad.json"
     path.write_text("invalid")
     result = runner.invoke(cli, ["upstream-llm", "profiles", "--file", str(path)])
@@ -394,3 +394,65 @@ async def test_other_endpoints_are_denied_without_http():
             base_url="http://backend.test/v1", api_key=SERVICE_SECRET, http_client=client)
         with pytest.raises(UnsupportedProviderEndpointError):
             await adapter.forward_response(replace(request(), endpoint="/v1/responses/compact"))
+
+
+@pytest.mark.parametrize("field", ["OPENAI_UPSTREAM_API_KEY", "OPENROUTER_API_KEY"])
+def test_configured_adapter_accepts_selected_provider_key_but_local_contract_does_not(field):
+    settings = Settings(**{field: SERVICE_SECRET})
+    ConfiguredUpstreamLLMAdapter(settings, route_capabilities=capabilities(), api_key=SERVICE_SECRET)
+    with pytest.raises(ProviderConfigurationError):
+        LocalCodingAdapter(settings, route_capabilities=capabilities(), api_key=SERVICE_SECRET)
+
+
+@pytest.mark.parametrize("field", ["TOKEN_HMAC_SECRET_V1", "ADMIN_SESSION_SECRET"])
+def test_configured_adapter_still_refuses_gateway_security_secret_reuse(field):
+    settings = Settings(**{field: SERVICE_SECRET})
+    with pytest.raises(ProviderConfigurationError):
+        ConfiguredUpstreamLLMAdapter(settings, route_capabilities=capabilities(), api_key=SERVICE_SECRET)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("custom", [False, True])
+async def test_generic_functions_profile_roundtrips_namespaces_custom_tools_and_replayed_calls(custom):
+    seen = []
+    kind = "custom" if custom else "function"
+    tool = {"type": kind, "name": "inspect", "description": "Inspect a local file."}
+    if not custom:
+        tool["parameters"] = {"type": "object", "properties": {}}
+    body = history()
+    body["tools"] = [{"type": "namespace", "name": "functions", "tools": [tool]}]
+    body["input"] += [
+        {"type": "custom_tool_call" if custom else "function_call", "id": "fc_old",
+         "call_id": "call_old", "namespace": "functions", "name": "inspect",
+         **({"input": "read file"} if custom else {"arguments": "{}"})},
+        {"type": "custom_tool_call_output" if custom else "function_call_output",
+         "call_id": "call_old", "output": "previous result"},
+    ]
+
+    async def handler(req):
+        wire = json.loads(req.content)
+        seen.append(wire)
+        declaration = wire["tools"][0]
+        name = declaration["name"]
+        assert declaration["type"] == "function"
+        assert len(name) <= 64 and name.replace("_", "").isalnum()
+        assert "functions.inspect" in declaration["description"]
+        assert wire["input"][-2]["name"] == name
+        assert wire["input"][-1]["type"] == "function_call_output"
+        args = json.dumps({"input": "new raw text"}) if custom else "{}"
+        return httpx.Response(200, json={"id": "resp_new", "output": [
+            {"type": "function_call", "id": "fc_new", "call_id": "call_new",
+             "name": name, "arguments": args, "status": "completed"}],
+            "usage": {"input_tokens": 20, "output_tokens": 3, "total_tokens": 23}})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        adapter = ConfiguredUpstreamLLMAdapter(Settings(),
+            route_capabilities=capabilities("responses-functions-v1"),
+            base_url="http://backend.test/v1", api_key=SERVICE_SECRET, http_client=client)
+        result = await adapter.forward_response(request(body))
+    item = result.json_body["output"][0]
+    assert item["type"] == ("custom_tool_call" if custom else "function_call")
+    assert item["namespace"] == "functions" and item["name"] == "inspect"
+    assert item["call_id"] == "call_new"
+    assert item["input" if custom else "arguments"] == ("new raw text" if custom else "{}")
+    assert seen[0]["model"] == "backend-model"

@@ -1115,7 +1115,8 @@ async def test_b2_capture_usd_without_fx_rate_fails_closed() -> None:
 
 
 @pytest.mark.asyncio
-async def test_b2_capture_estimate_responses_codex_strict_complete_metadata() -> None:
+@pytest.mark.parametrize("gui_access", [False, True])
+async def test_b2_capture_estimate_responses_codex_strict_complete_metadata(gui_access) -> None:
     codex_row = _pricing_rule(
         currency="USD",
         input_price_per_1m=B2_USD_INPUT,
@@ -1146,8 +1147,16 @@ async def test_b2_capture_estimate_responses_codex_strict_complete_metadata() ->
     capture = await service.capture_pricing_and_fx(
         provider="openai", model="gpt-4.1-mini", endpoint="/v1/chat/completions"
     )
+    from dataclasses import replace
+    from slaif_gateway.services.codex_route_access import CODEX_GATES
+    route = _route()
+    if gui_access:
+        route = replace(route, capabilities={
+            "responses": dict.fromkeys(CODEX_GATES, True),
+            "codex_access": {"version": 1, "pricing": "existing", "previous": {}},
+        })
     estimate = await service.estimate_chat_completion_cost(
-        route=_route(),
+        route=route,
         policy=codex_policy,
         endpoint="/v1/chat/completions",
         pricing=capture.pricing,
@@ -1397,3 +1406,32 @@ async def test_b2_capture_hosted_responses_external_tool_pricing_facts_reused() 
     assert estimate.fx_rate_id == fx.id
     assert repo.pair_calls == 1
     assert repo.single_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_gui_codex_access_uses_imported_tariff_without_rewriting_pricing():
+    from dataclasses import replace
+    from slaif_gateway.services.codex_route_access import configure_codex_access
+
+    row = _pricing_rule(currency="EUR", cached_input_price_per_1m=None)
+    original = deepcopy(vars(row))
+    service = _b2_service(B2PricingRulesRepository([row], []))
+    capture = await service.capture_pricing_and_fx(
+        provider="openai", model="gpt-4.1-mini", endpoint="/v1/chat/completions")
+    caps = configure_codex_access({}, enabled=True, endpoint="/v1/responses", match_type="exact",
+        supports_streaming=True, context="131072", default_output="4096", max_output="8192",
+        absolute_input=1050000, absolute_output=128000)
+    route = replace(_route(), capabilities=caps)
+    policy = ResponsesPolicyResult(effective_body={"model": "model", "input": "hello"},
+        requested_output_tokens=2000, effective_output_tokens=2000,
+        injected_default_output_tokens=False, estimated_input_tokens=1000, codex_limits_applied=True)
+    estimate = await service.estimate_chat_completion_cost(
+        route=route, policy=policy, pricing=capture.pricing, fx=capture.fx)
+    assert estimate.codex_accounting is False
+    assert estimate.pricing_rule_id == row.id
+    assert estimate.estimated_total_cost_eur == Decimal("0.00135")
+    assert vars(row) == original
+    # The marker does not make absent or disabled pricing acceptable.
+    with pytest.raises(PricingRuleNotFoundError):
+        await _b2_service(B2PricingRulesRepository([], [])).capture_pricing_and_fx(provider="openai", model="gpt-4.1-mini",
+                                               endpoint="/v1/responses")

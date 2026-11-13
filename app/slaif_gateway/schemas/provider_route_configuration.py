@@ -44,6 +44,7 @@ from slaif_gateway.services.audio_route_capabilities import (
     AUDIO_ENDPOINT_CAPABILITIES_KEY,
     KNOWN_AUDIO_ENDPOINT_CAPABILITIES,
 )
+from slaif_gateway.services.codex_route_access import CODEX_ACCESS_KEY, validate_codex_access
 from slaif_gateway.services.chat_completion_route_capabilities import (
     CHAT_COMPLETIONS_CAPABILITIES_KEY,
     KNOWN_CHAT_COMPLETION_CAPABILITIES,
@@ -102,6 +103,7 @@ KNOWN_CAPABILITY_GROUPS = frozenset(
         CHAT_COMPLETIONS_CAPABILITIES_KEY,
         RESPONSES_CAPABILITIES_KEY,
         CODEX_LIMITS_KEY,
+        CODEX_ACCESS_KEY,
         CODEX_COMPACTION_COMPATIBLE_ROUTE_IDS_KEY,
         "media_input_estimation",
         PROFILE_KEY,
@@ -333,6 +335,11 @@ def validate_capabilities_document(
                 CODEX_LIMITS_KEY,
                 "Value must set all three positive integer limits in order."
             )
+    if CODEX_ACCESS_KEY in capabilities:
+        try:
+            validate_codex_access(capabilities[CODEX_ACCESS_KEY])
+        except ValueError:
+            _fail(CODEX_ACCESS_KEY, "Codex access settings are invalid.")
     if CODEX_COMPACTION_COMPATIBLE_ROUTE_IDS_KEY in capabilities:
         _validate_codex_compaction_group(capabilities[CODEX_COMPACTION_COMPATIBLE_ROUTE_IDS_KEY])
     if "media_input_estimation" in capabilities:

@@ -19,12 +19,13 @@ support in the llama.cpp Responses parser.
 
 ## Packaged profiles
 
-All three presets use the same adapter class. Profile names are data identities;
+All four presets use the same adapter class. Profile names are data identities;
 they never select Python classes or provider names.
 
 | Profile | Instruction placement | Tool encoding |
 | --- | --- | --- |
 | `responses-passthrough-v1` | Preserve | Preserve |
+| `responses-functions-v1` | Preserve | Portable function-tool codec |
 | `llama-cpp-qwen-v1` | Leading system/developer block | Preserve |
 | `native-vllm-v1` | Preserve | Existing bidirectional native-vLLM codec |
 
@@ -103,9 +104,9 @@ it is not implicitly merged. For example:
 ```
 
 Only `preserve` / `leading_system_developer` instruction placement and
-`preserve` / `native_vllm` tool encoding are accepted. The modes are independent;
+`preserve` / `native_vllm` / `function_tools` tool encoding are accepted. The modes are independent;
 other combinations use the same reviewed primitives without a code change.
-Native-vLLM tool encoding requires static bearer identity. Preserved tool
+Both function-tool codecs require static bearer identity. Preserved tool
 encoding also supports the existing signed Local Coding contract.
 Normalization precedes serialization and signing, so signatures cover the
 exact transformed bytes.
@@ -159,3 +160,55 @@ does not establish model quality or complete client qualification.
 Rollback restores prior audited route capabilities and, for external data,
 the prior file and worker snapshot. Do not delete replay references, rotate
 keys, reset quotas, or alter client catalogs as part of adapter rollback.
+
+## Enable Codex from the dashboard
+
+Open **Model routes → the Responses route → Edit → Codex**. Check **Enable
+Codex**, review the context ceiling and default/maximum output allowances,
+enter an audit reason, and save. The route must be exact `/v1/responses`,
+streaming must be enabled, and a newly selected generic transport requires an
+`openai_compatible` provider. Catalog context/output hints are prefilled within
+the installation ceilings. Missing context must be entered explicitly.
+
+The control configures the four Codex gates and the required text/local-tool
+capabilities together. For routes without an existing coding transport it
+selects the data-only `responses-functions-v1` preset with static bearer
+transport. Namespace and custom tools are translated to standard Responses
+function tools using the existing bounded bidirectional codec. Portable names
+are at most 64 ASCII letters/digits/underscores, include a stable digest, and
+retain the original tool identity in the description. Replay and response
+mapping preserve the original namespaces, call IDs and custom string inputs.
+The codec's existing bounds and event validation still apply. It executes no
+tools. Existing configured coding/vLLM transports are preserved.
+
+The generic adapter may use the selected provider's cloud credential; the
+legacy Local Coding adapter retains its stricter separation from cloud keys.
+Gateway HMAC, session, encryption, and signed-identity secrets remain forbidden
+as provider credentials in both adapters.
+
+Pricing rows and keys are unchanged. The explicit access contract selects the
+existing route tariff. If advanced `codex_accounting` pricing is declared,
+strict cache-write/reasoning/long-context accounting remains required. For an
+ordinary imported tariff, existing standard accounting applies: absent cached
+and reasoning rates fall back to input and output rates respectively; no
+cache-write or context premium is invented. Admission reserves the highest
+known input/cached and output/reasoning rate. Tiered tariffs must be configured
+as advanced pricing rather than assumed flat. Missing/disabled pricing still
+fails normally. This generic transport uses local tariff accounting; it does
+not acquire native-provider reported-cost authority.
+
+`codex_access` stores version 1, `pricing: "existing"`, and a bounded-shape
+`previous` snapshot of the flags, limits and transport settings managed by this
+control. Unchecking restores those settings, preserving unrelated capabilities.
+Existing manually configured Codex routes without a snapshot simply have their
+four gates disabled. Legacy form submissions without the new control preserve
+their existing metadata. Every save retains normal authentication, CSRF and
+route audit requirements. No schema migration or key rotation is needed.
+
+**Codex access** is shown separately from fixture-based **Codex qualification**
+on route list/detail pages. An operator enabling access asserts upstream
+compatibility; the checkbox creates no fixture, qualification or live-test
+claim. The existing key must independently allow the model, provider,
+`/v1/responses`, the Codex client module and its gates. Hosted tools, storage,
+images, remote compaction and additional endpoints are not enabled by this
+control. Keep client context and compaction settings conservative.

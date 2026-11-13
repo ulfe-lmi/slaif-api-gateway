@@ -76,7 +76,7 @@
   <div class="table-wrap" tabindex="0" role="region" aria-label="Model routes">
     <table data-sortable data-ordinal-offset="{{ page.offset }}">
       <thead>
-        <tr><th data-ordinal scope="col" aria-label="Row number">#</th><th>Requested model</th><th>Provider</th><th>Upstream model</th><th>Codex qualification</th><th data-sort-type="number">Priority</th><th>Status</th></tr>
+        <tr><th data-ordinal scope="col" aria-label="Row number">#</th><th>Requested model</th><th>Provider</th><th>Upstream model</th><th>Codex access</th><th>Codex qualification</th><th data-sort-type="number">Priority</th><th>Status</th></tr>
       </thead>
       <tbody>
         {% for route in routes %}
@@ -85,6 +85,7 @@
           <td><a href="/admin/routes/{{ route.id }}">{{ route.requested_model }}</a><div class="muted small">{{ route.match_type }} / {{ route.endpoint }}</div></td>
           <td>{{ route.provider }}</td>
           <td>{{ route.upstream_model }}</td>
+          <td>{{ 'Enabled' if route.capabilities | codex_enabled else 'Disabled' }}</td>
           <td>
             <div>{{ route.codex_qualification_badge }}</div>
             {% if route.codex_qualification_reason_codes %}
@@ -103,7 +104,7 @@
           </td>
         </tr>
         {% else %}
-        <tr data-no-sort><td colspan="7" class="empty-state">No model routes found.</td></tr>
+        <tr data-no-sort><td colspan="8" class="empty-state">No model routes found.</td></tr>
         {% endfor %}
       </tbody>
     </table>
