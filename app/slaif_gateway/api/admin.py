@@ -351,6 +351,13 @@ _DEMO_NAV_SECTIONS: tuple[tuple[str, str], ...] = (
     ("/admin/owners", "Owners"),
     ("/admin/institutions", "Institutions"),
     ("/admin/cohorts", "Cohorts"),
+    ("/admin/providers", "Providers"),
+    ("/admin/pricing", "Pricing"),
+    ("/admin/templates", "Templates"),
+    ("/admin/fx", "FX"),
+    ("/admin/usage", "Usage"),
+    ("/admin/audit", "Audit"),
+    ("/admin/email-deliveries", "Email"),
 )
 
 
@@ -380,6 +387,14 @@ templates = Jinja2Templates(
     directory=str(Path(__file__).resolve().parents[1] / "web" / "templates"),
     context_processors=[_branding_context, _demo_admin_context],
 )
+
+
+def _rows_shown_label(count: int) -> str:
+    """224-f: fixed singular/plural list-count label (GUI polish only)."""
+    return f"{count} row shown" if count == 1 else f"{count} rows shown"
+
+
+templates.env.globals["rows_shown_label"] = _rows_shown_label
 
 
 def _utc_datetime_local(value: datetime | str | None) -> str:

@@ -13,9 +13,9 @@
       <p class="muted">Local FX metadata for EUR conversion, quota reservation, and accounting.</p>
     </div>
     <div class="header-actions">
-      <a class="button-link" href="/admin/fx/import">Preview FX import</a>
+{% if not demo_admin %}      <a class="button-link" href="/admin/fx/import">Preview FX import</a>
       <a class="button-link" href="/admin/fx/new">Create FX rate</a>
-      <a class="button-link secondary" href="/admin/reports/fx-lookup">Effective rate lookup</a>
+      <a class="button-link secondary" href="/admin/reports/fx-lookup">Effective rate lookup</a>{% endif %}
       <a class="button-link secondary" href="/admin">Dashboard</a>
       <form method="post" action="/admin/logout">
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
@@ -45,7 +45,7 @@
   <p class="field-help" id="fx-help-filter">Filters narrow the FX rate list: within one field, rows match any selected value (OR); different fields combine with AND. Blank fields are unrestricted. Active is the rate's availability state for conversion lookups.</p>
 
   <div class="table-toolbar" aria-label="FX rates rows">
-    <span class="rows-shown" id="fx-rows-shown">{{ fx_rates|length }} rows shown</span>
+    <span class="rows-shown" id="fx-rows-shown">{{ rows_shown_label(fx_rates|length) }}</span>
     <label>Rows
       <select name="limit" id="fx-limit" form="fx-filter" aria-describedby="fx-help-rows">
         {% for n in (10, 25, 50, 100, 200) %}

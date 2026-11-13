@@ -13,7 +13,7 @@
       <p class="muted">Local provider metadata. Provider key values are never stored or displayed.</p>
     </div>
     <div class="header-actions">
-      <a class="button-link" href="/admin/providers/new">Create provider config</a>
+{% if not demo_admin %}      <a class="button-link" href="/admin/providers/new">Create provider config</a>{% endif %}
       <a class="button-link secondary" href="/admin">Dashboard</a>
       <form method="post" action="/admin/logout">
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
@@ -37,7 +37,7 @@
   <p class="field-help" id="providers-help-filter">Filters narrow the provider config list: within one field, rows match any selected value (OR); different fields combine with AND. Blank fields are unrestricted. Enabled is the provider's routing eligibility.</p>
 
   <div class="table-toolbar" aria-label="Provider configs rows">
-    <span class="rows-shown" id="providers-rows-shown">{{ providers|length }} rows shown</span>
+    <span class="rows-shown" id="providers-rows-shown">{{ rows_shown_label(providers|length) }}</span>
     <label>Rows
       <select name="limit" id="providers-limit" form="providers-filter" aria-describedby="providers-help-rows">
         {% for n in (10, 25, 50, 100, 200) %}

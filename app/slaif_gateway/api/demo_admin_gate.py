@@ -69,7 +69,13 @@ from slaif_gateway.demo_web import (
 )
 from slaif_gateway.services.admin_session_service import AdminSessionContext
 
-# --- the fixed 224-e admission law (closed sets, never input-derived) ------------
+# --- the fixed 224-e/224-f admission law (closed sets, never input-derived) ---
+# 224-f adds the seven reviewed DATABASE-BACKED list/detail families
+# (handlers verified: copied-public repositories only, no file/process/
+# network reads). Everything else - routes, operations, catalog,
+# compatibility, OpenAI-assisted, accounting-recovery, replay
+# maintenance, accounts, key batch/clone, form GETs, exports and
+# /admin/branding - stays default-denied.
 
 ADMITTED_DASHBOARD_PATHS = ("/admin", "/admin/")
 ADMITTED_LIST_PATHS = (
@@ -77,12 +83,26 @@ ADMITTED_LIST_PATHS = (
     "/admin/owners",
     "/admin/institutions",
     "/admin/cohorts",
+    "/admin/providers",
+    "/admin/pricing",
+    "/admin/templates",
+    "/admin/fx",
+    "/admin/usage",
+    "/admin/audit",
+    "/admin/email-deliveries",
 )
 ADMITTED_DETAIL_PREFIXES = (
     "/admin/keys/",
     "/admin/owners/",
     "/admin/institutions/",
     "/admin/cohorts/",
+    "/admin/providers/",
+    "/admin/pricing/",
+    "/admin/templates/",
+    "/admin/fx/",
+    "/admin/usage/",
+    "/admin/audit/",
+    "/admin/email-deliveries/",
 )
 ADMITTED_RECORD_CHOICES_PATH = "/admin/record-choices"
 #: Canonical lowercase 8-4-4-4-12 UUID syntax ONLY (the exact form the
@@ -318,6 +338,33 @@ class DemoAdminGate:
             await self._app(scope, receive, send)
             return
 
+        # 224-f browser-cache privacy boundary: EVERY dynamic /admin
+        # response this process emits - admitted pages, JSON, error
+        # pages, the zero-account 404, no-ops and redirects - carries
+        # exactly one ``Cache-Control: private, no-store`` header so a
+        # signed-out browser cannot be served a normally-cached
+        # snapshot of identity-masked data. This prevents NORMAL HTTP
+        # caching and every dynamic reload rechecks authorization; no
+        # absolute browser history/BFCache erasure is claimed. The
+        # revisioned static passthrough below deliberately uses the
+        # ORIGINAL send and keeps its own cache policy; the ordinary
+        # app never runs behind this wrapper. Any pre-existing
+        # cache-control header is replaced, never duplicated.
+        original_send = send
+
+        async def _send(message: dict) -> None:
+            if message.get("type") == "http.response.start":
+                kept = [
+                    (k, v)
+                    for k, v in message.get("headers", [])
+                    if k.lower() != b"cache-control"
+                ]
+                kept.append((b"cache-control", b"private, no-store"))
+                message = {**message, "headers": kept}
+            await original_send(message)
+
+        send = _send
+
         # Zero active fake-admin accounts: EVERY /admin path is 404 (the
         # count failure is fail-closed too: a facade error is not a count).
         try:
@@ -328,9 +375,10 @@ class DemoAdminGate:
             await _respond_404(send)
             return
 
-        # Bundled static assets are the separately allowed passthrough.
+        # Bundled static assets: the separately allowed passthrough on
+        # the ORIGINAL send (their revisioned cache policy is kept).
         if path == ADMIN_STATIC_PREFIX or path.startswith(ADMIN_STATIC_PREFIX + "/"):
-            await self._app(scope, receive, send)
+            await self._app(scope, receive, original_send)
             return
 
         method = str(scope.get("method") or "").upper()

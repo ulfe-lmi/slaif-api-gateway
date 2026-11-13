@@ -30,8 +30,9 @@ read-only transactions):
 - no copy DB name, DSN fragment or credential ever appears in page
   output;
 - a second real-Chromium smoke (loopback uvicorn) proves packaged CSS/JS
-  loading, demo banner/nav, table sorting and CSRF sign-out on a real
-  verified copy, saving one screenshot to a run-owned /tmp path.
+  loading, demo banner/nav, table sorting, the 224-f no-store guard and
+  CSRF sign-out on a real verified copy, saving one screenshot to a
+  run-owned /tmp path.
 
 No provider HTTP, no email, no normal admin auth. Synthetic data only.
 """
@@ -80,6 +81,12 @@ _COUNT_TABLES = (
     "admin_users",
     "audit_log",
     "usage_ledger",
+    # 224-f: the seven newly admitted database-backed families.
+    "provider_configs",
+    "pricing_rules",
+    "key_templates",
+    "fx_rates",
+    "email_deliveries",
 )
 
 
@@ -138,7 +145,7 @@ def _copy_counts(san: _Env, copy_db: str) -> dict[str, int]:
 
 def _rows_shown(html: str) -> int:
     """Institution rows rendered by the list page (rows-shown counter)."""
-    m = re.search(r'id="institutions-rows-shown">(\d+) rows shown', html)
+    m = re.search(r'id="institutions-rows-shown">(\d+) rows? shown', html)
     assert m is not None
     return int(m.group(1))
 
@@ -311,12 +318,19 @@ def test_e2e_admin_gate_two_sessions_distinct_copies(
 
                     def _assert_demo_page(name: str, r) -> None:
                         assert r.status_code == 200, (name, r.status_code)
+                        # 224-f: every admitted dynamic response is no-store.
+                        assert r.headers["cache-control"] == "private, no-store"
                         assert "Demo preview:" in r.text
                         assert "Read-only" in r.text
-                        # restricted nav: usable sections only.
+                        # restricted nav: admitted sections only
+                        # (224-f: the seven new families are in; the
+                        # still-gated families are out).
                         assert 'href="/admin/keys"' in r.text
-                        assert 'href="/admin/providers"' not in r.text
-                        assert 'href="/admin/usage"' not in r.text
+                        assert 'href="/admin/providers"' in r.text
+                        assert 'href="/admin/usage"' in r.text
+                        assert 'href="/admin/routes"' not in r.text
+                        assert 'href="/admin/operations"' not in r.text
+                        assert 'href="/admin/openai-assisted"' not in r.text
                         # canaries: no copy name, DSN fragment or credential.
                         assert target_a not in r.text
                         assert target_b not in r.text
@@ -328,6 +342,13 @@ def test_e2e_admin_gate_two_sessions_distinct_copies(
                         owner_id = await _first_id(san_env, target, "owners")
                         inst_id = await _first_id(san_env, target, "institutions")
                         cohort_id = await _first_id(san_env, target, "cohorts")
+                        provider_id = await _first_id(san_env, target, "provider_configs")
+                        pricing_id = await _first_id(san_env, target, "pricing_rules")
+                        template_id = await _first_id(san_env, target, "key_templates")
+                        fx_id = await _first_id(san_env, target, "fx_rates")
+                        usage_id = await _first_id(san_env, target, "usage_ledger")
+                        audit_id = await _first_id(san_env, target, "audit_log")
+                        email_id = await _first_id(san_env, target, "email_deliveries")
                         r = await client.get("/admin")
                         _assert_demo_page("dashboard", r)
                         for list_path in (
@@ -335,6 +356,14 @@ def test_e2e_admin_gate_two_sessions_distinct_copies(
                             "/admin/owners",
                             "/admin/institutions",
                             "/admin/cohorts",
+                            # 224-f: the seven new database-backed families.
+                            "/admin/providers",
+                            "/admin/pricing",
+                            "/admin/templates",
+                            "/admin/fx",
+                            "/admin/usage",
+                            "/admin/audit",
+                            "/admin/email-deliveries",
                         ):
                             r = await client.get(list_path)
                             _assert_demo_page(list_path, r)
@@ -347,13 +376,48 @@ def test_e2e_admin_gate_two_sessions_distinct_copies(
                         _assert_demo_page("institution detail", r)
                         r = await client.get(f"/admin/cohorts/{cohort_id}")
                         _assert_demo_page("cohort detail", r)
+                        r = await client.get(f"/admin/providers/{provider_id}")
+                        _assert_demo_page("provider detail", r)
+                        r = await client.get(f"/admin/pricing/{pricing_id}")
+                        _assert_demo_page("pricing detail", r)
+                        r = await client.get(f"/admin/templates/{template_id}")
+                        _assert_demo_page("template detail", r)
+                        r = await client.get(f"/admin/fx/{fx_id}")
+                        _assert_demo_page("fx detail", r)
+                        r = await client.get(f"/admin/usage/{usage_id}")
+                        _assert_demo_page("usage detail", r)
+                        r = await client.get(f"/admin/audit/{audit_id}")
+                        _assert_demo_page("audit detail", r)
+                        r = await client.get(f"/admin/email-deliveries/{email_id}")
+                        _assert_demo_page("email delivery detail", r)
                         for kind in ("institution", "owner"):
                             r = await client.get(f"/admin/record-choices?kind={kind}&q=")
                             assert r.status_code == 200
+                            assert r.headers["cache-control"] == "private, no-store"
                             body = r.json()
                             assert isinstance(body, dict)
                             assert body["kind"] == kind
                             assert isinstance(body["choices"], list)
+                        # 224-f: real usage quantities survive the copy -
+                        # the rendered row count equals the copied table's
+                        # count (within the page limit), and the label is
+                        # grammatically singular/plural.
+                        r = await client.get("/admin/usage")
+                        m = re.search(r'id="usage-rows-shown">([\d]+) rows? shown', r.text)
+                        assert m is not None
+                        shown = int(m.group(1))
+                        db_usage = await _count_table(san_env, target, "usage_ledger")
+                        assert shown == min(db_usage, 50), (shown, db_usage)
+                        assert re.search(r">1 row shown<", r.text) is not None or shown != 1
+                        # still-gated families stay 404 behind the same session
+                        for gated in (
+                            "/admin/routes",
+                            "/admin/operations",
+                            "/admin/reports",
+                            f"/admin/providers/{provider_id}/edit",
+                            f"/admin/usage/{usage_id}/export.csv",
+                        ):
+                            assert (await client.get(gated)).status_code == 404, gated
 
                     # --- distinct copies: B renders exactly one more -----
                     # institution row than A (the 222-fictionalized marker).
@@ -482,6 +546,18 @@ def _run_uvicorn_server(app, port: int) -> Iterator[None]:
         thread.join(timeout=15)
 
 
+async def _count_table(san: _Env, copy_db: str, table: str) -> int:
+    s = await asyncpg.connect(**_conn_kwargs(
+        san.target["host"], san.target["port"],
+        san.target["user"], san.target["password"], copy_db,
+    ))
+    try:
+        row = await s.fetchrow(f"SELECT count(*)::int AS c FROM public.{table}")
+        return row["c"]
+    finally:
+        await s.close()
+
+
 async def _inst_names(san: _Env, copy_db: str) -> list[str]:
     s = await asyncpg.connect(**_conn_kwargs(
         san.target["host"], san.target["port"],
@@ -528,14 +604,23 @@ def test_browser_smoke_demo_copy_pages(
                 {"name": "slaif_demo_session", "value": token, "url": f"{base_url}/"},
             ])
 
-            static: list[tuple[str, int]] = []
+            all_responses: list[tuple[str, int, str | None]] = []
 
             def _track(response: object) -> None:
-                url = str(getattr(response, "url", ""))
-                if "/admin/static/" in url:
-                    static.append((url, int(response.status)))  # type: ignore[attr-defined]
+                all_responses.append(
+                    (
+                        str(getattr(response, "url", "")),
+                        int(response.status),  # type: ignore[attr-defined]
+                        response.headers.get(  # type: ignore[attr-defined]
+                            "cache-control"
+                        ),
+                    )
+                )
 
             page.on("response", _track)
+
+            def _static() -> list[tuple[str, int]]:
+                return [(u, st) for u, st, _ in all_responses if "/admin/static/" in u]
 
             # --- /admin/keys: banner, restricted nav, packaged CSS/JS ----
             response = page.goto("/admin/keys")
@@ -543,12 +628,18 @@ def test_browser_smoke_demo_copy_pages(
             content = page.content()
             assert "Demo preview:" in content
             assert 'href="/admin/keys"' in content
-            assert 'href="/admin/providers"' not in content
-            assert 'href="/admin/usage"' not in content
+            assert 'href="/admin/providers"' in content
+            assert 'href="/admin/usage"' in content
+            assert 'href="/admin/routes"' not in content
+            assert 'href="/admin/operations"' not in content
             nav_labels = [a.inner_text() for a in page.locator("nav a").all()]
-            assert nav_labels == ["Dashboard", "Keys", "Owners", "Institutions", "Cohorts"]
+            assert nav_labels == [
+                "Dashboard", "Keys", "Owners", "Institutions", "Cohorts",
+                "Providers", "Pricing", "Templates", "FX", "Usage",
+                "Audit", "Email",
+            ]
             # asset_url appends ?v=<digest>: judge by URL path, not suffix.
-            static_by_path = {urlparse(u).path: st for u, st in static}
+            static_by_path = {urlparse(u).path: st for u, st in _static()}
             assert any(pth.endswith(".css") and st == 200 for pth, st in static_by_path.items())
             assert any(pth.endswith(".js") and st == 200 for pth, st in static_by_path.items())
             assert all(st < 400 for st in static_by_path.values())
@@ -581,10 +672,43 @@ def test_browser_smoke_demo_copy_pages(
             if len(set(names)) >= 2:
                 assert asc != desc
 
+            # --- 224-f: one new DB-backed section (providers) -----------
+            r = page.goto("/admin/providers")
+            assert r is not None and r.status == 200
+            assert r.headers["cache-control"] == "private, no-store"
+            content = page.content()
+            assert "Demo preview:" in content
+            # the still-gated create form link is hidden in demo mode
+            assert 'href="/admin/providers/new"' not in content
+            prov_sel = "table[data-sortable] tbody tr td:nth-child(2) a"
+            prov_initial = [a.inner_text() for a in page.locator(prov_sel).all()]
+            prov_link = page.locator('th:has-text("Provider") a[href="#ts-sort"]')
+            prov_link.wait_for(state="attached")
+            prov_link.click()
+            page.wait_for_timeout(100)
+            prov_asc = [a.inner_text() for a in page.locator(prov_sel).all()]
+            assert set(prov_asc) == set(prov_initial)
+            assert page.locator('th[aria-sort="ascending"]').count() >= 1
+
             # --- CSRF-verified sign-out back to the demo entry ------------
             page.click("button.signout")
             page.wait_for_url("**/fakeadmin/login")
             cookie_names = {c["name"] for c in context.cookies()}
             assert "slaif_demo_session" not in cookie_names
+
+            # --- 224-f: after sign-out a fresh reload of the same dynamic
+            # page re-checks authorization (the no-store chain means a
+            # normally-cached snapshot is not served). History/BFCache
+            # erasure is NOT claimed.
+            page.goto("/admin/providers")
+            page.wait_for_url("**/fakeadmin/login")
+            bounced = [
+                (u, st, cc)
+                for (u, st, cc) in all_responses
+                if "/admin/providers" in u and st in (303, 404, 503)
+            ]
+            assert bounced, "no reauthorization response after sign-out"
+            assert all(cc == "private, no-store" for _, _, cc in bounced)
+            assert "Demo preview:" not in page.content()
         finally:
             browser.close()

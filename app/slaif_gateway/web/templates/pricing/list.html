@@ -13,9 +13,9 @@
       <p class="muted">Local pricing metadata for future quota reservation and accounting. FX rows are managed separately.</p>
     </div>
     <div class="header-actions">
-      <a class="button-link" href="/admin/pricing/new">Create pricing rule</a>
+{% if not demo_admin %}      <a class="button-link" href="/admin/pricing/new">Create pricing rule</a>
       <a class="button-link secondary" href="/admin/pricing/import">Import pricing</a>
-      <a class="button-link secondary" href="/admin/reports/pricing-disable">Review pricing disable</a>
+      <a class="button-link secondary" href="/admin/reports/pricing-disable">Review pricing disable</a>{% endif %}
       <a class="button-link secondary" href="/admin">Dashboard</a>
       <form method="post" action="/admin/logout">
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
@@ -54,7 +54,7 @@
   <p class="field-help" id="pricing-help-filter">Filters narrow the pricing rule list: within one field, rows match any selected value (OR); different fields combine with AND. Blank fields are unrestricted. Enabled and Active narrow the rule's lifecycle state.</p>
 
   <div class="table-toolbar" aria-label="Pricing rules rows">
-    <span class="rows-shown" id="pricing-rows-shown">{{ pricing_rules|length }} rows shown</span>
+    <span class="rows-shown" id="pricing-rows-shown">{{ rows_shown_label(pricing_rules|length) }}</span>
     <label>Rows
       <select name="limit" id="pricing-limit" form="pricing-filter" aria-describedby="pricing-help-rows">
         {% for n in (10, 25, 50, 100, 200) %}

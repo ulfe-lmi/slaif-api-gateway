@@ -1291,8 +1291,11 @@ is warranted. Normal-mode markup renders as before.
 
 * Focused unit: closed admission sets (admitted vs 404 vs 303),
   canonical-UUID-only detail law, zero-account 404, pre-handler
-  unsafe 204 (oversized garbage body never parsed; no unsafe
-  handler dispatches across the whole mounted route table),
+  unsafe 204 (oversized garbage body never parsed; the unit
+  evidence samples representative unsafe paths - ten cases across
+  the mounted families - and the uniform `DemoAdminGate.__call__`
+  branch structurally cuts ALL authenticated unsafe `/admin`
+  methods before inner-app dispatch),
   CSRF-verified logout with no false success (failed/unconfirmed
   revocation keeps the session live), binding refusals with no
   DSN/copy-name leak, preflight wrong-database and
@@ -1313,3 +1316,95 @@ is warranted. Normal-mode markup renders as before.
   logout, saving one screenshot to a run-owned `/tmp` path (never
   committed; its path is printed to local test stdout only and never
   appears in ordinary application logs).
+
+## Demo db-backed admin sections (objective 224-f)
+
+224-f expands the 224-e request-local read gate to the seven
+remaining straightforward DATABASE-BACKED list/detail sections and
+closes a demonstrated browser-cache privacy gap. Each of the 14
+candidate handlers was source-reviewed before admission: all read
+ONLY copied `public` rows through the existing repositories and the
+request-local sessionmaker, with no file, process or network read
+(no exceptions; nothing was kept gated for that reason). The demo
+is still an INCOMPLETE preview - forms, file-backed displays and
+process/network panels stay gated - and still NOT usable for
+company demonstrations.
+
+### Admission (224-f)
+
+Admitted in addition to the 224-e core set:
+
+* `/admin/providers`, `/admin/providers/{uuid}`
+* `/admin/pricing`, `/admin/pricing/{uuid}`
+* `/admin/templates`, `/admin/templates/{uuid}`
+* `/admin/fx`, `/admin/fx/{uuid}`
+* `/admin/usage`, `/admin/usage/{uuid}`
+* `/admin/audit`, `/admin/audit/{uuid}`
+* `/admin/email-deliveries`, `/admin/email-deliveries/{uuid}`
+
+The same closed law applies: one canonical lowercase `8-4-4-4-12`
+UUID per detail path, live session/account/generation/request fence,
+exact `verified_unpublished` unexpired `demo_snap_<20hex>` binding,
+request-local SELECT-only/read-only sessionmaker with disposal.
+Action GETs (edit/discover/import/reports/forms/exports), the
+routes, operations, catalog, compatibility, OpenAI-assisted,
+accounting-recovery, replay-maintenance, accounts, key batch/clone
+and branding sections stay 404; their POSTs remain the
+authenticated pre-handler 204 no-op and sign-out remains the sole
+CSRF-checked mutation exception.
+
+The demo nav now lists exactly the admitted sections (twelve);
+in demo mode the new pages hide links to still-gated forms,
+edit/export, network-discovery and file-backed routes with plain
+text or honest read-only treatment (no orphan separators or empty
+action panels), while visible operational POST buttons remain
+quiet no-ops. A small shared template helper fixes the
+singular/plural list-count label (`1 row shown` / `N rows shown`)
+on all admitted list pages - a GUI polish with no data or
+accounting change.
+
+### Browser-cache privacy boundary (224-f)
+
+224-e left successful admitted HTML and JSON responses WITHOUT
+`Cache-Control: no-store`; a browser could retain the
+identity-masked snapshot after sign-out. 224-f installs ONE
+central, demo-only, ASGI response-start guard: EVERY dynamic
+`/admin` response the demo process emits - admitted pages, JSON,
+error pages, the zero-account 404, no-ops and redirects - carries
+exactly one `Cache-Control: private, no-store` header (existing
+cache-control headers are replaced, never duplicated). The
+revisioned `/admin/static` passthrough deliberately bypasses the
+guard and keeps its own cache policy, and the ordinary app never
+runs behind it. Scope honestly: this prevents NORMAL HTTP
+caching, and every dynamic reload rechecks authorization; no
+absolute browser history or back-forward-cache erasure is claimed.
+
+### Still-gated families (for 224-g/h)
+
+Routes, operations (diagnostics etc.), catalog refresh,
+compatibility, OpenAI-assisted, accounting-recovery, replay
+maintenance, admin accounts, key batch, key clone, all unreviewed
+form GETs, exports/downloads, `/admin/branding`, and the
+file-backed display panels.
+
+### Evidence (224-f)
+
+* Focused unit: the closed admission sets and near-misses for all
+  eleven detail families (extra suffix, action GET, variant UUIDs),
+  the no-store guard on successful HTML, JSON, handler-level
+  errors, the zero-account 404, login redirect and no-op, the
+  static passthrough retaining its cache policy, and the expanded
+  demo nav.
+* Owned PostgreSQL 16: two concurrent sessions still read two
+  DISTINCT copies; EVERY new list/detail renders from its own copy
+  behind the real SELECT-only reader role; REAL identity/secret
+  canaries are absent from the pages while the 222-fictionalized
+  identities are the ones shown; the rendered usage ROW COUNT
+  equals the copied `usage_ledger` table count (the token/cost
+  quantities themselves are 222's verified masking contract, not
+  re-verified by this round); source and both copies remain
+  count-invariant; direct unsafe methods still 204 before
+  handler/body parse. A real Chromium smoke covers the new nav,
+  one new section's sorting, the no-store header, and that a
+  fresh reload after sign-out rechecks authorization instead of
+  serving a cached snapshot.

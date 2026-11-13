@@ -1872,7 +1872,11 @@ read-only, disposed after each response). Every other admin path
 stays default-denied, every unsafe method is a pre-handler no-op,
 and the demo remains an incomplete core preview rather than the
 full admin GUI (see `docs/demo-admin.md`, Demo admin core read
-gate).
+gate). 224-f adds no settings either: it admits seven more
+database-backed list/detail sections under the same reader
+connection and makes every dynamic `/admin` response
+`Cache-Control: private, no-store` (revisioned `/admin/static`
+assets keep their own cache policy).
 
 ## Production Notes
 

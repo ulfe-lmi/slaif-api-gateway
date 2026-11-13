@@ -509,8 +509,12 @@ def test_v1_absent_admin_gated_on_demo_app():
             assert r.status_code == 303
             assert r.headers["location"] == "/fakeadmin/login"
             # ...and unreviewed admin GETs stay default-denied.
-            assert (await client.get("/admin/providers")).status_code == 404
-            assert (await client.get("/admin/usage")).status_code == 404
+            assert (await client.get("/admin/routes")).status_code == 404
+            assert (await client.get("/admin/openai-assisted")).status_code == 404
+            # 224-f: the new DB-backed families are admitted too
+            # (no session -> demo entry redirect).
+            assert (await client.get("/admin/providers")).status_code == 303
+            assert (await client.get("/admin/usage")).status_code == 303
 
     asyncio.run(run())
 
@@ -1575,6 +1579,14 @@ def test_gate_admission_law_closed_sets():
                 "/admin/owners",
                 "/admin/institutions",
                 "/admin/cohorts",
+                # 224-f: the seven reviewed database-backed families.
+                "/admin/providers",
+                "/admin/pricing",
+                "/admin/templates",
+                "/admin/fx",
+                "/admin/usage",
+                "/admin/audit",
+                "/admin/email-deliveries",
                 "/admin/record-choices?kind=owner&q=x",
             ):
                 r = await client.get(p)
@@ -1582,16 +1594,13 @@ def test_gate_admission_law_closed_sets():
                 assert r.headers["location"] == "/fakeadmin/login"
             # ...every other admin GET stays default-denied.
             for p in (
-                "/admin/providers",
                 "/admin/routes",
-                "/admin/pricing",
-                "/admin/usage",
                 "/admin/operations",
-                "/admin/audit",
-                "/admin/email-deliveries",
                 "/admin/key-batch",
                 "/admin/keys/create",
-                "/admin/fx",
+                "/admin/branding",
+                "/admin/reports",
+                "/admin/accounts",
             ):
                 r = await client.get(p)
                 assert r.status_code == 404, p
@@ -1605,8 +1614,21 @@ def test_gate_detail_requires_canonical_uuid():
         async with _client(app) as client:
             # canonical lowercase 8-4-4-4-12 is admitted (redirect: no
             # session in this test)...
-            r = await client.get(f"/admin/keys/{KEY_UUID}")
-            assert r.status_code == 303
+            for prefix in (
+                "keys",
+                "owners",
+                "institutions",
+                "cohorts",
+                "providers",
+                "pricing",
+                "templates",
+                "fx",
+                "usage",
+                "audit",
+                "email-deliveries",
+            ):
+                r = await client.get(f"/admin/{prefix}/{KEY_UUID}")
+                assert r.status_code == 303, prefix
             # ...variant forms are NOT admitted detail components.
             for bad in (
                 f"/admin/keys/{KEY_UUID.upper()}",
@@ -1615,6 +1637,9 @@ def test_gate_detail_requires_canonical_uuid():
                 f"/admin/keys/{{{KEY_UUID}}}",
                 f"/admin/keys/{KEY_UUID}/extra",
                 "/admin/keys/",
+                f"/admin/providers/{KEY_UUID}/edit",
+                f"/admin/fx/{KEY_UUID}/discover",
+                f"/admin/usage/{KEY_UUID}x",
             ):
                 r = await client.get(bad)
                 assert r.status_code == 404, bad
@@ -1679,7 +1704,7 @@ def test_gate_binding_refusals_503_safe_no_leak():
                 _session_cookie(client)
                 r = await client.get("/admin/keys")
                 assert r.status_code == 503
-                assert r.headers.get("cache-control") == "no-store"
+                assert r.headers.get("cache-control") == "private, no-store"
                 assert "not available right now" in r.text
                 # no DSN fragment, copy name or credential may leak.
                 assert "unit-test-copy-password" not in r.text
@@ -1694,7 +1719,10 @@ class _FakeConn:
         self.ro = ro
 
     async def scalar(self, query: str):
-        if "current_database" in query:
+        # The gate passes sqlalchemy text-clauses: normalize to str
+        # (a raw `in` test on a clause is not a string search).
+        text = str(query)
+        if "current_database" in text:
             return self.db
         return self.ro
 
@@ -1866,7 +1894,7 @@ def test_gate_logout_confirmed_revocation_303_clears_all_cookies():
             )
             assert r.status_code == 303
             assert r.headers["location"] == "/fakeadmin/login"
-            assert r.headers.get("cache-control") == "no-store"
+            assert r.headers.get("cache-control") == "private, no-store"
             cleared = {
                 h.split("=", 1)[0]
                 for h in r.headers.get_list("set-cookie")
@@ -1950,6 +1978,80 @@ def test_gate_logout_csrf_mismatch_refuses_without_revocation():
     asyncio.run(run())
 
 
+def _minimal_gate_app(fake: FakeFacade):
+    """Minimal ASGI app behind DemoAdminGate: proves the central
+    no-store guard on admitted dynamic responses (success / JSON /
+    error / no-op) without needing a copy database."""
+    from fastapi import FastAPI
+    from fastapi.responses import HTMLResponse, Response
+
+    app = FastAPI()
+
+    @app.get("/admin/usage", response_class=HTMLResponse)
+    async def _usage_page():
+        return "<html><body>usage</body></html>"
+
+    @app.get("/admin/record-choices")
+    async def _choices():
+        return {"kind": "owner", "choices": []}
+
+    @app.get("/admin/templates/{template_id}")
+    async def _template_detail(template_id: str):
+        return Response(status_code=404, content="not found")
+
+    app.state.demo_config = _config()
+    app.state.demo_facade = fake
+    return damg.DemoAdminGate(app)
+
+
+def test_gate_no_store_on_admitted_success_json_and_error(monkeypatch):
+    async def run():
+        fake = FakeFacade()
+        fake.request_state = "verified_unpublished"
+        fake.worker_target_db = COPY_OK
+        _preflight_case(monkeypatch, COPY_OK, "on")
+        app = _minimal_gate_app(fake)
+        async with _client(app) as client:
+            _session_cookie(client)
+            # successful admitted HTML page
+            r = await client.get("/admin/usage")
+            assert r.status_code == 200
+            assert r.headers["cache-control"] == "private, no-store"
+            # admitted JSON lookup
+            r = await client.get("/admin/record-choices?kind=owner&q=")
+            assert r.status_code == 200
+            assert r.headers["cache-control"] == "private, no-store"
+            # handler-level error page for a canonical detail id
+            r = await client.get(f"/admin/templates/{KEY_UUID}")
+            assert r.status_code == 404
+            assert r.headers["cache-control"] == "private, no-store"
+            # the uniform unsafe no-op carries the same guard (harmless
+            # on a 204)
+            r = await client.post("/admin/usage/export.csv", data={"x": "1"})
+            assert r.status_code == 204
+            assert r.headers.get("cache-control") == "private, no-store"
+
+    asyncio.run(run())
+
+
+def test_gate_no_store_on_zero_account_404_and_login_redirect():
+    async def run():
+        fake = FakeFacade()
+        fake.active = 0
+        app = _app(fake)
+        async with _client(app) as client:
+            r = await client.get("/admin/usage")
+            assert r.status_code == 404
+            assert r.headers["cache-control"] == "private, no-store"
+        app = _app(FakeFacade())
+        async with _client(app) as client:
+            r = await client.get("/admin/login")
+            assert r.status_code == 303
+            assert r.headers["cache-control"] == "private, no-store"
+
+    asyncio.run(run())
+
+
 def test_gate_static_passthrough_serves_bundled_assets():
     async def run():
         app = _app(FakeFacade())
@@ -1957,6 +2059,9 @@ def test_gate_static_passthrough_serves_bundled_assets():
             r = await client.get("/admin/static/css/admin.css")
             assert r.status_code == 200
             assert "admin" in r.text
+            # 224-f: the revisioned static passthrough bypasses the
+            # dynamic no-store guard (its own cache policy is kept).
+            assert r.headers.get("cache-control") is None
 
     asyncio.run(run())
 
@@ -2028,8 +2133,8 @@ def test_base_template_normal_render_unchanged_and_demo_variant():
             assert f'href="{href}"' in out_normal
         assert "Demo preview:" not in out_normal
 
-        # Demo mode: persistent read-only banner + ONLY the five usable
-        # nav sections.
+        # Demo mode: persistent read-only banner + ONLY the sections
+        # admitted through 224-f (twelve).
         demo_req = _fake_admin_request("/admin/keys", demo_admin=object())
         out_demo = await _render(demo_req)
         assert "Demo preview:" in out_demo
@@ -2041,18 +2146,18 @@ def test_base_template_normal_render_unchanged_and_demo_variant():
             "/admin/owners",
             "/admin/institutions",
             "/admin/cohorts",
-        ):
-            assert f'href="{href}"' in out_demo
-        for href in (
             "/admin/providers",
-            "/admin/routes",
             "/admin/pricing",
             "/admin/templates",
             "/admin/fx",
             "/admin/usage",
-            "/admin/operations",
             "/admin/audit",
             "/admin/email-deliveries",
+        ):
+            assert f'href="{href}"' in out_demo
+        for href in (
+            "/admin/routes",
+            "/admin/operations",
             "/admin/openai-assisted",
         ):
             assert f'href="{href}"' not in out_demo

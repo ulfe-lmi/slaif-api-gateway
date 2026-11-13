@@ -11,9 +11,9 @@
       <p class="muted">Provider metadata. The dashboard shows environment variable names, never provider key values.</p>
     </div>
     <div class="header-actions">
-      <a class="button-link" href="/admin/providers/{{ provider.id }}/edit">Edit</a>
+{% if not demo_admin %}      <a class="button-link" href="/admin/providers/{{ provider.id }}/edit">Edit</a>{% endif %}
       {% if provider.kind == "openai_compatible" and provider.provider not in ["openai", "openrouter"] %}
-      <a class="button-link" href="/admin/providers/{{ provider.id }}/discover">Discover models</a>
+{% if not demo_admin %}      <a class="button-link" href="/admin/providers/{{ provider.id }}/discover">Discover models</a>{% endif %}
       {% endif %}
       <a class="button-link secondary" href="/admin/providers">Provider configs</a>
       <form method="post" action="/admin/logout">
@@ -99,7 +99,7 @@
         {% for route in provider.route_summaries %}
         <tr>
           <td class="row-ordinal">{{ loop.index }}</td>
-          <td><a href="/admin/routes/{{ route.id }}">{{ route.requested_model }}</a><div class="muted small">{{ route.match_type }} / {{ route.endpoint }}</div></td>
+          <td>{% if demo_admin %}{{ route.requested_model }}{% else %}<a href="/admin/routes/{{ route.id }}">{{ route.requested_model }}</a>{% endif %}<div class="muted small">{{ route.match_type }} / {{ route.endpoint }}</div></td>
           <td>{{ route.upstream_model }}</td>
           <td data-sort-value="{{ route.priority }}">{{ route.priority | num }}</td>
           <td>{{ "enabled" if route.enabled else "disabled" }} / {{ "visible" if route.visible_in_models else "hidden" }}</td>
