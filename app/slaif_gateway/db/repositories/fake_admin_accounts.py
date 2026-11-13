@@ -13,6 +13,8 @@ from __future__ import annotations
 
 import uuid
 
+from dataclasses import dataclass
+
 from sqlalchemy import Select, select
 from sqlalchemy import func
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -25,11 +27,63 @@ EVENT_ACTION_DISABLED = "disabled"
 EVENT_ACTION_PASSWORD_RESET = "password_reset"
 
 
+@dataclass(frozen=True, slots=True)
+class FakeAdminAccountFacts:
+    """Worker-safe account projection: id + generation facts ONLY.
+
+    Never contains username, password_hash, or timestamps. This is the
+    only account view the demo web-control service and the worker role
+    may use; credential-hash verification is a separate 224-b web-app
+    concern under the web role's own column-scoped SELECT.
+    """
+
+    id: uuid.UUID
+    is_enabled: bool
+    credential_generation: int
+
+
 class FakeAdminAccountsRepository:
     """Encapsulates access for the demo-control fake-admin tables."""
 
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
+
+    async def get_account_facts(
+        self, account_id: uuid.UUID, *, read_lock: bool = True
+    ) -> FakeAdminAccountFacts | None:
+        """Column-scoped read of the necessary account/generation facts.
+
+        The SELECT names only (id, is_enabled, credential_generation), so
+        it executes under BOTH the worker role's narrow column-level
+        SELECT (which excludes username/password_hash) and the web role's
+        grant.
+
+        ``read_lock`` takes ``FOR SHARE`` ONLY when the caller's role
+        holds UPDATE on at least one column of this table - the
+        PostgreSQL 16 row-locking-privilege law. The demo web/worker
+        roles hold column-SELECT ONLY here, so the demo control service
+        always passes ``read_lock=False`` (plain MVCC SELECT); its
+        credential fence is enforced statement-time inside the guarded
+        worker transitions plus live rechecks on every session use. Only
+        trusted full-privilege callers (the operator CLI path) may use
+        the lock.
+        """
+        statement = select(
+            FakeAdminAccount.id,
+            FakeAdminAccount.is_enabled,
+            FakeAdminAccount.credential_generation,
+        ).where(FakeAdminAccount.id == account_id)
+        if read_lock:
+            statement = statement.with_for_update(read=True)
+        result = await self._session.execute(statement)
+        row = result.first()
+        if row is None:
+            return None
+        return FakeAdminAccountFacts(
+            id=row.id,
+            is_enabled=row.is_enabled,
+            credential_generation=row.credential_generation,
+        )
 
     async def get_account_by_username(
         self, username: str, *, for_update: bool = False

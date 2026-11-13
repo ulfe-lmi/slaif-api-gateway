@@ -1062,9 +1062,10 @@ def test_full_chain_promotes_sanitized_copy(san_env: _Env, custody: Path) -> Non
             }
             assert _RC_CANARY_PROFILE not in route_row["capabilities"]
 
-            # alembic_version untouched (descriptive head marker).
+            # alembic_version untouched (descriptive head marker;
+            # objective 224-a moved the single head to 0028).
             head = await conn.fetchval("SELECT version_num FROM alembic_version")
-            assert head == "0027_demo_admin_accounts"
+            assert head == "0028_demo_web_control"
         finally:
             await conn.close()
 

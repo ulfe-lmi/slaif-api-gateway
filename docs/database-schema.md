@@ -2592,6 +2592,166 @@ direction: no existing table, column, permission, quota/accounting law,
 provider/Codex module, or inference route is changed by upgrade or
 downgrade.
 
+## 5.28 `demo_control.demo_snapshot_requests`
+
+Objective 224-a foundation (demo control: one durable, finite-state
+snapshot request per demo-login attempt). Lives in the existing
+`demo_control` schema (created by `0027`), fully separate from all
+business tables; it is NOT in `public`, so 221's
+`pg_dump --schema=public` source-copy exclusion law is structurally
+unchanged.
+
+Columns:
+
+```text
+id UUID primary key
+account_id uuid not null                   -- FK to demo_control.fake_admin_accounts.id (ON DELETE RESTRICT)
+credential_generation bigint not null default 0   -- the LIVE generation bound at creation
+state text not null default 'pending'      -- DB default: the web role's INSERT cannot name this column
+failure_code text null                     -- safe finite vocabulary only, null outside 'failed'
+worker_job_id text null                    -- 221 SnapshotManifest.job_id grammar: 'snap-' + 32 lowercase hex
+worker_target_db text null                 -- 221 target-database name: 'demo_snap_' + 20 lowercase hex (a name, never a path/DSN)
+created_at timestamptz not null
+claimed_at timestamptz null
+deadline_at timestamptz not null           -- bounded claim lease (worker)
+expires_at timestamptz not null            -- full snapshot lifetime
+verified_at timestamptz null               -- set only at the verified handoff
+```
+
+Constraints/indexes:
+
+```text
+demo_snapshot_requests_state_allowed CHECK state in ('pending','claimed','verified_unpublished','failed','cleanup_pending','cleaned')
+demo_snapshot_requests_failure_code_allowed CHECK failure_code is null or failure_code in ('claim_expired','late_completion','worker_failed','verification_failed','copy_mismatch','state_conflict','internal_error')
+demo_snapshot_requests_generation_nonnegative CHECK credential_generation >= 0
+demo_snapshot_requests_deadline_after_created CHECK deadline_at > created_at
+demo_snapshot_requests_expires_after_deadline CHECK expires_at > deadline_at
+demo_snapshot_requests_worker_job_id_shape CHECK worker_job_id is null or worker_job_id ~ '^snap-[0-9a-f]{32}$'
+demo_snapshot_requests_worker_target_db_shape CHECK worker_target_db is null or worker_target_db ~ '^demo_snap_[0-9a-f]{20}$'
+ix_demo_snapshot_requests_account_created (account_id, created_at)
+ix_demo_snapshot_requests_state_deadline (state, deadline_at)
+uq_demo_snapshot_requests_worker_job_id UNIQUE (worker_job_id) WHERE worker_job_id IS NOT NULL
+uq_demo_snapshot_requests_worker_target_db UNIQUE (worker_target_db) WHERE worker_target_db IS NOT NULL
+```
+
+State law (finite reviewed vocabulary): `pending -> claimed ->
+verified_unpublished -> cleanup_pending -> cleaned`, with `failed`
+reachable from `pending`/`claimed` and `cleanup_pending` from
+`verified_unpublished`/`failed`. The copy identities (`worker_job_id`,
+`worker_target_db`) are worker-owned, null until the independently
+verified handoff, and each unique across ALL requests, so two requests
+can never bind one copy. `worker_target_db` is the safe publication
+record the later web path may address after verification; it is never
+exposed before that point.
+
+Concurrency law (verified against the PostgreSQL 16 privilege docs):
+every row-locking read (`FOR UPDATE`/`FOR NO KEY UPDATE`/`FOR SHARE`/
+`FOR KEY SHARE`) requires UPDATE privilege on at least one column of
+the locked table. The web role holds no UPDATE on this table at all and
+the worker role holds column-level UPDATE only, so the control service
+takes NO row locks: all reads are plain MVCC SELECTs and every state
+transition is an ATOMIC GUARDED UPDATE (compare-and-set on the current
+state) - the single serialization point that makes a claim exactly-once
+under the column-level grants. The credential fence additionally rides
+STATEMENT-TIME inside the guarded claim/handoff CAS (the live bound
+account must still be enabled with the recorded generation in the same
+atomic statement), because neither role can row-lock the account table
+(column-SELECT-only grants).
+
+## 5.29 `demo_control.demo_web_sessions`
+
+Objective 224-a foundation (demo control: one demo browser session bound
+to exactly one verified copy). The session layer that 5.26 anticipated.
+
+Columns:
+
+```text
+id UUID primary key
+token_hash text not null                   -- SHA-256 hex digest of the opaque random browser token; the raw token is returned ONCE and never persisted/logged/echoed
+account_id uuid not null                   -- FK to demo_control.fake_admin_accounts.id (ON DELETE RESTRICT)
+credential_generation bigint not null default 0   -- generation fence at issuance
+request_id uuid not null                   -- FK to demo_control.demo_snapshot_requests.id (ON DELETE RESTRICT); exactly one verified copy per session
+created_at timestamptz not null
+expires_at timestamptz not null            -- the session expires exactly when the bound copy does
+revoked_at timestamptz null                -- set by ONE atomic guarded UPDATE (web role)
+```
+
+Constraints/indexes:
+
+```text
+demo_web_sessions_token_hash_shape CHECK token_hash ~ '^[0-9a-f]{64}$'
+demo_web_sessions_generation_nonnegative CHECK credential_generation >= 0
+demo_web_sessions_expires_after_created CHECK expires_at >= created_at
+ix_demo_web_sessions_token_hash UNIQUE (token_hash)
+uq_demo_web_sessions_one_active_per_request UNIQUE (request_id) WHERE revoked_at IS NULL
+ix_demo_web_sessions_account_created (account_id, created_at)
+```
+
+At most ONE live (non-revoked) session may bind a verified copy: the
+partial unique index makes a reused copy impossible to carry two
+concurrent sessions even under a lost race. A row can only exist for a
+`verified_unpublished` request (service-enforced); this table is the
+only session record the demo web path may rely on - no
+`admin_users`/`admin_sessions` row is an authentication authority for
+fake admins.
+
+### Reviewed 224-a role grant matrix
+
+`0028` creates NO roles and grants NOTHING (the migration's owned PG16
+test proves the new tables carry no ACL at all and a fresh probe role
+holds no privileges). When the demo web application lands (224-b+), the
+operator creates two dedicated LOGIN roles and applies EXACTLY the
+reviewed matrix from
+`slaif_gateway.services.demo_web_control`:
+
+Web control role (`web_role_grant_sql`):
+
+```text
+USAGE on schema demo_control
+SELECT (id, username, password_hash, is_enabled, credential_generation) on demo_control.fake_admin_accounts   -- login (224-b) verifies the hash by username
+SELECT on demo_control.demo_snapshot_requests
+INSERT (id, account_id, credential_generation, created_at, deadline_at, expires_at) on demo_control.demo_snapshot_requests   -- state NOT nameable: the DB default 'pending' applies
+SELECT on demo_control.demo_web_sessions
+INSERT (id, token_hash, account_id, credential_generation, request_id, created_at, expires_at) on demo_control.demo_web_sessions
+UPDATE (revoked_at) on demo_control.demo_web_sessions
+```
+
+The web role has NO UPDATE on `demo_snapshot_requests` at all (it can
+never move a request out of pending and can never mark a copy
+verified), no write on accounts/events, and NO grant on any business
+table.
+
+Snapshot worker control role (`worker_role_grant_sql`):
+
+```text
+USAGE on schema demo_control
+SELECT (id, is_enabled, credential_generation) on demo_control.fake_admin_accounts   -- facts only; never username or password_hash
+SELECT on demo_control.demo_snapshot_requests
+UPDATE (state, failure_code, claimed_at, worker_job_id, worker_target_db, verified_at) on demo_control.demo_snapshot_requests
+SELECT (id, request_id, expires_at, revoked_at) on demo_control.demo_web_sessions   -- revocation facts only; never token_hash/account_id/credential_generation
+```
+
+The worker role never INSERTs or writes session rows, never reads
+browser token hashes, and receives NO grant on any business table (its
+221 source-export role is a separate SELECT-only public-schema role,
+unchanged). Role names are validated against a closed identifier law
+before grant-SQL interpolation.
+
+### Migration / rollback behavior (0028)
+
+`0028_demo_web_control` succeeds `0027_demo_admin_accounts` (single
+head). Upgrade creates exactly the two tables above inside the
+EXISTING `demo_control` schema. Downgrade drops exactly those two
+tables; the schema itself and the 0027 tables survive
+(0027's downgrade remains the one that drops the schema).
+
+**Downgrade is destructive for demo request/session state.** The
+downgrade permanently deletes all demo snapshot requests and browser
+session records. Back up the `demo_control` schema before downgrading
+past `0028`. No existing business table, column, permission,
+quota/accounting law, provider/Codex module, or inference route is
+changed in either direction.
+
 ---
 
 ## 6. Quota reservation algorithm
