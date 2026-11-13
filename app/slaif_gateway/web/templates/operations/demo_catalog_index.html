@@ -59,7 +59,15 @@
       <tr>
         <td class="row-ordinal">{{ loop.index }}</td>
         <td>{{ row.area }}</td>
+        {% if row.area == "runs" %}
+        <td>
+          <a href="/admin/operations/catalog/runs/{{ row.demo_id }}/">
+            <code>{{ row.demo_id }}</code>
+          </a>
+        </td>
+        {% else %}
         <td><code>{{ row.demo_id }}</code></td>
+        {% endif %}
         <td>
           <a href="/admin/operations/catalog/artifact?name={{ row.name | urlencode }}">
             <code>{{ row.artifact }}</code>

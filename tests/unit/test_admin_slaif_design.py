@@ -323,7 +323,10 @@ def test_table_wrappers_are_labeled_and_focusable() -> None:
     # 224-k: +1 for the demo catalog snapshot artifact index table scroll
     # region (labeled "Demo catalog snapshot artifacts", role="region" and
     # tabindex="0" in demo_catalog_index.html).
-    assert wrappers == 52
+    # 224-m: +1 for the demo catalog run detail captured-artifacts table
+    # scroll region (labeled "Captured run artifacts", role="region" and
+    # tabindex="0" in demo_catalog_run_detail.html).
+    assert wrappers == 53
 
 
 def test_templates_css_and_js_reference_no_external_assets() -> None:

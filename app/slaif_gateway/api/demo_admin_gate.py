@@ -163,10 +163,17 @@ ADMITTED_REPORTING_PATHS = (
     "/admin/key-batch",
 )
 # 224-k: only the safe, target-copy catalog metadata index; 224-l
-# adds the ONE exact sanitized display-copy artifact download
-# (same gate law, same request-local copy binding).
+# adds the ONE exact sanitized display-copy artifact download;
+# 224-m adds the ONE canonical sanitized run-detail shape
+# (demo-run- + 24 lowercase hex, required trailing slash). All use
+# the same gate law and the same request-local copy binding.
 ADMITTED_CATALOG_INDEX_PATH = "/admin/operations/catalog/"
 ADMITTED_CATALOG_ARTIFACT_PATH = "/admin/operations/catalog/artifact"
+# 224-m: the exact canonical run-detail shape; near misses and
+# noncanonical/source IDs are never admitted.
+_CATALOG_RUN_DETAIL_RE = re.compile(
+    r"/admin/operations/catalog/runs/demo-run-[0-9a-f]{24}/\Z"
+)
 #: Canonical lowercase 8-4-4-4-12 UUID syntax ONLY (the exact form the
 #: GUI generates from ``str(uuid)``); variant forms (no dashes, braces,
 #: URN, uppercase) are NOT admitted detail components.
@@ -278,6 +285,8 @@ def _is_admitted_path(path: str) -> bool:
     if path in ADMITTED_REPORTING_PATHS:
         return True
     if path == ADMITTED_CATALOG_INDEX_PATH or path == ADMITTED_CATALOG_ARTIFACT_PATH:
+        return True
+    if _CATALOG_RUN_DETAIL_RE.fullmatch(path) is not None:
         return True
     for prefix in ADMITTED_EDIT_FAMILY_PREFIXES:
         if path.startswith(prefix) and path.endswith("/edit"):

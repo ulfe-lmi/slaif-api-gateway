@@ -823,6 +823,186 @@ def test_e2e_admin_gate_two_sessions_distinct_copies(
                         )
                         assert r.status_code == 404
 
+                    # --- 224-m: sanitized run-detail transport ---------
+                    # TARGET-SIDE INSERTION (honest label): the test
+                    # inserts ONE synthetic run's seven test-only leaves
+                    # into copy A's worker-published demo_display.leaves
+                    # through the owned target-owner connection. Only
+                    # validation.json carries an ACTUAL 223 sanitizer
+                    # output (for a synthetic original document); the
+                    # other six bodies are harmless b"{}" test-only
+                    # placeholders and are NOT valid typed outputs for
+                    # their kinds (this route loads only validation.json
+                    # as a body). This proves route/reader/inventory
+                    # transport/binding through the real target-only
+                    # table, the restricted reader role and the
+                    # gate-bound session - NOT complete worker
+                    # publication, artifact content validation, 223
+                    # source-file capture or sanitization of a real run
+                    # (the configured-file installed workflow remains
+                    # objective 225).
+                    import json as _rd_json
+
+                    from slaif_gateway.services import (
+                        demo_snapshot_files as _rd_dsf,
+                    )
+
+                    _rd_seed = b"224m-pg-seed"
+                    _rd_orig_id = "e5" * 16  # ORIGINAL id (never stored)
+                    _rd_run = _rd_dsf._demo_run_id(_rd_seed, _rd_orig_id)
+                    _rd_doc = {
+                        "state": "VALID",
+                        "state_reason": "free text never displayed",
+                        "run_id": _rd_orig_id,
+                        "generated_at": "2025-06-15T15:06:40+00:00",
+                        "policy_version": 7,
+                        "counts": {"routes": 3, "pricing": 2},
+                        "per_provider": {"openai": {"models": 2}},
+                        "dispositions": [
+                            {
+                                "provider": "openai",
+                                "model": "gpt-test",
+                                "disposition": "kept",
+                            }
+                        ],
+                        "price_comparisons": [],
+                        "warnings": [
+                            {
+                                "severity": "info",
+                                "code": "demo-warning",
+                                "provider": "openai",
+                            }
+                        ],
+                        "gates": [{"name": "schema"}],
+                        "import_gates": [],
+                        "baseline": {"a": 1},
+                        "research": {},
+                        "artifacts": {"b": 1},
+                        "sql_checks": {},
+                        "baseline_metadata": [],
+                        "sources": [],
+                        "source_evidence": {},
+                        "fx_comparisons": [],
+                        "execution_context": {},
+                        "apply_plan": {"plan": "never displayed"},
+                    }
+                    _rd_body = _rd_dsf._san_validation_json(
+                        _rd_json.dumps(_rd_doc).encode(), _rd_seed
+                    )
+                    _rd_files = (
+                        ("catalog-refresh.json", "refresh_bundle", b"{}"),
+                        ("catalog-baseline.json", "baseline_document", b"{}"),
+                        ("routes-proposal.tsv", "route_tsv", b"{}"),
+                        ("pricing-proposal.tsv", "pricing_tsv", b"{}"),
+                        ("fx-proposal.json", "fx_json", b"{}"),
+                        ("validation.json", "validation_json", _rd_body),
+                        ("REVIEW.html", "review_html", b"{}"),
+                    )
+                    _rd_url = f"/admin/operations/catalog/runs/{_rd_run}/"
+                    try:
+                        s = await _target_conn()
+                        for name, kind, data in _rd_files:
+                            await s.execute(
+                                "INSERT INTO demo_display.leaves "
+                                "(logical_name, kind, sha256, byte_count, "
+                                "captured_at, body) "
+                                "VALUES ($1, $2, $3, $4, $5, $6)",
+                                f"catalog/runs/{_rd_run}/{name}",
+                                kind,
+                                _art_hashlib.sha256(data).hexdigest(),
+                                len(data),
+                                1750000000.0,
+                                data,
+                            )
+                        await s.close()
+                        # Session A: the sanitized run-detail page from
+                        # its OWN exact copy (banner, bounded fields,
+                        # seven artifact links, no seal/live/apply
+                        # authority, no copy name or credential).
+                        r = await client_a.get(_rd_url)
+                        assert r.status_code == 200
+                        assert r.headers["cache-control"] == "private, no-store"
+                        rd_text = " ".join(r.text.split())
+                        assert "Sanitized snapshot display" in rd_text
+                        assert "no original seal" in rd_text
+                        assert "no live status" in rd_text
+                        assert "no apply authority" in rd_text
+                        assert "historical at capture time" in rd_text
+                        assert "VALID" in rd_text
+                        assert "2025-06-15T15:06:40+00:00" in rd_text
+                        assert "demo-warning" in rd_text
+                        assert "gpt-test" in rd_text
+                        for name, _kind, _data in _rd_files:
+                            assert (
+                                f'href="/admin/operations/catalog/artifact'
+                                f'?name=catalog/runs/{_rd_run}/{name}"'
+                            ) in r.text, name
+                        assert target_a not in r.text
+                        assert _rd_orig_id not in r.text
+                        # Session B: the SAME canonical path against its
+                        # OWN exact copy (which has NO run leaves) is a
+                        # fixed safe 404 (copy isolation).
+                        r = await client_b.get(_rd_url)
+                        assert r.status_code == 404
+                        assert r.content == b"Not Found"
+                        # Near miss: the same id WITHOUT the required
+                        # trailing slash stays gate-denied 404.
+                        r = await client_a.get(_rd_url.rstrip("/"))
+                        assert r.status_code == 404
+                        # Corruption: a wrong stored SHA on
+                        # validation.json is the fixed safe 503.
+                        s = await _target_conn()
+                        await s.execute(
+                            "UPDATE demo_display.leaves SET sha256 = $2 "
+                            "WHERE logical_name = $1",
+                            f"catalog/runs/{_rd_run}/validation.json",
+                            "f" * 64,
+                        )
+                        await s.close()
+                        r = await client_a.get(_rd_url)
+                        assert r.status_code == 503
+                        assert r.headers["cache-control"] == "private, no-store"
+                        assert _rd_body not in r.content
+                        # Incomplete run: six of the seven files is the
+                        # SAME fixed safe 503.
+                        s = await _target_conn()
+                        await s.execute(
+                            "DELETE FROM demo_display.leaves "
+                            "WHERE logical_name = $1",
+                            f"catalog/runs/{_rd_run}/REVIEW.html",
+                        )
+                        await s.close()
+                        r = await client_a.get(_rd_url)
+                        assert r.status_code == 503
+                        # The run-detail path is the SAME quiet 204 cut
+                        # (body never parsed).
+                        r = await client_a.post(
+                            _rd_url,
+                            content=b"x" * 200_000,
+                            headers={"content-type": "text/garbage"},
+                        )
+                        assert r.status_code == 204
+                        assert r.content == b""
+                    finally:
+                        # Remove EXACTLY the seven test-inserted run
+                        # leaves (exact names, never a prefix match -
+                        # a pre-existing run sharing a prefix must
+                        # never be touched); copy A returns to the
+                        # exact worker-published state.
+                        s = await _target_conn()
+                        await s.execute(
+                            "DELETE FROM demo_display.leaves "
+                            "WHERE logical_name = ANY($1::text[])",
+                            [
+                                f"catalog/runs/{_rd_run}/{name}"
+                                for name, _kind, _data in _rd_files
+                            ],
+                        )
+                        await s.close()
+                        # Cleanup proven: session A 404s again.
+                        r = await client_a.get(_rd_url)
+                        assert r.status_code == 404
+
                     # --- operational POST families: quiet 204 no-ops -----
                     key_id = await _first_id(san_env, target_b, "gateway_keys")
                     for client in (client_a, client_b):
@@ -1253,6 +1433,17 @@ def test_browser_smoke_demo_copy_pages(
             r = page.goto(
                 "/admin/operations/catalog/artifact"
                 "?name=catalog/jobs/" + "c3" * 16 + ".json"
+            )
+            assert r is not None and r.status == 404
+            assert r.headers["cache-control"] == "private, no-store"
+            # 224-m: the owned browser fixture has NO configured run,
+            # so the canonical run-detail shape is a fixed safe 404 in
+            # the real browser (honest empty state; the positive page
+            # is proven by owned-PG transport + mocked-ASGI unit
+            # coverage, and the configured-file installed browser
+            # workflow remains objective 225).
+            r = page.goto(
+                "/admin/operations/catalog/runs/demo-run-" + "d4" * 12 + "/"
             )
             assert r is not None and r.status == 404
             assert r.headers["cache-control"] == "private, no-store"

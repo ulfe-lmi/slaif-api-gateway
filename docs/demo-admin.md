@@ -2065,3 +2065,119 @@ are untouched.
   (51 -> 52) is repaired in this round after verifying the new
   labeled/focusable catalog table wrapper; the strict wrapper
   checks are preserved.
+
+## Sanitized catalog run detail (objective 224-m)
+
+224-m (same PR #383) adds ONE demo-only
+`GET /admin/operations/catalog/runs/{run_id}/` handler to the same
+demo catalog router, mounted ahead of the normal custody-backed
+routes, which remain unchanged. It displays ONE captured run's
+sanitized `validation.json` summary plus the bounded list of the
+run's seven captured artifacts from the visitor's OWN verified
+copy. This is a HISTORICAL SNAPSHOT DISPLAY: the page carries no
+original seal, no live run status and no apply authority, and the
+sanitized copy proves nothing about the original run's readiness or
+identity. A prominent neutral banner states exactly that, and the
+snapshot state/generation time are labeled historical, not live.
+
+The central gate admits ONLY the exact canonical remapped run-id
+shape — `demo-run-` plus 24 lowercase hex and a required trailing
+slash; near misses, uppercase/other-length hex, missing slash,
+prefix/deeper siblings and noncanonical or source-like run IDs are
+not admitted (404 with no echo). The catalog index links the
+remapped run ID only on run rows (jobs keep their plain cells); the
+artifact cells still link to the exact 224-l forced-attachment
+download, and the run-detail page links each of the seven captured
+artifact names to the SAME 224-l exact download path (full remapped
+logical name, forced octet-stream attachment, never inline) —
+there is no second download mechanism and no new action button.
+
+The read uses the gate's SAME request-local copy engine
+(`get_sessionmaker_from_app` on `request.state.demo_admin`). In ONE
+read-only transaction the handler FIRST independently re-verifies
+`current_database()` equals the session's exact verified copy and
+`transaction_read_only` is `on`, then reads a BOUNDED inventory for
+exactly this remapped run: the closed seven worker-published run
+content files (`catalog-refresh.json`, `catalog-baseline.json`,
+`routes-proposal.tsv`, `pricing-proposal.tsv`, `fx-proposal.json`,
+`validation.json`, `REVIEW.html` — a closed name/kind set, never a
+directory scan) through one parameterized `IN (...)` lookup with
+per-row kind, byte count, SHA256, `octet_length(body)` (computed by
+the database before any body transfer), and capture-time checks. A
+missing run is a fixed safe 404; an incomplete run (1..6 of the
+seven files), any corrupt row, or a driver failure is ONE fixed
+safe 503 with no raw value, path or traceback echoed. Only then is
+`validation.json`'s body loaded through the shared 224-l bounded
+fetch (metadata first, 32 MiB cap before body, bound-parameter
+re-asserts, exact length + SHA256 after fetch).
+
+The stored body is re-proved against the worker's exact typed
+`demo-display-1` / `validation_json` shape spec
+(`demo_snapshot_files._verify_json_policy`) and the document's run
+ID must equal the exact gate-admitted run ID before anything
+renders. The page renders only bounded sanitized fields already
+present in that projection: snapshot state, run generation time
+(historical, UTC) and policy version; "count categories retained"
+(the number of count categories the sanitized copy keeps from the
+original counts map — explicitly NOT a count of catalog or model
+entries); bounded per-provider totals (each the sum of that
+provider's original count metrics in the captured run, not a model
+or request count); and bounded warnings, dispositions and price
+comparison rows (signed percent values, no sign doubling). The
+free-text detail fields (state reasons, evidence, gates, apply
+plan) are neutralized and never displayed. The artifact list is a
+compact ordinal-first sortable table (artifact, kind, bytes,
+captured UTC) with download links. The page and every 404/503
+refusal are `private, no-store`; every unsafe `/admin` method
+remains the unchanged pre-body quiet 204 cut. The stored SHA, copy
+name, DSN, credential, source path, original run ID, HMAC receipt
+or server error never appears in the public response; the handler
+never touches source public business tables, live operator custody,
+the catalog seal, Redis, the worker filesystem, provider network or
+provider credentials.
+
+### Evidence (224-m)
+
+* Focused unit (mocked ASGI, no database): canonical run-id
+  admission and every near-miss denial; zero-active accounts 404;
+  every unsafe method the quiet 204 cut before body parsing;
+  missing demo state 404 and gate-admitted noncanonical id 503;
+  the handler's in-transaction binding recheck (wrong database or
+  read-only off, after the gate passes) is a fixed 503; a missing
+  run is 404 after one parameterized inventory; every incomplete
+  row set (1..6 of 7) and every corrupt row (wrong kind, bad
+  digest, size/actual mismatch, bad capture time) is a fixed 503
+  with no echo; a validation body that is non-JSON, belongs to
+  another run, or fails the typed re-proof is a fixed 503; the
+  positive page renders the sanitized fields (real 223
+  sanitizer-produced synthetic projection as fixture), escapes an
+  HTML canary, renders exactly the seven forced-download links and
+  no original run ID or copy name; the index links the remapped run
+  ID on run rows only.
+* Owned PostgreSQL 16 (real target-only `demo_display.leaves`
+  table, real restricted reader role, two sessions on distinct
+  copies): after the worker run and its honest empty-index
+  assertions, ONE synthetic run's seven TEST-ONLY leaves are
+  inserted into copy A through the owned target-owner connection
+  (honest label: only the `validation.json` body is ACTUAL 223
+  sanitizer output for a synthetic original document; the other
+  six bodies are harmless `b"{}"` test-only placeholders and are
+  NOT valid typed outputs for their kinds — this proves
+  route/reader/inventory transport/binding, NOT complete worker
+  publication or artifact content validation; the configured-file
+  installed workflow remains objective 225). Session A receives the
+  200 page with the banner, bounded fields and all seven
+  forced-download hrefs, with neither the copy name nor the
+  original run ID echoed; session B is a fixed safe 404 for the
+  same canonical path (copy isolation); the missing-trailing-slash
+  near miss stays 404; corrupting the stored SHA or reducing the
+  run to six of seven files is the fixed safe 503; the path stays
+  the quiet 204 cut. The seven leaves are deleted afterwards by
+  EXACT names (never a prefix match) and the 404 re-proven,
+  leaving the worker-published state unchanged.
+* Real Chromium: the owned browser fixture has NO configured run,
+  so the canonical run-detail shape is a fixed safe 404 in the
+  real browser (honest empty state; the positive page is proven by
+  owned-PG transport and mocked-ASGI coverage above, and the
+  configured-file installed browser workflow remains objective
+  225).

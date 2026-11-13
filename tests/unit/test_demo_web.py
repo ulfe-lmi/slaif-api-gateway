@@ -3076,6 +3076,9 @@ class _ArtifactResult:
     def first(self):
         return self._rows[0] if self._rows else None
 
+    def all(self):
+        return list(self._rows)
+
 
 class _ArtifactFakeSession:
     """One fake request-local copy session: preflight scalars plus the
@@ -3444,5 +3447,452 @@ def test_catalog_artifact_html_name_still_forced_attachment(monkeypatch):
             assert r.headers["content-security-policy"] == "default-src 'none'"
             assert r.headers["cache-control"] == "private, no-store"
             assert r.content == body
+
+    asyncio.run(run())
+
+
+# --- 224-m: demo-only copy-backed catalog run detail --------------------------
+
+import json as _rd_json  # noqa: E402
+
+from slaif_gateway.services import demo_snapshot_files as _rd_dsf  # noqa: E402
+
+RD_SEED = b"224m-unit-seed"
+RD_ORIGINAL_RUN_ID = "f4" * 16  # an ORIGINAL (non-remapped) run id
+RD_RUN_ID = _rd_dsf._demo_run_id(RD_SEED, RD_ORIGINAL_RUN_ID)  # demo-run-<24hex>
+
+
+def _rd_original_validation_doc(run_id: str = RD_ORIGINAL_RUN_ID, state: str = "VALID"):
+    # A synthetic ORIGINAL validation document (the 223 sanitizer's
+    # input); the POSITIVE fixture is the sanitizer's OWN output, not
+    # a hand-written sanitized document.
+    return {
+        "state": state,
+        "state_reason": "free text that is never displayed",
+        "run_id": run_id,
+        "generated_at": "2025-06-15T15:06:40+00:00",
+        "policy_version": 7,
+        "counts": {"routes": 3, "pricing": 2},
+        "per_provider": {
+            "openai": {"models": 2, "routes": 2},
+            "openrouter": {"models": 1, "pricing": 1},
+        },
+        "dispositions": [
+            {"provider": "openai", "model": "gpt-test", "disposition": "kept"}
+        ],
+        "price_comparisons": [
+            {
+                "provider": "openrouter",
+                "model": "or-test",
+                "dimension": "input",
+                "old": "1.5",
+                "new": "2.0",
+                "currency_old": "USD",
+                "currency_new": "USD",
+                "percent_change": "-33.33",
+                "state": "changed",
+            }
+        ],
+        "warnings": [
+            {"severity": "info", "code": "demo-warning", "provider": "openai"}
+        ],
+        "gates": [{"name": "schema"}],
+        "import_gates": [],
+        "baseline": {"a": 1},
+        "research": {},
+        "artifacts": {"b": 1},
+        "sql_checks": {},
+        "baseline_metadata": [
+            {
+                "provider": "openai",
+                "model": "gpt-test",
+                "upstream_model": "gpt-real",
+                "fields": {"x": 1},
+            }
+        ],
+        "sources": [],
+        "source_evidence": {},
+        "fx_comparisons": [],
+        "execution_context": {},
+        "apply_plan": {"plan": "never displayed"},
+    }
+
+
+def _rd_validation_body(state: str = "VALID") -> bytes:
+    # The ACTUAL 223 sanitizer output for the synthetic original doc.
+    return _rd_dsf._san_validation_json(
+        _rd_json.dumps(_rd_original_validation_doc(state=state)).encode(), RD_SEED
+    )
+
+
+def _rd_inventory(run_id: str = RD_RUN_ID, validation_body: bytes | None = None):
+    """The closed seven worker-published run content rows (consistent
+    kind/size/sha/actual/capture) for one remapped run."""
+    if validation_body is None:
+        validation_body = _rd_validation_body()
+    rows = []
+    for filename, kind in dac._RUN_DETAIL_FILES:
+        full = f"catalog/runs/{run_id}/{filename}"
+        data = validation_body if filename == "validation.json" else b"{}"
+        size = len(data)
+        rows.append(
+            (full, kind, size, hashlib.sha256(data).hexdigest(), 1750000000.0, size)
+        )
+    return rows
+
+
+def _rd_app(fake, monkeypatch, session):
+    fake.worker_target_db = COPY_OK
+    _preflight_case(monkeypatch, COPY_OK, "on")
+    _patch_sessionmaker(monkeypatch, session)
+    return _app(fake), fake
+
+
+def test_run_detail_gate_admission_exact_shape():
+    async def run():
+        app = _app(FakeFacade())
+        async with _client(app) as client:
+            # The ONE canonical shape is ADMITTED (no session -> entry
+            # redirect, same law as the index)...
+            r = await client.get(f"/admin/operations/catalog/runs/{RD_RUN_ID}/")
+            assert r.status_code == 303
+            assert r.headers["location"] == "/fakeadmin/login"
+            # ...every near-miss / noncanonical / source ID stays 404.
+            for p in (
+                f"/admin/operations/catalog/runs/{RD_RUN_ID}",   # no trailing slash
+                f"/admin/operations/catalog/runs/{RD_RUN_ID}/x", # deeper path
+                f"/admin/operations/catalog/runs/{CAT_RUN_ID}/extra/",
+                f"/admin/operations/catalog/runs/demo-run-{'a1' * 16}/",  # 32 hex
+                f"/admin/operations/catalog/runs/{CAT_JOB_ID}/",          # original id
+                f"/admin/operations/catalog/runs/demo-run-{'A1' * 12}/",  # uppercase hex
+                "/admin/operations/catalog/runs/demo-run-a1/short/",      # short hex
+                "/admin/operations/catalog/runs/",
+                "/admin/operations/catalog/runs",
+            ):
+                r = await client.get(p)
+                assert r.status_code == 404, p
+
+    asyncio.run(run())
+
+
+def test_run_detail_zero_active_404():
+    async def run():
+        fake = FakeFacade()
+        fake.active = 0
+        app = _app(fake)
+        async with _client(app) as client:
+            _session_cookie(client)
+            r = await client.get(f"/admin/operations/catalog/runs/{RD_RUN_ID}/")
+            assert r.status_code == 404
+
+    asyncio.run(run())
+
+
+def test_run_detail_unsafe_methods_quiet_noop_body_not_parsed():
+    async def run():
+        app = _app(FakeFacade())
+        async with _client(app) as client:
+            _session_cookie(client)
+            for method in ("POST", "PUT", "PATCH", "DELETE"):
+                r = await client.request(
+                    method,
+                    f"/admin/operations/catalog/runs/{RD_RUN_ID}/",
+                    content=b"x" * 200_000,
+                    headers={"content-type": "text/garbage"},
+                )
+                assert r.status_code == 204, method
+                assert r.content == b""
+        async with _client(app) as anon:
+            r = await anon.post(f"/admin/operations/catalog/runs/{RD_RUN_ID}/", content=b"y" * 200_000)
+            assert r.status_code == 404
+
+    asyncio.run(run())
+
+
+def test_run_detail_handler_without_demo_state_or_invalid_id_404():
+    async def run():
+        app = _app(FakeFacade())
+        # No gate-validated request-local state: defensive 404.
+        request = _bare_request(app)
+        assert (await dac.demo_catalog_run_detail(request, RD_RUN_ID)).status_code == 404
+        # A source-shaped / noncanonical id is refused even with state.
+        from types import SimpleNamespace
+
+        demo = SimpleNamespace(target_db=COPY_OK)
+        request = _bare_request(app, {"demo_admin": demo})
+        for bad in (
+            RD_ORIGINAL_RUN_ID,      # original (non-remapped) id
+            "demo-run-" + "a1" * 16,  # 32 hex, not 24
+            "x",
+        ):
+            assert (
+                await dac.demo_catalog_run_detail(request, bad)
+            ).status_code == 404
+        # A CANONICAL id with demo state lacking a usable request-local
+        # sessionmaker fails closed to the fixed safe 503 (never a raw
+        # error).
+        response = await dac.demo_catalog_run_detail(request, CAT_RUN_ID)
+        assert response.status_code == 503
+        assert dac._SAFE_RUN_DETAIL_UNAVAILABLE in response.body.decode()
+
+    asyncio.run(run())
+
+
+def test_run_detail_preflight_mismatch_503(monkeypatch):
+    async def run():
+        for db, ro in ((COPY_OK, "off"), ("some_other_db", "on")):
+            fake = FakeFacade()
+            fake.worker_target_db = COPY_OK
+            _preflight_case(monkeypatch, COPY_OK, "on")
+            session = _ArtifactFakeSession(_rd_inventory(), [], db, ro)
+            _patch_sessionmaker(monkeypatch, session)
+            app = _app(fake)
+            async with _client(app) as client:
+                await _verified_session_client(fake, client)
+                r = await client.get(f"/admin/operations/catalog/runs/{RD_RUN_ID}/")
+                assert r.status_code == 503, (db, ro)
+                assert r.headers.get("cache-control") == "private, no-store"
+                assert dac._SAFE_RUN_DETAIL_UNAVAILABLE in r.text
+                assert COPY_OK not in r.text
+                assert "demo_display" not in r.text
+                assert "Traceback" not in r.text
+                assert session.executed == []
+
+    asyncio.run(run())
+
+
+def test_run_detail_missing_run_404(monkeypatch):
+    async def run():
+        session = _ArtifactFakeSession([], [], COPY_OK, "on")
+        app, fake = _rd_app(FakeFacade(), monkeypatch, session)
+        async with _client(app) as client:
+            await _verified_session_client(fake, client)
+            r = await client.get(f"/admin/operations/catalog/runs/{RD_RUN_ID}/")
+            assert r.status_code == 404
+            assert r.content == b"Not Found"
+        # Exactly ONE parameterized inventory query (the closed seven
+        # names, no wildcard, no pathname); no body query.
+        assert len(session.executed) == 1
+        text, params = session.executed[0]
+        assert "IN (" in text
+        assert set(params) == {f"n{i}" for i in range(7)}
+        assert sorted(params.values()) == sorted(
+            f"catalog/runs/{RD_RUN_ID}/{filename}"
+            for filename, _kind in dac._RUN_DETAIL_FILES
+        )
+
+    asyncio.run(run())
+
+
+def test_run_detail_incomplete_run_fixed_503(monkeypatch):
+    # 1..6 of the seven worker-published files: an incomplete row set
+    # is one fixed safe 503, and the body query NEVER runs.
+    async def run():
+        for keep in (1, 6):
+            rows = _rd_inventory()[:keep]
+            session = _ArtifactFakeSession(rows, [(_rd_validation_body(),)], COPY_OK, "on")
+            app, fake = _rd_app(FakeFacade(), monkeypatch, session)
+            async with _client(app) as client:
+                await _verified_session_client(fake, client)
+                r = await client.get(f"/admin/operations/catalog/runs/{RD_RUN_ID}/")
+                assert r.status_code == 503, keep
+                assert r.headers.get("cache-control") == "private, no-store"
+                assert dac._SAFE_RUN_DETAIL_UNAVAILABLE in r.text
+                assert len(session.executed) == 1, keep
+
+    asyncio.run(run())
+
+
+def test_run_detail_corrupt_row_fixed_503(monkeypatch):
+    async def run():
+        cases = []
+        rows = _rd_inventory()
+        bad_kind = list(rows)
+        full, kind, size, sha, at, actual = bad_kind[5]
+        bad_kind[5] = (full, "job_record", size, sha, at, actual)  # wrong kind
+        cases.append(bad_kind)
+        bad_sha = list(rows)
+        full, kind, size, sha, at, actual = rows[5]
+        bad_sha[5] = (full, kind, size, "Z" * 64, at, actual)
+        cases.append(bad_sha)
+        bad_size = list(rows)
+        full, kind, size, sha, at, actual = rows[5]
+        bad_size[5] = (full, kind, size, sha, at, size + 1)  # actual != claimed
+        cases.append(bad_size)
+        bad_cap = list(rows)
+        full, kind, size, sha, at, actual = rows[5]
+        huge = 33 * 1024 * 1024
+        bad_cap[5] = (full, kind, huge, sha, at, huge)  # above the 32 MiB cap
+        cases.append(bad_cap)
+        bad_time = list(rows)
+        full, kind, size, sha, at, actual = rows[5]
+        bad_time[5] = (full, kind, size, sha, float("nan"), actual)
+        cases.append(bad_time)
+        for corrupt in cases:
+            session = _ArtifactFakeSession(corrupt, [(_rd_validation_body(),)], COPY_OK, "on")
+            app, fake = _rd_app(FakeFacade(), monkeypatch, session)
+            async with _client(app) as client:
+                await _verified_session_client(fake, client)
+                r = await client.get(f"/admin/operations/catalog/runs/{RD_RUN_ID}/")
+                assert r.status_code == 503, corrupt
+                assert dac._SAFE_RUN_DETAIL_UNAVAILABLE in r.text
+                assert len(session.executed) == 1, corrupt
+
+    asyncio.run(run())
+
+
+def test_run_detail_validation_body_refusals_503(monkeypatch):
+    async def run():
+        body = _rd_validation_body()
+        # Bounded body fetch finds no matching row -> 503.
+        session = _ArtifactFakeSession(_rd_inventory(), [], COPY_OK, "on")
+        app, fake = _rd_app(FakeFacade(), monkeypatch, session)
+        async with _client(app) as client:
+            await _verified_session_client(fake, client)
+            r = await client.get(f"/admin/operations/catalog/runs/{RD_RUN_ID}/")
+            assert r.status_code == 503
+            assert len(session.executed) == 2
+
+        # Non-JSON body (consistent metadata): the typed re-proof fails.
+        bad = b"not-json-at-all"
+        session = _ArtifactFakeSession(
+            _rd_inventory(validation_body=bad), [(bad,)], COPY_OK, "on"
+        )
+        app, fake = _rd_app(FakeFacade(), monkeypatch, session)
+        async with _client(app) as client:
+            await _verified_session_client(fake, client)
+            r = await client.get(f"/admin/operations/catalog/runs/{RD_RUN_ID}/")
+            assert r.status_code == 503
+            assert b"not-json" not in r.content
+
+        # A typed-valid sanitized doc for ANOTHER seed (another run) is
+        # refused by the run-ID routing check.
+        other_body = _rd_dsf._san_validation_json(
+            _rd_json.dumps(_rd_original_validation_doc()).encode(), b"other-seed"
+        )
+        session = _ArtifactFakeSession(
+            _rd_inventory(validation_body=other_body), [(other_body,)], COPY_OK, "on"
+        )
+        app, fake = _rd_app(FakeFacade(), monkeypatch, session)
+        async with _client(app) as client:
+            await _verified_session_client(fake, client)
+            r = await client.get(f"/admin/operations/catalog/runs/{RD_RUN_ID}/")
+            assert r.status_code == 503
+
+        # Hand-mutated sanitized doc (wrong kind): typed re-proof fails.
+        doc = _rd_json.loads(body)
+        doc["kind"] = "job_record"
+        mutated = _rd_json.dumps(doc).encode()
+        session = _ArtifactFakeSession(
+            _rd_inventory(validation_body=mutated), [(mutated,)], COPY_OK, "on"
+        )
+        app, fake = _rd_app(FakeFacade(), monkeypatch, session)
+        async with _client(app) as client:
+            await _verified_session_client(fake, client)
+            r = await client.get(f"/admin/operations/catalog/runs/{RD_RUN_ID}/")
+            assert r.status_code == 503
+
+    asyncio.run(run())
+
+
+def test_run_detail_positive_page(monkeypatch):
+    body = _rd_validation_body()
+
+    async def run():
+        session = _ArtifactFakeSession(_rd_inventory(), [(body,)], COPY_OK, "on")
+        app, fake = _rd_app(FakeFacade(), monkeypatch, session)
+        async with _client(app) as client:
+            await _verified_session_client(fake, client)
+            r = await client.get(f"/admin/operations/catalog/runs/{RD_RUN_ID}/")
+            assert r.status_code == 200
+            assert r.headers["cache-control"] == "private, no-store"
+            text = _norm(r.text)
+            # The prominent neutralized banner + historical-status law.
+            assert "Sanitized snapshot display" in text
+            assert "no original seal" in text
+            assert "no live status" in text
+            assert "no apply authority" in text
+            assert "historical at capture time" in text
+            # Bounded sanitized fields render (values from the 223
+            # sanitizer output, not a hand-built projection).
+            assert "VALID" in text
+            assert "2025-06-15T15:06:40+00:00" in text
+            assert "Count categories retained" in text
+            assert "not a count" in text
+            assert "Sum of provider count metrics" in text
+            assert "in the captured run" in text
+            assert "openai" in text and "openrouter" in text
+            # per_provider sums (2 + 2 and 1 + 1), not model counts.
+            assert 'title="4"' in r.text
+            assert 'title="2"' in r.text
+            assert "demo-warning" in text
+            assert "gpt-test" in text
+            assert "kept" in text
+            assert "input" in text
+            # Signed percent renders directly (no ± before a signed value).
+            assert "-33.33%" in text
+            assert "±-33.33" not in text
+            # The neutralized-details note.
+            assert "neutralized in this sanitized display copy" in text
+            # All seven captured artifacts, each linked to the exact
+            # 224-l forced-download selector (literal closed charset).
+            for filename, _kind in dac._RUN_DETAIL_FILES:
+                assert (
+                    f'href="/admin/operations/catalog/artifact'
+                    f'?name=catalog/runs/{RD_RUN_ID}/{filename}"'
+                ) in r.text
+            assert "2025-06-15 15:06:40 UTC" in text
+            # No DSN fragment, copy name or credential escapes.
+            assert COPY_OK not in r.text
+            assert "unit-test-copy-password" not in r.text
+            assert RD_ORIGINAL_RUN_ID not in r.text
+        # Inventory (parameterized) + ONE bounded body fetch only.
+        assert len(session.executed) == 2
+        body_text, body_params = session.executed[1]
+        assert body_text.lstrip().startswith("SELECT body")
+        assert body_params["cap"] == dac._MAX_ARTIFACT_BYTES
+
+    asyncio.run(run())
+
+
+def test_run_detail_html_canary_is_escaped(monkeypatch):
+    # A sanitizer-legal string field containing markup must render
+    # escaped, never as active content.
+    canary = "<script>alert(1)</script>"
+    body = _rd_validation_body(state=canary)
+
+    async def run():
+        session = _ArtifactFakeSession(
+            _rd_inventory(validation_body=body), [(body,)], COPY_OK, "on"
+        )
+        app, fake = _rd_app(FakeFacade(), monkeypatch, session)
+        async with _client(app) as client:
+            await _verified_session_client(fake, client)
+            r = await client.get(f"/admin/operations/catalog/runs/{RD_RUN_ID}/")
+            assert r.status_code == 200
+            assert "<script>alert(1)</script>" not in r.text
+            assert "&lt;script&gt;alert(1)&lt;/script&gt;" in r.text
+
+    asyncio.run(run())
+
+
+def test_run_detail_index_links_run_ids_only(monkeypatch):
+    # The index links the remapped run id ONLY for run rows; job
+    # rows stay plain text.
+    async def run():
+        fake = FakeFacade()
+        fake.worker_target_db = COPY_OK
+        _preflight_case(monkeypatch, COPY_OK, "on")
+        factory, _made = _display_factory(leaves=[CAT_LEAF_RUN, CAT_LEAF_JOB, LEAF_TWO])
+        app = _app(fake, display_reader_factory=factory)
+        async with _client(app) as client:
+            await _verified_session_client(fake, client)
+            r = await client.get(CATALOG_INDEX_URL)
+            assert r.status_code == 200
+            assert (
+                f'href="/admin/operations/catalog/runs/{CAT_RUN_ID}/"'
+            ) in r.text
+            # The jobs row's demo id is NOT linked to a run detail.
+            assert f'href="/admin/operations/catalog/runs/{CAT_JOB_ID}/"' not in r.text
 
     asyncio.run(run())
