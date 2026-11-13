@@ -2731,7 +2731,8 @@ def test_catalog_index_gate_admission_exact_path():
                 "/admin/operations/catalog",          # missing slash
                 "/admin/operations/catalog//",        # doubled slash
                 "/admin/operations/catalog2",         # prefix sibling
-                "/admin/operations/catalog/proposals",
+                # 224-n: /admin/operations/catalog/proposals is now
+                # ADMITTED (exact path) - covered by the 224-n section.
                 "/admin/operations/catalog/collect",
                 "/admin/operations/catalog/review",
                 "/admin/operations/catalog/export-baseline",
@@ -3894,5 +3895,625 @@ def test_run_detail_index_links_run_ids_only(monkeypatch):
             ) in r.text
             # The jobs row's demo id is NOT linked to a run detail.
             assert f'href="/admin/operations/catalog/runs/{CAT_JOB_ID}/"' not in r.text
+
+    asyncio.run(run())
+
+
+# --- 224-n: demo-only copy-backed captured proposals page ----------------------
+
+from types import SimpleNamespace as _PN_NS  # noqa: E402
+
+PN_SEED = b"224n-unit-seed"
+PN_ORIGINAL_JOB_A = "c3" * 16  # ORIGINAL (never displayed)
+PN_ORIGINAL_JOB_B = "d4" * 16
+PN_JOB_A = _rd_dsf._demo_job_id(PN_SEED, PN_ORIGINAL_JOB_A)  # 32 hex
+PN_JOB_B = _rd_dsf._demo_job_id(PN_SEED, PN_ORIGINAL_JOB_B)
+PN_URL = "/admin/operations/catalog/proposals"
+PN_RECORD_BODY = None  # set lazily by _pn_record_body
+
+
+def _pn_original_record(job_id: str, family: str = "proposal", status: str = "ready"):
+    # A synthetic ORIGINAL custody job record (the 223 sanitizer's
+    # input); the POSITIVE fixture is the sanitizer's OWN output.
+    return {
+        "job_id": job_id,
+        "family": family,
+        "status": status,
+        "progress": "free text never displayed",
+        "dispatch": None,
+        "run_id": None,
+        "artifact_name": None,
+        "cancel_requested": False,
+        "created_at": "2025-06-15T15:00:00+00:00",
+        "updated_at": "2025-06-15T15:06:40+00:00",
+    }
+
+
+def _pn_record_body(job_id: str = PN_ORIGINAL_JOB_A, **kw) -> bytes:
+    # The ACTUAL 223 sanitizer output for the synthetic original record.
+    return _rd_dsf._sanitize_job_record(
+        _rd_json.dumps(_pn_original_record(job_id, **kw)).encode(), PN_SEED
+    )
+
+
+def _pn_leaf(name: str, kind: str, data: bytes, captured: float):
+    return (name, kind, len(data), hashlib.sha256(data).hexdigest(), captured)
+
+
+def _pn_inventory(record: bytes | None = None, extra_rows=(), drop_job_b=False):
+    """Two captured proposal job groups (A newer than B), one skipped
+    non-proposals run row, and (optionally) A's sanitized job record."""
+    rows = [
+        _pn_leaf(
+            f"catalog/proposals/{PN_JOB_A}/routes-proposal.tsv",
+            "route_tsv", b"{}", 1750000100.0,
+        ),
+        _pn_leaf(
+            f"catalog/proposals/{PN_JOB_A}"
+            "/packages/openrouter-chat-text/pricing-proposal.tsv",
+            "pricing_tsv", b"{}", 1750000050.0,
+        ),
+    ]
+    if not drop_job_b:
+        rows.append(
+            _pn_leaf(
+                f"catalog/proposals/{PN_JOB_B}/warnings.json",
+                "warnings_json", b"{}", 1750000000.0,
+            )
+        )
+    rows.append(
+        _pn_leaf(
+            f"catalog/runs/{CAT_RUN_ID}/catalog-refresh.json",
+            "refresh_bundle", b"{}", 1750000001.0,
+        )
+    )
+    if record is not None:
+        rows.append(
+            _pn_leaf(f"catalog/jobs/{PN_JOB_A}.json", "job_record", record, 1750000002.0)
+        )
+    rows.extend(extra_rows)
+    return rows
+
+
+_PN_DEFAULT_CHOICES = (_PN_NS(id="gpt-test", label="gpt-test", sub=""),)
+
+
+def _pn_app(fake, monkeypatch, session, choices=_PN_DEFAULT_CHOICES):
+    fake.worker_target_db = COPY_OK
+    _preflight_case(monkeypatch, COPY_OK, "on")
+    _patch_sessionmaker(monkeypatch, session)
+
+    async def _fake_load_choices(session, kind, selected=()):
+        assert kind == "catalog_upstream"
+        return list(choices)
+
+    monkeypatch.setattr(dac, "load_choices", _fake_load_choices)
+    return _app(fake), fake
+
+
+def _pn_bare_request(app, state, query: str = ""):
+    from starlette.requests import Request
+
+    scope = {
+        "type": "http",
+        "app": app,
+        "state": dict(state or {}),
+        "query_string": query.encode(),
+    }
+    return Request(scope)
+
+
+def test_proposals_gate_admission_exact_path():
+    async def run():
+        app = _app(FakeFacade())
+        async with _client(app) as client:
+            # The ONE exact path is ADMITTED (no session -> entry
+            # redirect, same law as the index)...
+            r = await client.get(PN_URL)
+            assert r.status_code == 303
+            assert r.headers["location"] == "/fakeadmin/login"
+            # ...and every near-miss / extra suffix stays default-
+            # denied 404.
+            for p in (
+                PN_URL + "/",             # trailing slash
+                PN_URL + "s",             # prefix sibling
+                PN_URL + "/extra",        # deeper path
+                "/admin/operations/catalogx/proposals",
+                "/admin/operations/catalog/proposal",
+                "/admin/operations/catalog/proposals/generate",
+            ):
+                r = await client.get(p)
+                assert r.status_code == 404, p
+
+    asyncio.run(run())
+
+
+def test_proposals_zero_active_404():
+    async def run():
+        fake = FakeFacade()
+        fake.active = 0
+        app = _app(fake)
+        async with _client(app) as client:
+            _session_cookie(client)
+            r = await client.get(PN_URL)
+            assert r.status_code == 404
+
+    asyncio.run(run())
+
+
+def test_proposals_unsafe_methods_quiet_noop_body_not_parsed():
+    async def run():
+        app = _app(FakeFacade())
+        async with _client(app) as client:
+            _session_cookie(client)
+            paths = (PN_URL, PN_URL + "/generate", PN_URL + "/imports/cancel")
+            for p in paths:
+                for method in ("POST", "PUT", "PATCH", "DELETE"):
+                    # 200 KB garbage body: a 204 proves the body was
+                    # never parsed before the cut.
+                    r = await client.request(
+                        method,
+                        p,
+                        content=b"x" * 200_000,
+                        headers={"content-type": "text/garbage"},
+                    )
+                    assert r.status_code == 204, (p, method)
+                    assert r.content == b""
+        async with _client(app) as anon:
+            r = await anon.post(
+                PN_URL,
+                content=b"y" * 200_000,
+                headers={"content-type": "text/garbage"},
+            )
+            assert r.status_code == 404
+
+    asyncio.run(run())
+
+
+def test_proposals_query_law_refusals_404_no_db_access(monkeypatch):
+    async def run():
+        app = _app(FakeFacade())
+        demo = _PN_NS(target_db=COPY_OK)
+
+        calls: list = []
+
+        def _refusing_sessionmaker(_req):
+            calls.append(_req)
+            raise RuntimeError("no copy query before the query law")
+
+        # The query law refuses BEFORE any sessionmaker/copy access.
+        monkeypatch.setattr(
+            dac, "get_sessionmaker_from_app", _refusing_sessionmaker
+        )
+
+        # Missing demo state: defensive 404.
+        request = _pn_bare_request(app, {})
+        assert (await dac.demo_catalog_proposals(request)).status_code == 404
+        # With state, every non-canonical query shape is a fixed 404
+        # BEFORE any sessionmaker/copy access.
+        for query in (
+            "job=" + PN_JOB_A + "&job=" + PN_JOB_B,  # duplicate param
+            "job=" + PN_JOB_A + "&x=1",              # extra param
+            "x=1",                                   # unknown param
+            "job=",                                  # empty value
+            "job=" + "a1" * 12,                      # wrong length
+            "job=" + "A1" * 16,                      # uppercase hex
+            "job=" + PN_JOB_A + "!",                 # non-hex char
+            "job=" + "a1" * 300,                     # overlong
+        ):
+            request = _pn_bare_request(app, {"demo_admin": demo}, query)
+            assert (
+                await dac.demo_catalog_proposals(request)
+            ).status_code == 404, query
+        # Proven: no refusal path touched the copy seam.
+        assert calls == []
+
+    asyncio.run(run())
+
+
+def test_proposals_canonical_id_no_sessionmaker_503(monkeypatch):
+    async def run():
+        app = _app(FakeFacade())
+        demo = _PN_NS(target_db=COPY_OK)
+
+        class _RaiseFactory:
+            def __call__(self):
+                raise RuntimeError("no sessionmaker in demo state")
+
+        monkeypatch.setattr(
+            dac, "get_sessionmaker_from_app", lambda _req: _RaiseFactory()
+        )
+        request = _pn_bare_request(app, {"demo_admin": demo})
+        response = await dac.demo_catalog_proposals(request)
+        assert response.status_code == 503
+        assert dac._SAFE_PROPOSALS_UNAVAILABLE in response.body.decode()
+
+    asyncio.run(run())
+
+
+def test_proposals_preflight_mismatch_503(monkeypatch):
+    async def run():
+        for db, ro in ((COPY_OK, "off"), ("some_other_db", "on")):
+            fake = FakeFacade()
+            session = _ArtifactFakeSession(
+                meta_rows=[], body_rows=[], db=db, ro=ro
+            )
+            _pn_app(fake, monkeypatch, session)
+            request = _pn_bare_request(app=_app(fake), state={"demo_admin": _PN_NS(target_db=COPY_OK)})
+            response = await dac.demo_catalog_proposals(request)
+            assert response.status_code == 503
+            assert dac._SAFE_PROPOSALS_UNAVAILABLE in response.body.decode()
+            # The copy recheck happens BEFORE any copy query.
+            assert all("demo_display" not in t for t, _p in session.executed)
+
+    asyncio.run(run())
+
+
+def test_proposals_inventory_bound_503_and_limit_param(monkeypatch):
+    async def run():
+        fake = FakeFacade()
+        # 4097 rows (all non-proposals, so the bound trips before any
+        # per-row law): the bound LIMIT must make the page refuse.
+        rows = [
+            _pn_leaf(
+                f"catalog/jobs/{'a1' * 16}.json", "job_record", b"{}", 1750000000.0
+            )
+        ] * 4097
+        session = _ArtifactFakeSession(meta_rows=rows, body_rows=[], db=COPY_OK, ro="on")
+        _pn_app(fake, monkeypatch, session)
+        request = _pn_bare_request(_app(fake), {"demo_admin": _PN_NS(target_db=COPY_OK)})
+        response = await dac.demo_catalog_proposals(request)
+        assert response.status_code == 503
+        # The inventory statement carries the BOUND limit parameter.
+        inventory = [
+            (t, p) for t, p in session.executed if "demo_display.leaves" in t and not t.lstrip().startswith("SELECT body")
+        ]
+        assert len(inventory) == 1
+        stmt, params = inventory[0]
+        assert "LIMIT :limit" in stmt
+        assert params == {"limit": dac._MAX_INDEX_ROWS + 1}
+
+    asyncio.run(run())
+
+
+def test_proposals_empty_index_honest_200(monkeypatch):
+    async def run():
+        fake = FakeFacade()
+        # Only a NON-proposals run row: an honest empty proposals list.
+        session = _ArtifactFakeSession(
+            meta_rows=[
+                _pn_leaf(
+                    f"catalog/runs/{CAT_RUN_ID}/catalog-refresh.json",
+                    "refresh_bundle", b"{}", 1750000001.0,
+                )
+            ],
+            body_rows=[],
+            db=COPY_OK,
+            ro="on",
+        )
+        app, _ = _pn_app(fake, monkeypatch, session)
+        async with _client(app) as client:
+            _session_cookie(client)
+            await _verified_session_client(fake, client)
+            r = await client.get(PN_URL)
+            assert r.status_code == 200
+            assert r.headers["cache-control"] == "private, no-store"
+            text = _norm(r.text)
+            assert "Sanitized demo snapshot display" in text
+            assert "ILLUSTRATIVE demo-only form" in text
+            assert "submitting has NO effect" in text
+            assert "No captured proposal artifact groups in this snapshot" in text
+            assert "This does not establish that the copy has no proposal jobs" in text
+            assert "status-only job without captured artifacts is not listed" in text
+            # The familiar form controls render (demo-labeled).
+            assert 'name="provider_scope"' in r.text
+            assert 'name="currency"' in r.text
+            # The NORMAL custody-backed last-job section never renders.
+            assert "Last proposal job" not in text
+            assert "Refresh status" not in text
+            # No copy name or credential echo.
+            assert COPY_OK not in r.text
+            # Copy-backed model choice is present (escaped).
+            assert "gpt-test" in r.text
+
+    asyncio.run(run())
+
+
+def test_proposals_positive_page_default_and_selected(monkeypatch):
+    async def run():
+        record = _pn_record_body()
+        fake = FakeFacade()
+        session = _ArtifactFakeSession(
+            meta_rows=_pn_inventory(record=record),
+            body_rows=[(record,)],
+            db=COPY_OK,
+            ro="on",
+        )
+        app, _ = _pn_app(fake, monkeypatch, session)
+        async with _client(app) as client:
+            _session_cookie(client)
+            await _verified_session_client(fake, client)
+            # Default (absent param): the MOST-RECENTLY-captured group
+            # (A) is selected; its sanitized job record renders
+            # HISTORICAL status (real 223 sanitizer body).
+            r = await client.get(PN_URL)
+            assert r.status_code == 200
+            assert r.headers["cache-control"] == "private, no-store"
+            assert f'value="{PN_JOB_A}" selected' in r.text
+            assert f"value=\"{PN_JOB_B}\"" in r.text
+            assert "most-recently-captured" in _norm(r.text)
+            assert "100" in _norm(r.text)  # the stated bound
+            # Both captured artifacts of A, each through the exact
+            # 224-l forced-download route (full remapped logical name).
+            for href in (
+                f"?name=catalog/proposals/{PN_JOB_A}/routes-proposal.tsv",
+                f"?name=catalog/proposals/{PN_JOB_A}/packages/openrouter-chat-text/pricing-proposal.tsv",
+            ):
+                assert (
+                    f'href="/admin/operations/catalog/artifact{href}"' in r.text
+                ), href
+            # The typed job-record status, labeled historical.
+            assert "historical at capture time" in _norm(r.text)
+            assert ">ready<" in r.text
+            assert "2025-06-15T15:00:00+00:00" in r.text
+            assert "2025-06-15T15:06:40+00:00" in r.text
+            # The ORIGINAL job id, progress free text and copy name
+            # never render.
+            assert PN_ORIGINAL_JOB_A not in r.text
+            assert "free text never displayed" not in r.text
+            assert COPY_OK not in r.text
+            # The body fetch re-asserted the bound conditions as bound
+            # parameters.
+            body_stmts = [
+                (t, p) for t, p in session.executed if t.lstrip().startswith("SELECT body")
+            ]
+            assert len(body_stmts) == 1
+            _stmt, params = body_stmts[0]
+            assert params["cap"] == dac._MAX_ARTIFACT_BYTES
+            assert params["kind"] == "job_record"
+            # Explicit selection of the OLDER group B (no record leaf).
+            r = await client.get(PN_URL + "?job=" + PN_JOB_B)
+            assert r.status_code == 200
+            assert f'value="{PN_JOB_B}" selected' in r.text
+            assert "status unavailable in this snapshot" in _norm(r.text)
+            assert (
+                f'href="/admin/operations/catalog/artifact'
+                f"?name=catalog/proposals/{PN_JOB_B}/warnings.json" in r.text
+            )
+            assert f"?name=catalog/proposals/{PN_JOB_A}/" not in r.text
+
+    asyncio.run(run())
+
+
+def test_proposals_job_record_refusals_503(monkeypatch):
+    async def run():
+        cases = (
+            # (label, record meta override, body)
+            ("non-json/invalid shape", None, b"{}"),
+            ("foreign family", None, _pn_record_body(family="collect")),
+            ("different job id", None, _pn_record_body(job_id=PN_ORIGINAL_JOB_B)),
+            (
+                "size mismatch (cap-before-body body query never matches)",
+                {"size": 1},
+                _pn_record_body(),
+            ),
+        )
+        for label, override, body in cases:
+            record = body
+            rows = _pn_inventory(record=record)
+            if override:
+                fixed = []
+                for row in rows:
+                    if row[0] == f"catalog/jobs/{PN_JOB_A}.json":
+                        row = (
+                            row[0], row[1], override["size"], row[3], row[4]
+                        )
+                    fixed.append(row)
+                rows = fixed
+            fake = FakeFacade()
+            session = _ArtifactFakeSession(
+                meta_rows=rows, body_rows=[(body,)], db=COPY_OK, ro="on"
+            )
+            _pn_app(fake, monkeypatch, session)
+            app, _ = _pn_app(fake, monkeypatch, session)
+            async with _client(app) as client:
+                _session_cookie(client)
+                await _verified_session_client(fake, client)
+                r = await client.get(PN_URL)
+                assert r.status_code == 503, label
+                assert r.headers["cache-control"] == "private, no-store"
+                assert dac._SAFE_PROPOSALS_UNAVAILABLE in _norm(r.text)
+                assert body not in r.content, label
+        # Metadata claiming >32 MiB refuses BEFORE any body query.
+        big = _pn_record_body()
+        rows = []
+        for row in _pn_inventory(record=big):
+            if row[0] == f"catalog/jobs/{PN_JOB_A}.json":
+                row = (
+                    row[0],
+                    row[1],
+                    dac._MAX_ARTIFACT_BYTES + 1,
+                    row[3],
+                    row[4],
+                )
+            rows.append(row)
+        fake = FakeFacade()
+        session = _ArtifactFakeSession(
+            meta_rows=rows, body_rows=[(big,)], db=COPY_OK, ro="on"
+        )
+        _pn_app(fake, monkeypatch, session)
+        app, _ = _pn_app(fake, monkeypatch, session)
+        async with _client(app) as client:
+            _session_cookie(client)
+            await _verified_session_client(fake, client)
+            r = await client.get(PN_URL)
+            assert r.status_code == 503
+            assert not any(
+                t.lstrip().startswith("SELECT body") for t, _p in session.executed
+            )
+
+    asyncio.run(run())
+
+
+def test_proposals_unknown_job_param_404_no_fallback(monkeypatch):
+    async def run():
+        record = _pn_record_body()
+        fake = FakeFacade()
+        session = _ArtifactFakeSession(
+            meta_rows=_pn_inventory(record=record),
+            body_rows=[(record,)],
+            db=COPY_OK,
+            ro="on",
+        )
+        app, _ = _pn_app(fake, monkeypatch, session)
+        async with _client(app) as client:
+            _session_cookie(client)
+            await _verified_session_client(fake, client)
+            r = await client.get(PN_URL + "?job=" + "e5" * 16)
+            assert r.status_code == 404
+            # No fallback: the unknown id never renders and NO body
+            # query ran for the other (known) job.
+            assert PN_JOB_A not in r.text
+
+    asyncio.run(run())
+
+
+def test_proposals_group_bound_100(monkeypatch):
+    async def run():
+        # 101 captured groups (A + B + 99 synthetic), one file each:
+        # the page lists at most 100, the OLDEST dropped, bound stated.
+        extra = [
+            _pn_leaf(
+                f"catalog/proposals/{('%02x' % i) + '0' * 30}/warnings.json",
+                "warnings_json",
+                b"{}",
+                1740000000.0 + i,
+            )
+            for i in range(99)
+        ]
+        fake = FakeFacade()
+        session = _ArtifactFakeSession(
+            meta_rows=_pn_inventory(extra_rows=extra),
+            body_rows=[],
+            db=COPY_OK,
+            ro="on",
+        )
+        app, _ = _pn_app(fake, monkeypatch, session)
+        async with _client(app) as client:
+            _session_cookie(client)
+            await _verified_session_client(fake, client)
+            r = await client.get(PN_URL)
+            assert r.status_code == 200
+            values = [
+                m for m in __import__("re").finditer(
+                    r'<option value="([0-9a-f]{32})"', r.text
+                )
+            ]
+            assert len(values) == 100
+            shown = {v.group(1) for v in values}
+            assert PN_JOB_A in shown and PN_JOB_B in shown
+            # The oldest synthetic group (i=0) is the one dropped.
+            assert ("%02x" % 0) + "0" * 30 not in shown
+            assert "100" in _norm(r.text)
+
+    asyncio.run(run())
+
+
+def test_proposals_closed_file_law_corrupt_503(monkeypatch):
+    async def run():
+        bad_rows = (
+            # unknown top-level file name
+            [
+                _pn_leaf(
+                    f"catalog/proposals/{PN_JOB_A}/evil.txt",
+                    "route_tsv", b"{}", 1750000100.0,
+                )
+            ],
+            # package preset outside the closed product vocabulary
+            [
+                _pn_leaf(
+                    f"catalog/proposals/{PN_JOB_A}/packages/zzz-package/routes-proposal.tsv",
+                    "route_tsv", b"{}", 1750000100.0,
+                )
+            ],
+            # package file name outside the closed set
+            [
+                _pn_leaf(
+                    f"catalog/proposals/{PN_JOB_A}/packages/openrouter-chat-text/evil.tsv",
+                    "route_tsv", b"{}", 1750000100.0,
+                )
+            ],
+            # a bare "packages" segment is not a file
+            [
+                _pn_leaf(
+                    f"catalog/proposals/{PN_JOB_A}/packages",
+                    "route_tsv", b"{}", 1750000100.0,
+                )
+            ],
+            # kind disagrees with the worker-published file law
+            [
+                _pn_leaf(
+                    f"catalog/proposals/{PN_JOB_A}/routes-proposal.tsv",
+                    "job_record", b"{}", 1750000100.0,
+                )
+            ],
+        )
+        for rows in bad_rows:
+            fake = FakeFacade()
+            session = _ArtifactFakeSession(
+                meta_rows=rows, body_rows=[], db=COPY_OK, ro="on"
+            )
+            _pn_app(fake, monkeypatch, session)
+            app, _ = _pn_app(fake, monkeypatch, session)
+            async with _client(app) as client:
+                _session_cookie(client)
+                await _verified_session_client(fake, client)
+                r = await client.get(PN_URL)
+                assert r.status_code == 503, rows[0][0]
+
+    asyncio.run(run())
+
+
+def test_proposals_html_canary_escaped(monkeypatch):
+    async def run():
+        record = _pn_record_body()
+        canary = _PN_NS(
+            id="gpt-canary", label="<script>alert(1)</script>", sub="x&y"
+        )
+        fake = FakeFacade()
+        session = _ArtifactFakeSession(
+            meta_rows=_pn_inventory(record=record),
+            body_rows=[(record,)],
+            db=COPY_OK,
+            ro="on",
+        )
+        app, _ = _pn_app(fake, monkeypatch, session, choices=(canary,))
+        async with _client(app) as client:
+            _session_cookie(client)
+            await _verified_session_client(fake, client)
+            r = await client.get(PN_URL)
+            assert r.status_code == 200
+            assert "<script>alert(1)</script>" not in r.text
+            # The canary survives only as escaped/inert JSON.
+            assert "gpt-canary" in r.text
+
+    asyncio.run(run())
+
+
+def test_index_links_proposals_page(monkeypatch):
+    async def run():
+        fake = FakeFacade()
+        fake.worker_target_db = COPY_OK
+        _preflight_case(monkeypatch, COPY_OK, "on")
+        factory, _made = _display_factory(leaves=[])
+        app = _app(fake, display_reader_factory=factory)
+        async with _client(app) as client:
+            _session_cookie(client)
+            await _verified_session_client(fake, client)
+            r = await client.get(CATALOG_INDEX_URL)
+            assert r.status_code == 200
+            assert (
+                'href="/admin/operations/catalog/proposals"' in r.text
+            )
 
     asyncio.run(run())

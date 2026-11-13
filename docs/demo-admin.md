@@ -2184,3 +2184,127 @@ provider credentials.
   owned-PG transport and mocked-ASGI coverage above, and the
   configured-file installed browser workflow remains objective
   225).
+
+## Captured proposals page (objective 224-n)
+
+224-n (same PR #383) opens ONE existing GUI path as a demo-only
+`GET /admin/operations/catalog/proposals` in the existing demo
+catalog router, admitted in the central gate by exact path only
+(near misses, extra suffixes and the `/generate` POST family stay
+refused; every unsafe `/admin` method remains the unchanged pre-body
+quiet 204 cut). The normal custody-backed proposal handler, template
+behavior and routes are unchanged; the demo page links from the
+catalog index header without adding a top-nav item.
+
+The page renders the FAMILIAR proposal form controls as an
+ILLUSTRATIVE demo-only form: the static provider-scope/currency/
+endpoint/preset options are fixed product vocabularies, the model-ID
+choices are COPY-BACKED (read SELECT-only from this visitor's copy
+`catalog_upstream`; a failed copy query is a fixed safe refusal,
+never a silent empty dropdown), and a prominent neutral banner
+states that submitting has NO effect (no job is generated and no
+provider is called) — the form submit remains a no-op through the
+gate. Live operator settings, source catalog custody, ambient
+credentials, the worker filesystem and the original HMAC seal are
+never read.
+
+Below the form, the page presents a bounded, clearly HISTORICAL list
+of the captured `catalog/proposals/<remapped-job-id>/...` artifact
+leaves from the verified target-only display index: the worker's
+closed file law (six top-level proposal files AND optional
+`packages/<closed-preset>/<five closed files>` entries) with per-row
+kind/size/capture-time validation, grouped by remapped job ID,
+sorted most-recently-captured first, AT MOST 100 groups with the
+bound stated on the page. A native selection control offers the
+captured groups (usable labels + help) and accepts only ONE canonical
+optional `job` query value: unknown, duplicate or extra parameters
+refuse safely (fixed 404) without falling back to another job. For
+the selected group, only the captured artifacts actually present are
+listed, each linked through the exact 224-l forced-attachment route
+(never inline). When the same copy holds the group's sanitized
+`catalog/jobs/<same id>.json` record, ONLY that body is loaded —
+metadata-first, the existing 32 MiB cap BEFORE the body, exact
+length + SHA256 after — re-proved against the worker's typed
+`job_record` shape with `family=proposal` and the EXACT selected job
+ID required before status/created/updated render, labeled
+historical at capture time (not live or actionable). A missing
+record shows a bounded "status unavailable in this snapshot" note; a
+corrupt record or corrupt index row is ONE fixed safe 503 with no
+raw echo. The label law is exact: the list covers captured proposal
+ARTIFACT leaves only — a status-only job without captured artifacts
+is not listed, and an empty list never means the copy has no
+proposal jobs (or that operator catalog storage was configured).
+The read runs in ONE read-only transaction on the gate's SAME
+request-local copy engine with the independent `current_database()`
+/ `transaction_read_only` recheck; the inventory SELECT carries a
+BOUND row limit (`LIMIT 4097`), transferring at most 4,097 metadata
+rows and refusing when the bound is reached. Every output is
+`private, no-store` and Jinja-escaped; no source path, original job
+ID, manifest field, DSN, credential or copy name ever renders.
+
+### Evidence (224-n)
+
+* Focused unit (mocked ASGI, no database; all new `test_proposals_*`
+  tests passed, exit 0): exact path admission and every near-miss
+  denial; zero-active 404; every unsafe method (including
+  `/proposals/generate` and imports/cancel paths) the quiet 204 cut
+  with a 200 KB body never parsed; the query law refuses duplicate,
+  extra, unknown, empty, wrong-length, uppercase, non-hex and
+  overlong `job` values with fixed 404s BEFORE any copy-seam access
+  (proven by a call-recording refusing sessionmaker plus the
+  zero-call assertion); a gate-admitted page whose demo state lacks
+  a usable sessionmaker is a fixed 503; the in-transaction binding
+  recheck (wrong database or read-only off, after the gate passes)
+  is a fixed 503 with zero copy queries; the inventory bound (a
+  4097-row result) is a fixed 503 and the statement carries the
+  bound `LIMIT :limit` parameter; an
+  honest empty page (demo banner, illustrative form, empty-group
+  note with the no-inference wording, no custody last-job section,
+  no copy-name echo); the positive page (fixture = ACTUAL 223
+  sanitizer job-record output for a synthetic original record)
+  selects the most-recently-captured group by default, honors an
+  explicit `?job=` selection, renders both captured artifacts (top
+  level + closed preset) through the exact 224-l forced-download
+  hrefs, the typed historical status/times, the stated 100 bound,
+  and never the original job ID, progress free text or copy name;
+  the bound-parameter body re-asserts are verified on the recorded
+  statements; a job without a record leaf shows the bounded
+  "status unavailable" note; every job-record refusal (non-JSON,
+  foreign family, different job ID, size mismatch, and a metadata
+  size above 32 MiB in which the body query NEVER runs) is a fixed
+  503 with no echo; an unknown canonical `job` value is a fixed 404
+  with no fallback; a 101-group inventory lists exactly 100 with
+  the oldest dropped; every closed-file-law corruption (unknown
+  file, unknown preset, unknown package file, bare `packages`
+  segment, kind mismatch) is a fixed 503; a model-option HTML
+  canary renders escaped/inert; the index header links the page.
+  Directly affected unit files re-run green (290 passed).
+* Owned PostgreSQL 16 (real target-only `demo_display.leaves`, real
+  restricted reader role, two sessions on distinct copies): after
+  the worker run and its honest empty-index assertions, ONE
+  test-only captured proposal job is inserted into copy A through
+  the owned target-owner connection (honest label: the two TSV
+  bodies are `b"{}"` test-only placeholders and are NOT valid TSV
+  content for their kinds — the page reads only their metadata,
+  never artifact bodies; the job record body IS actual 223
+  sanitizer output for a synthetic original record; this proves
+  route/reader/inventory transport/binding, NOT 223 source capture,
+  worker publication or sanitization of a real job — the
+  configured-file installed workflow remains objective 225).
+  Session A receives the 200 page (demo banner, the one captured
+  artifact group selected, both exact forced-download hrefs, typed
+  historical status `ready` with created/updated, no original job
+  ID or copy name); explicit selection, an unknown canonical job
+  and duplicate/extra query parameters behave as the fixed 404
+  refusals; session B (its own exact copy, no proposal leaves)
+  renders the honest empty artifact-group state (copy isolation);
+  corrupting the stored SHA on the job record is the fixed safe 503
+  without body echo; the path stays the quiet 204 cut; the three
+  leaves are deleted afterwards by EXACT names (`ANY($1::text[])`,
+  never a prefix match) and the empty state re-proven.
+* Real Chromium: the owned browser fixture has NO configured
+  proposal leaves, so the page renders 200 in the real browser with
+  the demo banner, the illustrative form and the honest empty
+  artifact-group state (stated limit; the positive page is proven
+  by owned-PG transport and mocked-ASGI coverage; the
+  configured-file installed browser workflow remains objective 225).

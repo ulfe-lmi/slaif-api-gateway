@@ -75,8 +75,10 @@ from fastapi.responses import HTMLResponse, Response
 from sqlalchemy import text
 
 from slaif_gateway.api.admin import templates
+from slaif_gateway.services.admin_record_choices import load_choices
 from slaif_gateway.db.session import get_sessionmaker_from_app
 from slaif_gateway.services import demo_snapshot_files as dsf
+from slaif_gateway.services.provider_catalog_proposal import OPENROUTER_PACKAGE_ORDER
 
 router = APIRouter(prefix="/admin/operations/catalog", include_in_schema=False)
 
@@ -111,6 +113,109 @@ _MAX_DETAIL_LIST_ROWS = 4096
 _SAFE_RUN_DETAIL_UNAVAILABLE = (
     "The catalog run detail is unavailable for this demo session."
 )
+# 224-n: the bounded captured-proposals page law.
+_MAX_PROPOSAL_GROUPS = 100  # at most the 100 most-recently-captured jobs
+_SAFE_PROPOSALS_UNAVAILABLE = (
+    "The catalog proposals page is unavailable for this demo session."
+)
+
+
+def _proposals_not_found() -> Response:
+    return _safe_not_found()
+
+
+def _proposals_unavailable() -> Response:
+    return _safe_unavailable(_SAFE_PROPOSALS_UNAVAILABLE)
+
+
+def _project_proposal_groups(rows: Any) -> list[dict[str, object]]:
+    """Project the closed remapped ``catalog/proposals/...`` leaves into
+    bounded captured-job groups (never a directory scan).
+
+    Every proposals-area row must satisfy the SAME closed projection law
+    as the 224-k index (name, kind shape, bounded size, finite
+    representable capture time) PLUS the worker's closed file law: one
+    top-level ``_PROPOSAL_NAMES`` file, or one ``OPENROUTER_PACKAGE_ORDER``
+    preset directory holding one ``_PACKAGE_FILE_NAMES`` file, each with
+    its exact worker-published kind. Any other shape is a corrupt
+    display index: ``ValueError`` (the caller answers with the fixed
+    safe 503, no raw echo). Non-catalog (branding/profile) leaves share
+    the table and are skipped, exactly as in the 224-k projection.
+    """
+    groups: dict[str, dict[str, object]] = {}
+    for row in rows:
+        name, kind, size, _sha, captured = row
+        if not isinstance(name, str) or not name.startswith("catalog/"):
+            continue
+        try:
+            area, demo_id, parts = _catalog_name_parts(name)
+        except ValueError:
+            raise ValueError("invalid display index") from None
+        if area != "proposals":
+            continue
+        if not isinstance(kind, str) or _KIND.fullmatch(kind) is None:
+            raise ValueError("invalid catalog kind")
+        if isinstance(size, bool) or not isinstance(size, int) or not 0 <= size <= 2**31:
+            raise ValueError("invalid catalog size")
+        if isinstance(captured, bool) or not isinstance(captured, (int, float)):
+            raise ValueError("invalid capture time")
+        captured_float = float(captured)
+        if not math.isfinite(captured_float) or not 0 <= captured_float < _MAX_CAPTURE_AT:
+            raise ValueError("invalid capture time")
+        try:
+            dt = datetime.fromtimestamp(captured_float, tz=UTC)
+        except (OverflowError, OSError, ValueError):
+            raise ValueError("invalid capture time") from None
+        # The worker's closed proposals file law: one top-level
+        # ``_PROPOSAL_NAMES`` file, or a ``packages/<preset>/`` file with
+        # the fixed product preset vocabulary; no other shape exists.
+        if len(parts) == 1:
+            expected_kind = dsf._PROPOSAL_KINDS.get(parts[0])
+        elif (
+            len(parts) == 3
+            and parts[0] == "packages"
+            and parts[1] in OPENROUTER_PACKAGE_ORDER
+        ):
+            expected_kind = dsf._PACKAGE_KINDS.get(parts[2])
+        else:
+            expected_kind = None
+        if expected_kind is None or kind != expected_kind:
+            raise ValueError("invalid catalog file")
+        group = groups.get(demo_id)
+        if group is None:
+            group = {
+                "job_id": demo_id,
+                "captured_max": captured_float,
+                "artifacts": [],
+            }
+            groups[demo_id] = group
+        group["captured_max"] = max(group["captured_max"], captured_float)
+        group["artifacts"].append(
+            {
+                "display": "/".join(parts),
+                "name": name,
+                "kind": kind,
+                "byte_count": size,
+                "captured_utc": dt.strftime("%Y-%m-%d %H:%M:%S UTC"),
+                "captured_sort": dt.isoformat(),
+            }
+        )
+    for group in groups.values():
+        rows_of_group = group["artifacts"]
+        rows_of_group.sort(key=lambda a: str(a["display"]))
+        best = max(rows_of_group, key=lambda a: str(a["captured_sort"]))
+        group["captured_sort"] = str(best["captured_sort"])
+        group["captured_utc"] = str(best["captured_utc"])
+    ordered = sorted(
+        groups.values(),
+        key=lambda g: (str(g["captured_sort"]), str(g["job_id"])),
+        reverse=True,
+    )
+    # Most-recently-captured first (reverse); the 100-group bound is
+    # stated on the page, never hidden.
+    for index, group in enumerate(ordered):
+        group["ordinal"] = index + 1
+    return ordered[:_MAX_PROPOSAL_GROUPS]
 
 
 def _catalog_name_parts(name: str) -> tuple[str, str, tuple[str, ...]]:
@@ -631,6 +736,202 @@ async def demo_catalog_run_detail(request: Request, run_id: str) -> Response:
             "run_id": run_id,
             "detail": detail,
             "artifact_rows": artifact_rows,
+        },
+        status_code=200,
+    )
+    response.headers["Cache-Control"] = "private, no-store"
+    return response
+
+
+# --- 224-n: demo-only copy-backed captured proposals page ---------------------
+
+
+@router.get("/proposals", response_class=HTMLResponse)
+async def demo_catalog_proposals(request: Request) -> Response:
+    """224-n: ONE captured-proposals page from this visitor's exact
+    verified copy.
+
+    Exact path only (gate-admitted). The page renders the familiar
+    proposal form controls as an ILLUSTRATIVE demo-only form (fixed
+    product option vocabularies, copy-backed model choices, submitting
+    has NO effect - the gate's quiet 204 cut ends every unsafe method)
+    plus a bounded, clearly HISTORICAL list of the captured
+    ``catalog/proposals/<remapped-job-id>/...`` leaves: at most the 100
+    most-recently-captured job groups, a native selection control that
+    accepts only ONE canonical optional ``job`` value (unknown,
+    duplicate or extra parameters refuse safely, never falling back to
+    another job), and - for the selected job - the captured artifacts
+    actually present (each linked through the exact 224-l forced
+    download) plus, when a ``catalog/jobs/<same id>.json`` sanitized
+    job record exists, its re-proved ``family=proposal`` status/times
+    labeled historical at capture time. One read-only transaction on
+    the gate's SAME request-local copy engine with the independent
+    ``current_database()`` / ``transaction_read_only`` recheck; the job
+    record body uses the shared 224-l metadata-first, 32 MiB cap-
+    before-body, exact length + SHA256 fetch. Missing groups render an
+    honest empty state (an empty list never implies a missing file
+    source); any corrupt index row, corrupt job record or driver
+    failure is one fixed safe refusal with no raw echo. The normal
+    custody-backed handler, template and routes are unchanged.
+    """
+    demo = getattr(request.state, "demo_admin", None)
+    if demo is None:
+        return _proposals_not_found()
+    # Query law: ZERO parameters, or exactly ONE ``job=<32hex>`` value.
+    # Duplicate, unknown, empty or overlong parameters refuse safely
+    # (fixed 404, no echo, no fallback to another job).
+    pairs = list(request.query_params.multi_items())
+    job_param: str | None = None
+    if pairs:
+        if len(pairs) != 1 or pairs[0][0] != "job":
+            return _proposals_not_found()
+        candidate = pairs[0][1]
+        if (
+            not candidate
+            or len(candidate) > _MAX_NAME_LEN
+            or _JOB_ID.fullmatch(candidate) is None
+        ):
+            return _proposals_not_found()
+        job_param = candidate
+    # The gate's SAME request-local copy engine (demo_mode seam): the
+    # only copy binding this request may use; absent state fails
+    # closed to the safe 503, never to an app-global factory.
+    try:
+        session_factory = get_sessionmaker_from_app(request)
+    except Exception:
+        return _proposals_unavailable()
+    model_options: list[Any]
+    groups: list[dict[str, object]]
+    selected: dict[str, object] | None
+    job_status: dict[str, object] | None
+    try:
+        async with session_factory() as session, session.begin():
+            # Independently re-verify, INSIDE this read-only
+            # transaction, that the engine is bound to this session's
+            # exact copy and the server holds it read-only.
+            current = await session.scalar(text("SELECT current_database()"))
+            read_only = await session.scalar(text("SHOW transaction_read_only"))
+            if current != demo.target_db or read_only != "on":
+                return _proposals_unavailable()
+            # Copy-backed model choices (SELECT-only copy table; the
+            # pure credential-shape guard still applies). A failed copy
+            # query is a fixed safe refusal, never a silent dropdown.
+            model_options = await load_choices(
+                session, "catalog_upstream", selected=()
+            )
+            # Bounded METADATA inventory (no body transfer at all): the
+            # LIMIT is a BOUND parameter, so even a corrupt copy can
+            # never transfer more than the existing 4096-row display
+            # bound plus one (the extra row proves the bound tripped).
+            rows = (
+                await session.execute(
+                    text(
+                        "SELECT logical_name, kind, byte_count, sha256, "
+                        "captured_at FROM demo_display.leaves "
+                        "LIMIT :limit"
+                    ),
+                    {"limit": _MAX_INDEX_ROWS + 1},
+                )
+            ).all()
+            if (
+                not isinstance(rows, (list, tuple))
+                or len(rows) > _MAX_INDEX_ROWS
+            ):
+                return _proposals_unavailable()
+            groups = _project_proposal_groups(list(rows))
+            # Selection: an explicit job param must match a captured
+            # group EXACTLY (no fallback); absent param shows the
+            # most-recently-captured group (never "live").
+            if job_param is not None:
+                matches = [g for g in groups if g["job_id"] == job_param]
+                if not matches:
+                    return _proposals_not_found()
+                selected = matches[0]
+            else:
+                selected = groups[0] if groups else None
+            job_status = None
+            if selected is not None:
+                # The SAME copy may hold the job's sanitized record
+                # (admin-visible job projection, worker-published).
+                record_name = f"catalog/jobs/{selected['job_id']}.json"
+                record_meta: tuple[str, int, str] | None = None
+                for row in list(rows):
+                    if row[0] != record_name:
+                        continue
+                    kind, size, stored_sha = row[1], row[2], row[3]
+                    # The 32 MiB per-file maximum is enforced on the
+                    # METADATA BEFORE any body fetch (cap-before-body);
+                    # _fetch_bounded_body then re-asserts it in SQL.
+                    if (
+                        kind != dsf.KIND_JOB_RECORD
+                        or isinstance(size, bool)
+                        or not isinstance(size, int)
+                        or not 0 <= size <= _MAX_ARTIFACT_BYTES
+                        or not isinstance(stored_sha, str)
+                        or _SHA256_HEX.fullmatch(stored_sha) is None
+                    ):
+                        return _proposals_unavailable()
+                    record_meta = (str(kind), int(size), str(stored_sha))
+                if record_meta is not None:
+                    # Metadata-first, 32 MiB cap BEFORE body, exact
+                    # length + SHA256 after: the shared 224-l fetch.
+                    body = await _fetch_bounded_body(
+                        session,
+                        record_name,
+                        record_meta[0],
+                        record_meta[1],
+                        record_meta[2],
+                    )
+                    if body is None:
+                        return _proposals_unavailable()
+                    # Re-prove the worker's exact typed job-record shape,
+                    # then require family=proposal and the EXACT selected
+                    # job id before anything renders.
+                    dsf._verify_json_policy(dsf.KIND_JOB_RECORD, body)
+                    doc = json.loads(body.decode("utf-8"))
+                    if (
+                        doc.get("family") != "proposal"
+                        or doc.get("job_id") != selected["job_id"]
+                    ):
+                        return _proposals_unavailable()
+                    job_status = {
+                        "status": doc["status"],
+                        "cancel_requested": bool(doc["cancel_requested"]),
+                        "created_at": doc["created_at"],
+                        "updated_at": doc["updated_at"],
+                    }
+    except Exception:
+        # Driver, connection, statement or projection failure: one
+        # fixed safe refusal. Cancellation is a BaseException and is
+        # not swallowed.
+        return _proposals_unavailable()
+
+    response = templates.TemplateResponse(
+        request,
+        "catalog_refresh/proposals.html",
+        {
+            "admin": demo.session_context.admin_user,
+            "csrf_token": demo.csrf_token,
+            # Demo context: the FAMILIAR form renders with fixed
+            # product option vocabularies and copy-backed choices; the
+            # demo banner labels it illustrative (no operational
+            # effect). last_job stays None, so the NORMAL custody-backed
+            # last-job section and its links never render in demo.
+            "setup": {"state": "ready"},
+            "errors": {},
+            "currencies": ("USD", "EUR", "GBP", "CHF"),
+            "endpoint_scopes": ("chat_completions", "responses"),
+            "package_presets": OPENROUTER_PACKAGE_ORDER,
+            "model_options": model_options,
+            "last_job": None,
+            "last_job_packages": None,
+            "last_job_provider_scope": None,
+            "job_refusal": None,
+            "demo_admin": True,
+            "demo_proposal_groups": groups,
+            "demo_proposal_bound": _MAX_PROPOSAL_GROUPS,
+            "demo_selected": selected,
+            "demo_job_status": job_status,
         },
         status_code=200,
     )

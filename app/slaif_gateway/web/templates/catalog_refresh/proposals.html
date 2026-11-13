@@ -40,6 +40,23 @@
   </div>
   {% endif %}
 
+  {% if demo_admin %}
+  <div class="admin-flash" role="status">
+    <strong>Sanitized demo snapshot display:</strong> the proposal form
+    below is an ILLUSTRATIVE demo-only form — the model-ID choices are
+    copy-backed from your private demo copy, while the static
+    scope/currency/preset options are fixed product vocabularies and
+    submitting has NO effect (no job is generated and no provider is
+    called). The captured proposal jobs further down are HISTORICAL
+    sanitized snapshots from that copy, not live jobs: their status is
+    as of capture time, and each artifact link forces a file download
+    of the sanitized display copy (nothing is rendered inline).
+    The group list covers captured proposal ARTIFACT leaves only: a
+    status-only job without captured artifacts is not listed there,
+    and an empty list never means the copy has no proposal jobs.
+  </div>
+  {% endif %}
+
   {% if setup.state != 'ready' %}
   <div class="admin-flash" role="status">
     <strong>Unavailable:</strong>
@@ -233,6 +250,54 @@
       </details>
       {% endfor %}
       {% endif %}
+      {% endif %}
+    </div>
+  </div>
+  {% endif %}
+
+  {% if demo_admin %}
+  <div class="dash-groups">
+    <div class="dash-group">
+      <h2>Captured proposal artifact groups (historical)</h2>
+      {% if demo_selected %}
+      <form method="get" action="/admin/operations/catalog/proposals" class="inline-form">
+        <label for="demo-proposal-job">Captured artifact group</label>
+        <select name="job" id="demo-proposal-job" aria-describedby="demo-proposal-job-help">
+          {% for g in demo_proposal_groups %}
+          <option value="{{ g.job_id }}" {% if g.job_id == demo_selected.job_id %}selected{% endif %}>{{ g.job_id }} — captured {{ g.captured_utc }} ({{ g.artifacts | length }} file{{ "s" if g.artifacts | length != 1 }})</option>
+          {% endfor %}
+        </select>
+        <button type="submit">Show</button>
+        <p class="help" id="demo-proposal-job-help">
+          Pick one captured proposal artifact group from this
+          snapshot. At most the {{ demo_proposal_bound }}
+          most-recently-captured groups are listed (bound).
+        </p>
+      </form>
+      <p>
+        <code>{{ demo_selected.job_id }}</code>
+        {% if demo_job_status %}— status (historical at capture time, not live or actionable): <code>{{ demo_job_status.status }}</code>{% if demo_job_status.cancel_requested %} (cancel requested){% endif %} — created {{ demo_job_status.created_at }} — updated {{ demo_job_status.updated_at }}{% else %}— status unavailable in this snapshot{% endif %}
+      </p>
+      <p class="muted">
+        Captured artifacts actually present for this job (sanitized
+        display copies; each link forces a file download through the
+        exact 224-l route).
+      </p>
+      <ul>
+        {% for a in demo_selected.artifacts %}
+        <li>
+          <a href="/admin/operations/catalog/artifact?name={{ a.name | urlencode }}">{{ a.display }}</a>
+          <span class="muted">({{ a.kind }}, {{ a.byte_count | num }} bytes, captured {{ a.captured_utc }})</span>
+        </li>
+        {% endfor %}
+      </ul>
+      {% else %}
+      <p>No captured proposal artifact groups in this snapshot.</p>
+      <p class="muted" role="note">
+        This does not establish that the copy has no proposal jobs:
+        the list covers captured proposal artifact leaves only, so a
+        status-only job without captured artifacts is not listed here.
+      </p>
       {% endif %}
     </div>
   </div>

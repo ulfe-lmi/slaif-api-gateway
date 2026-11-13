@@ -165,10 +165,14 @@ ADMITTED_REPORTING_PATHS = (
 # 224-k: only the safe, target-copy catalog metadata index; 224-l
 # adds the ONE exact sanitized display-copy artifact download;
 # 224-m adds the ONE canonical sanitized run-detail shape
-# (demo-run- + 24 lowercase hex, required trailing slash). All use
-# the same gate law and the same request-local copy binding.
+# (demo-run- + 24 lowercase hex, required trailing slash); 224-n
+# adds the ONE exact captured-proposals page. All use the same
+# gate law and the same request-local copy binding.
 ADMITTED_CATALOG_INDEX_PATH = "/admin/operations/catalog/"
 ADMITTED_CATALOG_ARTIFACT_PATH = "/admin/operations/catalog/artifact"
+# 224-n: the ONE exact captured-proposals page (no trailing slash;
+# every near miss / extra suffix stays default-denied 404).
+ADMITTED_CATALOG_PROPOSALS_PATH = "/admin/operations/catalog/proposals"
 # 224-m: the exact canonical run-detail shape; near misses and
 # noncanonical/source IDs are never admitted.
 _CATALOG_RUN_DETAIL_RE = re.compile(
@@ -284,7 +288,11 @@ def _is_admitted_path(path: str) -> bool:
         return True
     if path in ADMITTED_REPORTING_PATHS:
         return True
-    if path == ADMITTED_CATALOG_INDEX_PATH or path == ADMITTED_CATALOG_ARTIFACT_PATH:
+    if (
+        path == ADMITTED_CATALOG_INDEX_PATH
+        or path == ADMITTED_CATALOG_ARTIFACT_PATH
+        or path == ADMITTED_CATALOG_PROPOSALS_PATH
+    ):
         return True
     if _CATALOG_RUN_DETAIL_RE.fullmatch(path) is not None:
         return True

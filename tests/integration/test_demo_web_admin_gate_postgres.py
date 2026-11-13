@@ -635,7 +635,10 @@ def test_e2e_admin_gate_two_sessions_distinct_copies(
                             # 224-k near-misses: missing slash and every
                             # deeper catalog GET stay default-denied.
                             "/admin/operations/catalog",
-                            "/admin/operations/catalog/proposals",
+                            # 224-n: the exact /proposals GET is now
+                            # ADMITTED (proven just below); its
+                            # near-misses stay denied.
+                            "/admin/operations/catalog/proposals/extra",
                             "/admin/operations/catalog/collect",
                             "/admin/operations/catalog/export-baseline",
                             f"/admin/operations/catalog/runs/{uuid.uuid4()}/",
@@ -659,6 +662,20 @@ def test_e2e_admin_gate_two_sessions_distinct_copies(
                             f"/admin/usage/{usage_id}/export.csv",
                         ):
                             assert (await client.get(gated)).status_code == 404, gated
+
+                    # 224-n: the admitted captured-proposals page renders
+                    # for this verified session; the worker-published
+                    # fixture carries NO configured catalog leaves, so
+                    # this is the honest empty artifact-group state
+                    # (before the 224-n test-only insertion further
+                    # down).
+                    r = await client.get("/admin/operations/catalog/proposals")
+                    assert r.status_code == 200
+                    assert r.headers["cache-control"] == "private, no-store"
+                    assert (
+                        "No captured proposal artifact groups in this snapshot"
+                        in " ".join(r.text.split())
+                    )
 
                     # --- distinct copies: B renders exactly one more -----
                     # institution row than A (the 222-fictionalized marker).
@@ -1002,6 +1019,171 @@ def test_e2e_admin_gate_two_sessions_distinct_copies(
                         # Cleanup proven: session A 404s again.
                         r = await client_a.get(_rd_url)
                         assert r.status_code == 404
+
+                    # --- 224-n: captured-proposals transport -----------
+                    # TARGET-SIDE INSERTION (honest label): the test
+                    # inserts ONE test-only captured proposal job into
+                    # copy A's worker-published demo_display.leaves
+                    # through the owned target-owner connection: two
+                    # proposal artifact leaves whose bodies are b"{}"
+                    # test-only placeholders (NOT valid TSV content for
+                    # their kinds - the page reads ONLY their metadata,
+                    # never artifact bodies) and one sanitized job
+                    # record whose body is the ACTUAL 223 sanitizer
+                    # output for a synthetic original record. This
+                    # proves route/reader/inventory transport/binding
+                    # through the real target-only table, the
+                    # restricted reader role and the gate-bound session
+                    # - NOT 223 source capture, worker publication or
+                    # sanitization of a real job (the configured-file
+                    # installed workflow remains objective 225).
+                    _pn_orig_job = "e6" * 16  # ORIGINAL id (never stored)
+                    _pn_job = _rd_dsf._demo_job_id(b"224n-pg-seed", _pn_orig_job)
+                    _pn_record = _rd_dsf._sanitize_job_record(
+                        _rd_json.dumps(
+                            {
+                                "job_id": _pn_orig_job,
+                                "family": "proposal",
+                                "status": "ready",
+                                "progress": "free text never displayed",
+                                "dispatch": None,
+                                "run_id": None,
+                                "artifact_name": None,
+                                "cancel_requested": False,
+                                "created_at": "2025-06-15T15:00:00+00:00",
+                                "updated_at": "2025-06-15T15:06:40+00:00",
+                            }
+                        ).encode(),
+                        b"224n-pg-seed",
+                    )
+                    _pn_files = (
+                        (
+                            f"catalog/proposals/{_pn_job}/routes-proposal.tsv",
+                            "route_tsv",
+                            b"{}",
+                        ),
+                        (
+                            f"catalog/proposals/{_pn_job}"
+                            "/packages/openrouter-chat-text/pricing-proposal.tsv",
+                            "pricing_tsv",
+                            b"{}",
+                        ),
+                        (
+                            f"catalog/jobs/{_pn_job}.json",
+                            "job_record",
+                            _pn_record,
+                        ),
+                    )
+                    _pn_url = "/admin/operations/catalog/proposals"
+                    try:
+                        s = await _target_conn()
+                        for _pn_name, _pn_kind, _pn_data in _pn_files:
+                            await s.execute(
+                                "INSERT INTO demo_display.leaves "
+                                "(logical_name, kind, sha256, byte_count, "
+                                "captured_at, body) "
+                                "VALUES ($1, $2, $3, $4, $5, $6)",
+                                _pn_name,
+                                _pn_kind,
+                                _art_hashlib.sha256(_pn_data).hexdigest(),
+                                len(_pn_data),
+                                1750000200.0,
+                                _pn_data,
+                            )
+                        await s.close()
+                        # Session A: the captured-proposals page from
+                        # its OWN exact copy (demo banner, the one
+                        # captured artifact group with both forced-
+                        # download hrefs, the typed HISTORICAL status,
+                        # no original id and no copy name).
+                        r = await client_a.get(_pn_url)
+                        assert r.status_code == 200
+                        assert r.headers["cache-control"] == "private, no-store"
+                        _pn_text = " ".join(r.text.split())
+                        assert "Sanitized demo snapshot display" in _pn_text
+                        assert "ILLUSTRATIVE demo-only form" in _pn_text
+                        assert "Captured proposal artifact groups (historical)" in _pn_text
+                        assert f'value="{_pn_job}" selected' in r.text
+                        for _pn_name, _pn_kind, _pn_data in _pn_files[:2]:
+                            assert (
+                                f'href="/admin/operations/catalog/artifact'
+                                f'?name={_pn_name}"'
+                            ) in r.text, _pn_name
+                        assert "historical at capture time" in _pn_text
+                        assert ">ready<" in r.text
+                        assert "2025-06-15T15:00:00+00:00" in r.text
+                        assert _pn_orig_job not in r.text
+                        assert target_a not in r.text
+                        # Explicit selection of the same group.
+                        r = await client_a.get(_pn_url + "?job=" + _pn_job)
+                        assert r.status_code == 200
+                        # Unknown canonical job id: fixed 404, no
+                        # fallback to another group.
+                        r = await client_a.get(_pn_url + "?job=" + "e5" * 16)
+                        assert r.status_code == 404
+                        assert _pn_job not in r.text
+                        # Duplicate/extra query parameters: fixed 404.
+                        r = await client_a.get(
+                            _pn_url + "?job=" + _pn_job + "&job=" + _pn_job
+                        )
+                        assert r.status_code == 404
+                        r = await client_a.get(_pn_url + "?x=1")
+                        assert r.status_code == 404
+                        # Session B: the SAME page against its OWN exact
+                        # copy (which has NO proposal leaves) renders
+                        # the honest empty state (copy isolation).
+                        r = await client_b.get(_pn_url)
+                        assert r.status_code == 200
+                        assert (
+                            "No captured proposal artifact groups in this snapshot"
+                            in " ".join(r.text.split())
+                        )
+                        assert f'value="{_pn_job}"' not in r.text
+                        # Corruption: a wrong stored SHA on the job
+                        # record is the fixed safe 503, no body echo.
+                        s = await _target_conn()
+                        await s.execute(
+                            "UPDATE demo_display.leaves SET sha256 = $2 "
+                            "WHERE logical_name = $1",
+                            f"catalog/jobs/{_pn_job}.json",
+                            "f" * 64,
+                        )
+                        await s.close()
+                        r = await client_a.get(_pn_url)
+                        assert r.status_code == 503
+                        assert r.headers["cache-control"] == "private, no-store"
+                        assert _pn_record not in r.content
+                        # The page path is the SAME quiet 204 cut.
+                        r = await client_a.post(
+                            _pn_url,
+                            content=b"x" * 200_000,
+                            headers={"content-type": "text/garbage"},
+                        )
+                        assert r.status_code == 204
+                        assert r.content == b""
+                    finally:
+                        # Remove EXACTLY the three test-inserted names
+                        # (never a prefix match); the worker-published
+                        # state returns exactly.
+                        s = await _target_conn()
+                        await s.execute(
+                            "DELETE FROM demo_display.leaves "
+                            "WHERE logical_name = ANY($1::text[])",
+                            [_pn_name for _pn_name, _k, _d in _pn_files],
+                        )
+                        await s.close()
+                        # Cleanup proven: copy A returns to its exact
+                        # worker-published state -> the honest empty
+                        # artifact-group state, no group link. (The
+                        # missing-record "status unavailable" behavior
+                        # is covered by the mocked-ASGI unit test.)
+                        r = await client_a.get(_pn_url)
+                        assert r.status_code == 200
+                        assert (
+                            "No captured proposal artifact groups in this snapshot"
+                            in " ".join(r.text.split())
+                        )
+                        assert f'value="{_pn_job}"' not in r.text
 
                     # --- operational POST families: quiet 204 no-ops -----
                     key_id = await _first_id(san_env, target_b, "gateway_keys")
@@ -1447,6 +1629,20 @@ def test_browser_smoke_demo_copy_pages(
             )
             assert r is not None and r.status == 404
             assert r.headers["cache-control"] == "private, no-store"
+            # 224-n: the owned browser fixture has NO configured
+            # proposal leaves, so the captured-proposals page renders
+            # the honest empty artifact-group state in the real
+            # browser (demo banner + illustrative form; the positive
+            # page is proven by owned-PG transport + mocked-ASGI unit
+            # coverage; the configured-file installed browser workflow
+            # remains objective 225).
+            r = page.goto("/admin/operations/catalog/proposals")
+            assert r is not None and r.status == 200
+            assert r.headers["cache-control"] == "private, no-store"
+            _pn_page = page.content()
+            assert "Sanitized demo snapshot display" in " ".join(_pn_page.split())
+            assert "No captured proposal artifact groups in this snapshot" in " ".join(_pn_page.split())
+            assert 'name="provider_scope"' in _pn_page  # illustrative form
             assert target not in content
             assert 'href="/admin/operations"' not in content  # still no nav item
             # ephemeral desktop-layout screenshot (run-owned /tmp path;
