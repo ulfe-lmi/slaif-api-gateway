@@ -2123,16 +2123,17 @@ original counts map — explicitly NOT a count of catalog or model
 entries); bounded per-provider totals (each the sum of that
 provider's original count metrics in the captured run, not a model
 or request count); and bounded warnings, dispositions and price
-comparison rows (signed percent values, no sign doubling). The
-free-text detail fields (state reasons, evidence, gates, apply
-plan) are neutralized and never displayed. The artifact list is a
-compact ordinal-first sortable table (artifact, kind, bytes,
-captured UTC) with download links. The page and every 404/503
-refusal are `private, no-store`; every unsafe `/admin` method
-remains the unchanged pre-body quiet 204 cut. The stored SHA, copy
-name, DSN, credential, source path, original run ID, HMAC receipt
-or server error never appears in the public response; the handler
-never touches source public business tables, live operator custody,
+comparison rows (signed percent values, no sign doubling). Free-
+text detail (state reasons, evidence) is neutralized and never
+displayed, and gates and the apply plan are not displayed. The
+artifact list is a compact ordinal-first sortable table
+(artifact, kind, bytes, captured UTC) with download links. The
+page and every 404/503 refusal are `private, no-store`; every
+unsafe `/admin` method remains the unchanged pre-body quiet 204
+cut. The stored SHA, copy name, DSN, credential, source path,
+original run ID, HMAC receipt or server error never appears in
+the public response; the handler never touches source public
+business tables, live operator custody,
 the catalog seal, Redis, the worker filesystem, provider network or
 provider credentials.
 
@@ -2141,7 +2142,9 @@ provider credentials.
 * Focused unit (mocked ASGI, no database): canonical run-id
   admission and every near-miss denial; zero-active accounts 404;
   every unsafe method the quiet 204 cut before body parsing;
-  missing demo state 404 and gate-admitted noncanonical id 503;
+  missing demo state and noncanonical/source-shaped ids 404, and a
+  gate-admitted CANONICAL id whose demo state lacks a usable
+  request-local sessionmaker is a fixed safe 503;
   the handler's in-transaction binding recheck (wrong database or
   read-only off, after the gate passes) is a fixed 503; a missing
   run is 404 after one parameterized inventory; every incomplete
