@@ -545,6 +545,19 @@ def test_login_csrf_expired_refused():
     asyncio.run(run())
 
 
+def test_csrf_non_ascii_cookie_refused_without_error():
+    """A non-ASCII cookie value must be a safe refusal, never a
+    compare_digest TypeError (the equality is on UTF-8 bytes)."""
+    assert fa._check_csrf(SECRET, "\u00e9forged", "abc") is False
+    assert fa._check_csrf(SECRET, None, "abc") is False
+    # A well-formed token in the FIELD but a DIFFERENT (non-ASCII)
+    # cookie is refused before any decode.
+    good = fa.make_signed_payload(SECRET, "csrf", "abc", fa.CSRF_TTL_S)
+    assert fa._check_csrf(SECRET, good + "\u00e9", good) is False
+    # And the matching well-formed pair still passes.
+    assert fa._check_csrf(SECRET, good, good) is True
+
+
 def test_login_oversized_body_413_no_credential_lookup():
     async def run():
         fake = FakeFacade()

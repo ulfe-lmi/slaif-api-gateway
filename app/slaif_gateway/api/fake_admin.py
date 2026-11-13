@@ -34,6 +34,7 @@ Safety law (224-c):
 
 from __future__ import annotations
 
+import hmac
 import time
 import urllib.parse
 import uuid
@@ -180,13 +181,26 @@ def _new_csrf_token(secret: str) -> str:
 
 
 def _check_csrf(secret: str, cookie_value: str | None, field_value: str | None) -> bool:
-    """Signed double-submit CSRF check (constant-time signature
-    comparison via compare_digest, finite length bound)."""
-    if not field_value or not isinstance(field_value, str):
+    """Signed double-submit CSRF check.
+
+    Both comparisons are constant-time: the double-submit equality is
+    ``hmac.compare_digest`` (on UTF-8 bytes, after type/length checks)
+    and the signature verification inside ``verify_signed_payload``
+    uses ``hmac.compare_digest`` as well. A mismatching equality is
+    rejected before any decode; the finite length bound applies to
+    BOTH cookie and field values.
+    """
+    if not isinstance(field_value, str):
         return False
     if len(field_value) > SIGNED_TOKEN_MAX_LEN:
         return False
-    if cookie_value != field_value:
+    if not isinstance(cookie_value, str):
+        return False
+    if len(cookie_value) > SIGNED_TOKEN_MAX_LEN:
+        return False
+    if not hmac.compare_digest(
+        cookie_value.encode("utf-8"), field_value.encode("utf-8")
+    ):
         return False
     return verify_signed_payload(secret, PURPOSE_CSRF, field_value, CSRF_TTL_S) is not None
 
