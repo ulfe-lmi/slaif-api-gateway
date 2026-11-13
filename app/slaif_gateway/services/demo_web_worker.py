@@ -219,8 +219,14 @@ class _ControlConnection:
     """
 
     def __init__(self, config: DemoWebWorkerConfig) -> None:
+        # Explicit no-TLS stage boundary (mirrors the 222 target
+        # connection's ``ssl=False``): no TLS is ever negotiated, so
+        # the control endpoint must stay on a trusted private
+        # loopback/Compose network. This stage does not support
+        # verified remote DB TLS.
         self._engine: AsyncEngine = create_async_engine(
             config._control_engine_url(),
+            connect_args={"ssl": False},
             pool_pre_ping=True,
             pool_size=1,
             max_overflow=0,

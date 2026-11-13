@@ -679,7 +679,9 @@ account facts SELECT (never username/password_hash), request SELECT,
 column-limited request UPDATE, and session revocation-facts SELECT
 (never token_hash). Neither role has any business-table grant. The
 owned PG16 test runs the REAL service methods under both restricted
-roles and proves every forbidden surface is denied with 42501.
+roles and proves every forbidden surface is denied with 42501. The
+exact CREATE ROLE / GRANT statements for the operator are in the
+224-b section below.
 
 ### Rollback
 
@@ -743,19 +745,38 @@ slaif-gateway demo-snapshot-worker cleanup [--limit N] [--json]
    created (the durable crash-safe request→job association);
 3. 222 sanitization of THAT exact job only (never a global scan);
 4. 223 file capture/verification of THAT exact job only;
-5. worker-held proof: re-read the manifest (state, files state,
-   target grammar, exact request association) and re-hash every stored
-   display leaf against the private files manifest through anchored
-   no-follow bounded reads — never trusting caller-supplied strings;
+5. worker-held proof: re-read the manifest through the anchored held
+   job handle (state, files state, target grammar, exact request
+   association) and re-prove the COMPLETE 223 display-tree law —
+   files-directory identity, the exact leaf set (no foreign entry, no
+   duplicate or invalid name), per-leaf regular type / 0600 mode /
+   inode / byte count, digests and display policy — through anchored
+   no-follow bounded reads; the SAME job-directory identity binds both
+   reads, and the re-proven leaf count and total bytes must equal the
+   main manifest's recorded `files_count` / `files_bytes`;
 6. record the verified handoff (224-a CAS; statement-time
    generation fence).
 
 It exits 0 with `state: verified_unpublished` only on full success.
-Refused claims exit 1 with `state: claim_refused`; every pipeline,
-proof or handoff failure exits 1 with a finite safe `code` and leaves
-the request row in a finite failed state, so the recovery path can
-later find the artifacts it owns. The output never contains a job id,
-target database name, custody path, DSN, password or row content.
+Refused claims exit 1 with `state: claim_refused`. Every failure
+exits 1 with a finite safe `code`; pipeline, proof and internal
+failures additionally mark the row `failed` (claimed → failed)
+through the guarded worker-failure transition, so the recovery path
+can later find the artifacts it owns. Most handoff refusals mark the
+row `failed` themselves (`state_conflict` for a disabled account or
+generation reset, `late_completion` for an expired copy,
+`verification_failed` for a non-verified manifest state). The one
+handoff refusal that does NOT is a copy-uniqueness violation
+(`web_request_copy_reused`): the handoff transaction is aborted
+without committing anything, no failure write is made, and the row
+stays `claimed` until the bounded recovery reap marks it `failed`
+(`late_completion`) at its full lifetime. The same reap also covers a
+control-side refusal of a failure write itself (e.g. a control
+outage mid-pipeline), which likewise leaves the row `claimed`. In
+every case the recovery path resolves the exact owned job through
+the durable private association. The output never contains a job
+id, target database name, custody path, DSN, password or row
+content.
 
 `cleanup [--limit N]` (bounded 1..100 candidate rows, schedulable)
 runs the recovery pass: reap stuck pending/claimed rows; mark failed
@@ -765,6 +786,56 @@ and remove ONLY its owned custody leaves, marking `cleaned` only after
 the database is proven gone. Retained rows (cleanup refused or
 failed) stay `cleanup_pending` — inspectable and retryable — and are
 never marked `cleaned` while artifacts exist.
+
+### Operator setup: create the two control roles and apply the reviewed grants
+
+The 0028 migration creates NO roles and grants NOTHING. Before running
+`process-request` / `cleanup`, the operator creates two dedicated LOGIN
+roles and applies EXACTLY the reviewed matrix (the same statements
+`demo_web_control.web_role_grant_sql` / `worker_role_grant_sql` generate).
+Role names must match the closed PostgreSQL identifier law. Set each
+role's password out-of-band (e.g. `ALTER ROLE ... PASSWORD ...` with a
+strong value supplied through the operator's own secret channel); the
+GRANT statements below contain NO password and the CLI/grant SQL never
+prints one. Against the control database:
+
+```sql
+-- web control role (future 224-c+ login; column-limited by design)
+CREATE ROLE demo_web LOGIN;
+GRANT USAGE ON SCHEMA demo_control TO demo_web;
+GRANT SELECT (id, username, password_hash, is_enabled,
+              credential_generation)
+  ON demo_control.fake_admin_accounts TO demo_web;
+GRANT SELECT ON demo_control.demo_snapshot_requests TO demo_web;
+GRANT INSERT (id, account_id, credential_generation, created_at,
+              deadline_at, expires_at)
+  ON demo_control.demo_snapshot_requests TO demo_web;
+GRANT SELECT ON demo_control.demo_web_sessions TO demo_web;
+GRANT INSERT (id, token_hash, account_id, credential_generation,
+              request_id, created_at, expires_at)
+  ON demo_control.demo_web_sessions TO demo_web;
+GRANT UPDATE (revoked_at) ON demo_control.demo_web_sessions TO demo_web;
+
+-- snapshot worker control role (facts only; never token_hash or
+-- username/password_hash)
+CREATE ROLE demo_snap_worker LOGIN;
+GRANT USAGE ON SCHEMA demo_control TO demo_snap_worker;
+GRANT SELECT (id, is_enabled, credential_generation)
+  ON demo_control.fake_admin_accounts TO demo_snap_worker;
+GRANT SELECT ON demo_control.demo_snapshot_requests TO demo_snap_worker;
+GRANT UPDATE (state, failure_code, claimed_at, worker_job_id,
+              worker_target_db, verified_at)
+  ON demo_control.demo_snapshot_requests TO demo_snap_worker;
+GRANT SELECT (id, request_id, expires_at, revoked_at)
+  ON demo_control.demo_web_sessions TO demo_snap_worker;
+```
+
+Neither role has any business-table grant. `DEMO_WEB_WORKER_CONTROL_*`
+points the worker control connection at the WORKER role (its password is
+`DEMO_WEB_WORKER_CONTROL_PASSWORD`, never emitted). The worker invocation
+additionally needs the 221 source-reader role and target user from the
+221 operator setup. Apply the web role only when the later web login
+suffix lands; nothing in 224-b uses it yet.
 
 ### Structural verified-copy eviction law (binds every generic 221 path)
 
@@ -832,13 +903,17 @@ is refused. No browser can ever reach a copy cleanup is about to
 remove; the safe direction is a not-yet-used demo session losing its
 one shot, never a browser touching removed data.
 
-### Transport boundary (unchanged)
+### Transport boundary
 
-Same as 221/222/223: worker-only PG client tools through a 0600
-pgpass file, separate target service, and `ssl=False` on the asyncpg
-control/target connections — target traffic must stay on a trusted
-private loopback/Compose network; this stage does not support
-verified remote DB TLS.
+Same as 221/222/223 for the target side: worker-only PG client tools
+through a 0600 pgpass file, separate target service, and `ssl=False`
+on the 222 asyncpg target connection. The NEW 224-b control
+connection to the control database likewise connects with an EXPLICIT
+`ssl=False` (the same deterministic no-TLS stage boundary): no TLS is
+ever negotiated, so the operator MUST keep the control endpoint on a
+trusted private loopback/Compose network. This stage does not support
+verified remote DB TLS for either connection; do not point the
+control endpoint at an untrusted network.
 
 ### Failure, restart, no survivors
 
