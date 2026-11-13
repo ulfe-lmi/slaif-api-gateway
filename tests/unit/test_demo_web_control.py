@@ -741,6 +741,80 @@ def test_verified_with_live_session_blocks_cleanup_until_revoked() -> None:
     asyncio.run(run())
 
 
+# 224-b: the cleanup gate is account-aware - a live session makes the
+# copy usable ONLY while the bound account is still enabled with the
+# recorded generation (the per-use recheck law).
+def test_cleanup_gate_released_by_account_disable_and_reset() -> None:
+    async def run():
+        # Disable: live session present but unusable at next use.
+        svc, _, acc = _svc()
+        verified = await _full_cycle(svc, job=11, target=11)
+        await svc.create_session(account_id=ACCOUNT, request_id=verified.id)
+        with pytest.raises(DemoWebControlError) as exc:
+            await svc.mark_cleanup_pending(request_id=verified.id)
+        assert exc.value.code == "web_cleanup_refused_live_session"
+        acc.accounts[ACCOUNT] = (False, 0)
+        cp = await svc.mark_cleanup_pending(request_id=verified.id)
+        assert cp.state == "cleanup_pending"
+
+        # Reset (generation change): same release.
+        svc2, _, acc2 = _svc()
+        verified2 = await _full_cycle(svc2, job=12, target=12)
+        await svc2.create_session(account_id=ACCOUNT, request_id=verified2.id)
+        acc2.accounts[ACCOUNT] = (True, 1)
+        cp2 = await svc2.mark_cleanup_pending(request_id=verified2.id)
+        assert cp2.state == "cleanup_pending"
+
+    asyncio.run(run())
+
+
+# 224-b residual race: a session INSERTED in the window between the
+# worker's live-session count and its cleanup CAS is invalidated early -
+# its first use is refused (bound copy no longer verified_unpublished)
+# before any physical removal.
+def test_session_inserted_in_cleanup_window_invalidated_at_first_use() -> None:
+    async def run():
+        svc, req, _ = _svc()
+        verified = await _full_cycle(svc, job=13, target=13)
+        # A prior session exists and is revoked (count now sees 0) -
+        # the worker's cleanup count passes...
+        prior = await svc.create_session(account_id=ACCOUNT, request_id=verified.id)
+        await svc.revoke_session(account_id=ACCOUNT, token=prior.token)
+        # ...and a concurrent web issuance lands its row in the window
+        # (the account-aware gate refuses cleanup when a live session
+        # exists AT GATE TIME - covered by the live-session tests above;
+        # here the gate's count already ran and saw 0, so bind that
+        # stale result, then insert the concurrent row directly after
+        # the count and before the cleanup CAS completes).
+        async def stale_zero(_request_id):
+            return 0
+
+        req.count_active_sessions_for_request = stale_zero
+        late_token = generate_opaque_token()
+        await req.create_session(
+            token_hash=hash_opaque_token(late_token),
+            account_id=ACCOUNT,
+            credential_generation=0,
+            request_id=verified.id,
+            created_at=datetime.now(timezone.utc),
+            expires_at=datetime.now(timezone.utc) + REQUEST_TTL,
+        )
+        cp = await svc.mark_cleanup_pending(request_id=verified.id)
+        assert cp.state == "cleanup_pending"
+        # The window session is unusable at its FIRST use: the bound
+        # copy is no longer verified_unpublished, so the browser can
+        # never touch a copy cleanup is about to remove.
+        with pytest.raises(DemoWebControlError) as exc:
+            await svc.validate_session(account_id=ACCOUNT, token=late_token)
+        assert exc.value.code == "web_request_not_verified"
+        # A fresh issuance on the dying copy is refused too.
+        with pytest.raises(DemoWebControlError) as exc:
+            await svc.create_session(account_id=ACCOUNT, request_id=verified.id)
+        assert exc.value.code == "web_request_not_verified"
+
+    asyncio.run(run())
+
+
 # --- unknown state + reap ------------------------------------------------------------------
 
 

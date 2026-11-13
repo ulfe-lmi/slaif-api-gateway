@@ -791,6 +791,246 @@ def test_expiry_removes_old_copies_and_enforces_budget(
     assert ds.count_raw_copies(config) == 2
 
 
+def test_expiry_never_evicts_protected_published_copies(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """224-b: a protected job id survives BOTH retention and budget."""
+    _fake_tool(monkeypatch, tmp_path, "psql", "exit 0")
+    config = _config(tmp_path, DEMO_SNAPSHOT_RETENTION_SECONDS=100, DEMO_SNAPSHOT_MAX_COPIES=1)
+    calls: list[str] = []
+    ops = _fake_ops(calls)
+
+    def make_job(n: int, age_seconds: float, state: str) -> str:
+        job_id = "snap-" + format(n, "032x")
+        job_dir = config.custody_dir / job_id
+        job_dir.mkdir(mode=0o700)
+        ds._write_manifest(
+            job_dir,
+            ds.SnapshotManifest(
+                job_id=job_id,
+                state=state,
+                created_at=time.time() - age_seconds,
+                target_db=f"demo_snap_{n:x}",
+            ),
+        )
+        return job_id
+
+    protected = make_job(1, 10_000, ds.STATE_DB_AND_FILES_VERIFIED_UNPUBLISHED)
+    make_job(2, 10_000, STATE_RAW_UNVERIFIED)  # expired by retention
+    make_job(3, 90, STATE_RAW_UNVERIFIED)  # within retention, over budget
+
+    removed = ds.expire_copies(
+        config, ops=ops, protected_job_ids=frozenset({protected})
+    )
+    assert removed == 2
+    assert f"drop:demo_snap_{1:x}" not in calls  # protected: never dropped
+    assert f"drop:demo_snap_{2:x}" in calls
+    assert f"drop:demo_snap_{3:x}" in calls
+    manifest = ds._read_manifest(config.custody_dir / protected)
+    assert manifest is not None
+    assert manifest.state == ds.STATE_DB_AND_FILES_VERIFIED_UNPUBLISHED
+
+
+def test_budget_full_of_protected_copies_refuses_new_job(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """224-b fail-closed admission: refuse before creating anything when
+    the budget is full of protected copies (no unsafe eviction)."""
+    _fake_tool(monkeypatch, tmp_path, "pg_dump", 'printf %s "x"')
+    _fake_tool(monkeypatch, tmp_path, "psql", "exit 0")
+    _fake_tool(monkeypatch, tmp_path, "pg_restore", "exit 0")
+    config = _config(tmp_path, DEMO_SNAPSHOT_MAX_COPIES=1)
+    calls: list[str] = []
+    ops = _fake_ops(calls)
+
+    protected = "snap-" + "ab" * 16
+    job_dir = config.custody_dir / protected
+    job_dir.mkdir(mode=0o700)
+    ds._write_manifest(
+        job_dir,
+        ds.SnapshotManifest(
+            job_id=protected,
+            state=ds.STATE_DB_AND_FILES_VERIFIED_UNPUBLISHED,
+            created_at=time.time(),
+            target_db="demo_snap_protected",
+        ),
+    )
+
+    result = ds.run_snapshot_job(
+        config, ops=ops, protected_job_ids=frozenset({protected})
+    )
+    assert result.state == ds.STATE_FAILED
+    assert result.failure_code == ds.CODE_SNAPSHOT_BUDGET_FULL
+    assert result.job_id == "" and result.target_db == ""
+    assert calls == []  # nothing created, nothing evicted
+    assert [p.name for p in config.custody_dir.iterdir() if p.is_dir()] == [protected]
+
+
+def _active_manifests(config) -> list:
+    out = []
+    for job_dir in ds._list_job_dirs(config.custody_dir):
+        manifest = ds._read_manifest(job_dir)
+        if manifest is not None and manifest.state in (
+            STATE_RAW_UNVERIFIED,
+            ds.STATE_DB_SANITIZED_UNPUBLISHED,
+            ds.STATE_DB_AND_FILES_VERIFIED_UNPUBLISHED,
+        ):
+            out.append(manifest)
+    return out
+
+
+def test_three_verified_plus_one_unverified_new_run_never_exceeds_cap(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """224-b slot reservation: max_copies=4 with three verified
+    (never-evictable) and ONE fresh unverified copy - a new run must
+    evict the unverified copy to reserve its slot and finish at exactly
+    the cap. The finite budget is never exceeded."""
+    _fake_tool(monkeypatch, tmp_path, "pg_dump", 'printf %s "x"')
+    _fake_tool(monkeypatch, tmp_path, "psql", "exit 0")
+    _fake_tool(monkeypatch, tmp_path, "pg_restore", "exit 0")
+    config = _config(
+        tmp_path, DEMO_SNAPSHOT_RETENTION_SECONDS=10_000, DEMO_SNAPSHOT_MAX_COPIES=4
+    )
+    calls: list[str] = []
+    for n in (1, 2, 3):
+        _make_copy(
+            tmp_path, config, n, 1_000, ds.STATE_DB_AND_FILES_VERIFIED_UNPUBLISHED
+        )
+    _make_copy(tmp_path, config, 4, 1_000, STATE_RAW_UNVERIFIED)
+
+    result = ds.run_snapshot_job(config, ops=_fake_ops(calls))
+    assert result.state == STATE_RAW_UNVERIFIED
+    # The fresh unverified copy was evicted to free the run's slot.
+    assert "drop:demo_snap_4" in calls
+    assert all(
+        f"drop:demo_snap_{n:x}" not in calls for n in (1, 2, 3)
+    ), "verified copies are never evicted"
+    active = _active_manifests(config)
+    assert len(active) == 4, "exactly the cap: 3 verified + the new raw copy"
+    assert result.job_id in {m.job_id for m in active}
+
+
+def test_three_verified_plus_one_protected_new_run_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """224-b slot reservation, fail-closed half: the same 3+1 world but
+    the unverified copy is protected - the run is refused BEFORE
+    creating anything (no fifth copy, nothing evicted)."""
+    _fake_tool(monkeypatch, tmp_path, "pg_dump", 'printf %s "x"')
+    _fake_tool(monkeypatch, tmp_path, "psql", "exit 0")
+    _fake_tool(monkeypatch, tmp_path, "pg_restore", "exit 0")
+    config = _config(
+        tmp_path, DEMO_SNAPSHOT_RETENTION_SECONDS=10_000, DEMO_SNAPSHOT_MAX_COPIES=4
+    )
+    calls: list[str] = []
+    for n in (1, 2, 3):
+        _make_copy(
+            tmp_path, config, n, 1_000, ds.STATE_DB_AND_FILES_VERIFIED_UNPUBLISHED
+        )
+    protected = _make_copy(tmp_path, config, 4, 1_000, STATE_RAW_UNVERIFIED)
+
+    result = ds.run_snapshot_job(
+        config, ops=_fake_ops(calls), protected_job_ids=frozenset({protected})
+    )
+    assert result.state == ds.STATE_FAILED
+    assert result.failure_code == ds.CODE_SNAPSHOT_BUDGET_FULL
+    assert result.job_id == "" and result.target_db == ""
+    assert calls == []  # nothing created, nothing evicted
+    active = _active_manifests(config)
+    assert len(active) == 4, "the cap is intact and nothing was added"
+
+
+def test_successful_job_result_carries_exact_job_id_not_in_repr(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """224-b: the result carries the exact job identity internally, but
+    the rendered repr never contains it (safe contract)."""
+    _fake_tool(monkeypatch, tmp_path, "pg_dump", 'printf %s "dump"')
+    _fake_tool(monkeypatch, tmp_path, "psql", "exit 0")
+    _fake_tool(monkeypatch, tmp_path, "pg_restore", "exit 0")
+    calls: list[str] = []
+    config = _config(tmp_path)
+    result = ds.run_snapshot_job(config, ops=_fake_ops(calls))
+    assert result.state == STATE_RAW_UNVERIFIED
+    assert result.job_id.startswith("snap-") and len(result.job_id) == 37
+    job_dir = config.custody_dir / result.job_id
+    manifest = ds._read_manifest(job_dir)
+    assert manifest is not None and manifest.job_id == result.job_id
+    assert result.job_id not in repr(result)
+    assert result.target_db not in repr(result)
+
+
+# ---------------------------------------------------------------------------
+# 224-b structural verified-copy law (bare CLI paths, no protected set)
+# ---------------------------------------------------------------------------
+
+
+def _make_copy(tmp_path: Path, config, n: int, age: float, state: str) -> str:
+    job_id = "snap-" + format(n, "032x")
+    job_dir = config.custody_dir / job_id
+    job_dir.mkdir(mode=0o700)
+    ds._write_manifest(
+        job_dir,
+        ds.SnapshotManifest(
+            job_id=job_id,
+            state=state,
+            created_at=time.time() - age,
+            target_db=f"demo_snap_{n:x}",
+        ),
+    )
+    return job_id
+
+
+def test_bare_expiry_path_never_evicts_verified_copy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """224-b: the legacy CLI ``expire`` shape - ``expire_copies`` with NO
+    protected set - must never evict a verified copy, even one far past
+    retention and under budget pressure."""
+    _fake_tool(monkeypatch, tmp_path, "psql", "exit 0")
+    config = _config(
+        tmp_path, DEMO_SNAPSHOT_RETENTION_SECONDS=100, DEMO_SNAPSHOT_MAX_COPIES=1
+    )
+    calls: list[str] = []
+    verified = _make_copy(
+        tmp_path, config, 1, 100_000, ds.STATE_DB_AND_FILES_VERIFIED_UNPUBLISHED
+    )
+    _make_copy(tmp_path, config, 2, 10_000, STATE_RAW_UNVERIFIED)
+
+    removed = ds.expire_copies(config, ops=_fake_ops(calls))
+    assert removed == 1
+    assert "drop:demo_snap_2" in calls  # the expired RAW copy
+    assert "drop:demo_snap_1" not in calls  # the verified copy: never
+    m = ds._read_manifest(config.custody_dir / verified)
+    assert m is not None
+    assert m.state == ds.STATE_DB_AND_FILES_VERIFIED_UNPUBLISHED
+
+
+def test_bare_run_path_never_evicts_preexisting_verified_copy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """224-b: the legacy CLI ``run`` shape - ``run_snapshot_job`` with no
+    protected set and no request binding - must not evict a pre-existing
+    (even far-expired) verified copy during its startup pass."""
+    _fake_tool(monkeypatch, tmp_path, "pg_dump", 'printf %s "x"')
+    _fake_tool(monkeypatch, tmp_path, "psql", "exit 0")
+    _fake_tool(monkeypatch, tmp_path, "pg_restore", "exit 0")
+    config = _config(
+        tmp_path, DEMO_SNAPSHOT_RETENTION_SECONDS=100, DEMO_SNAPSHOT_MAX_COPIES=2
+    )
+    calls: list[str] = []
+    verified = _make_copy(
+        tmp_path, config, 1, 100_000, ds.STATE_DB_AND_FILES_VERIFIED_UNPUBLISHED
+    )
+
+    result = ds.run_snapshot_job(config, ops=_fake_ops(calls))
+    assert result.state == STATE_RAW_UNVERIFIED
+    assert result.job_id != verified
+    assert "drop:demo_snap_1" not in calls
+    m = ds._read_manifest(config.custody_dir / verified)
+    assert m is not None
+    assert m.state == ds.STATE_DB_AND_FILES_VERIFIED_UNPUBLISHED
 def test_secrets_never_rendered_in_job_result(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

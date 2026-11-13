@@ -3369,22 +3369,51 @@ async def _sanitize_copy_async(
     return SanitizeCopyResult(SANITIZE_STATE_PROMOTED, None, manifest.job_id)
 
 
-def sanitize_copies(config: ds.DemoSnapshotConfig) -> SanitizeCopiesResult:
+def sanitize_copies(
+    config: ds.DemoSnapshotConfig,
+    *,
+    job_id: str | None = None,
+) -> SanitizeCopiesResult:
     """Fenced worker entry: sanitize every RAW_UNVERIFIED copy.
 
     Idempotent: already-sanitized copies are skipped, and a failed copy
     stays RAW_UNVERIFIED with a safe finite code so the operator can
     inspect and re-invoke.
+
+    ``job_id`` (224-b exact worker): sanitize EXACTLY that one custody
+    job (addressed by its closed ``snap-<32 hex>`` name, never by
+    directory order, timestamps or target database). A missing,
+    inconsistent or unexpected-state exact job is a safe finite failure
+    (``EXACT_COPY_UNAVAILABLE``); an already-sanitized exact job is an
+    idempotent no-op success. Unrelated pre-existing copies are never
+    touched or promoted.
     """
     ds._validate_custody_dir(config.custody_dir)
     fence_fd = ds._acquire_fence(config.custody_dir)
     started = time.monotonic()
     try:
         eligible: list[tuple[Path, ds.SnapshotManifest]] = []
-        for job_dir in ds._list_job_dirs(config.custody_dir):
-            manifest = ds._read_manifest(job_dir)
-            if manifest is not None and manifest.state == ds.STATE_RAW_UNVERIFIED:
-                eligible.append((job_dir, manifest))
+        if job_id is not None:
+            eligible, error, already_done = _select_exact_sanitize_job(
+                config, job_id
+            )
+            if error is not None:
+                return SanitizeCopiesResult(
+                    SANITIZE_STATE_FAILED, error, 0, 1,
+                    int((time.monotonic() - started) * 1000),
+                )
+            if already_done:
+                # Exact job already sanitized: idempotent no-op success
+                # (the worker's success contract requires SANITIZED).
+                return SanitizeCopiesResult(
+                    SANITIZE_STATE_SANITIZED, None, 0, 0,
+                    int((time.monotonic() - started) * 1000),
+                )
+        else:
+            for job_dir in ds._list_job_dirs(config.custody_dir):
+                manifest = ds._read_manifest(job_dir)
+                if manifest is not None and manifest.state == ds.STATE_RAW_UNVERIFIED:
+                    eligible.append((job_dir, manifest))
         if not eligible:
             return SanitizeCopiesResult(
                 SANITIZE_STATE_SKIPPED, None, 0, 0,
@@ -3424,3 +3453,31 @@ def sanitize_copies(config: ds.DemoSnapshotConfig) -> SanitizeCopiesResult:
         )
     finally:
         ds._release_fence(fence_fd)
+
+
+def _select_exact_sanitize_job(
+    config: ds.DemoSnapshotConfig,
+    job_id: str,
+) -> tuple[list[tuple[Path, ds.SnapshotManifest]], str | None, bool]:
+    """Resolve EXACTLY one custody job for the 224-b worker (no scan).
+
+    Returns ``(targets, error_code, already_done)``: zero or one target
+    and a safe finite error code when the exact job is missing,
+    inconsistent or in an unexpected state. An already-sanitized
+    (``DB_SANITIZED_UNPUBLISHED``) exact job yields an empty success with
+    ``already_done`` (idempotent no-op, still reported as ``SANITIZED``
+    so the worker's success contract holds). The job is addressed ONLY by
+    its closed ``snap-<32 hex>`` name under the validated custody root;
+    the manifest's own job id must agree.
+    """
+    if not isinstance(job_id, str) or not re.fullmatch(r"snap-[0-9a-f]{32}", job_id):
+        return [], ds.CODE_EXACT_COPY_UNAVAILABLE, False
+    job_dir = config.custody_dir / job_id
+    manifest = ds._read_manifest(job_dir)
+    if manifest is None or manifest.job_id != job_id:
+        return [], ds.CODE_EXACT_COPY_UNAVAILABLE, False
+    if manifest.state == ds.STATE_RAW_UNVERIFIED:
+        return [(job_dir, manifest)], None, False
+    if manifest.state == ds.STATE_DB_SANITIZED_UNPUBLISHED:
+        return [], None, True
+    return [], ds.CODE_EXACT_COPY_UNAVAILABLE, False

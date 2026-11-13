@@ -690,8 +690,164 @@ business table is affected in either direction.
 
 ### What 224-b supplies
 
-The `/fakeadmin` login route on this foundation (web role), the
-worker-side claim → 221/222/223 snapshot job → verified handoff
-wiring, and the bounded cleanup path (file + target-database removal
-after confirmed DB drop, manifest retention on failure) that consumes
-`cleanup_pending`/`cleaned`.
+The worker-side exact handoff ONLY: the private
+`demo-snapshot-worker process-request` / `cleanup` worker commands
+(claim → ONE fresh 221/222/223 copy → worker-held proof → verified
+handoff; bounded session-aware cleanup), the structural verified-copy
+eviction law, and the durable request→job association with crash-safe
+recovery. No HTTP route in 224-b: the `/fakeadmin` login route,
+session UI, and copy-backed demo reads are later suffixes of
+objective 224 (224-c or later). The demo remains unusable from a
+browser. See the 224-b section below.
+
+## Demo exact worker handoff and cleanup (objective 224-b, worker-only)
+
+Objective 224-b adds a purpose-built PRIVATE worker orchestration on
+the 224-a foundation: one bounded CLI invocation that claims a
+pending demo snapshot request, builds exactly ONE fresh
+221→222→223-verified copy for it, proves the worker still holds that
+exact artifact, and publishes the verified handoff; and one bounded
+invocation that reaps stuck rows and cleans up exactly the artifacts
+the request state machine has released.
+
+### What this stage is and is NOT
+
+- Worker-only. NO new HTTP route, NO Celery/Redis/queue, NO browser.
+  The demo remains UNUSABLE from a browser: the `/fakeadmin` login
+  route, session UI, copy-backed demo reads, no-op actions and browser
+  qualification are later suffixes of objective 224 (224-c or later).
+- NO migration: it runs on the 0028 schema of 224-a unchanged.
+- NO generic cross-file identity engine: the per-copy ID laws of
+  222/223 are unchanged.
+- The worker connects to the control database with a dedicated
+  worker-only role (`DEMO_WEB_WORKER_CONTROL_*`, see Configuration →
+  Demo web worker control connection) — NEVER the owner
+  `DATABASE_URL` credential.
+- Legacy `run`/`expire`/`sanitize`/`files`/`recover` commands keep
+  their existing contracts; the verified-copy eviction law below also
+  binds them (fail-closed, never weaker).
+
+### Invocation
+
+```bash
+slaif-gateway demo-snapshot-worker process-request REQUEST_ID [--json]
+slaif-gateway demo-snapshot-worker cleanup [--limit N] [--json]
+```
+
+`process-request` processes exactly ONE request row end-to-end:
+
+1. claim (224-a worker role; pending only; statement-time account
+   gate);
+2. ONE fresh 221 raw copy for that request — the private custody
+   manifest records the request identity BEFORE the target database is
+   created (the durable crash-safe request→job association);
+3. 222 sanitization of THAT exact job only (never a global scan);
+4. 223 file capture/verification of THAT exact job only;
+5. worker-held proof: re-read the manifest (state, files state,
+   target grammar, exact request association) and re-hash every stored
+   display leaf against the private files manifest through anchored
+   no-follow bounded reads — never trusting caller-supplied strings;
+6. record the verified handoff (224-a CAS; statement-time
+   generation fence).
+
+It exits 0 with `state: verified_unpublished` only on full success.
+Refused claims exit 1 with `state: claim_refused`; every pipeline,
+proof or handoff failure exits 1 with a finite safe `code` and leaves
+the request row in a finite failed state, so the recovery path can
+later find the artifacts it owns. The output never contains a job id,
+target database name, custody path, DSN, password or row content.
+
+`cleanup [--limit N]` (bounded 1..100 candidate rows, schedulable)
+runs the recovery pass: reap stuck pending/claimed rows; mark failed
+rows and session-released verified rows `cleanup_pending`; then for
+each `cleanup_pending` row drop ONLY its bound target database FIRST
+and remove ONLY its owned custody leaves, marking `cleaned` only after
+the database is proven gone. Retained rows (cleanup refused or
+failed) stay `cleanup_pending` — inspectable and retryable — and are
+never marked `cleaned` while artifacts exist.
+
+### Structural verified-copy eviction law (binds every generic 221 path)
+
+A copy in `DB_AND_FILES_VERIFIED_UNPUBLISHED` state is NEVER evicted
+by any generic 221 path: not retention expiry, not copy-budget
+overflow, not a bare `run`/`expire` CLI invocation, not a concurrent
+worker's startup pass — regardless of protected set and age. Only the
+exact control-owned cleanup (`cleanup` above, gated by the request
+state machine and the live-session law) may remove it. This makes a
+published (verified, session-usable) copy — and a copy between the
+worker's proof and its publication CAS — immune to generic eviction by
+construction: a stale protected-set read or a cross-worker race cannot
+remove it, and no caller-supplied optional set is relied upon.
+
+Verified copies still OCCUPY their finite budget slot: they count in
+both the overflow computation and the fail-closed admission check.
+When the budget is full of verified copies, a new copy is refused
+with `SNAPSHOT_BUDGET_FULL` instead of evicting anything. In-flight
+unverified copies named in the worker-derived `protected_job_ids`
+set are additionally never generic-evicted; if the budget cannot be
+met without evicting one, eviction stops short and admission fails
+closed.
+
+### Request→job association and recovery
+
+Because the 221 manifest records the request identity before the
+target database is created, a request row that fails mid-pipeline
+(222/223 failure, worker crash, restart) still durably points at its
+EXACT one owned job. Recovery resolves ownership only through that
+recorded association: an unbound failed row resolves to zero owned
+jobs (nothing to remove — but only after the exact association scan
+confirms zero) and is marked cleaned as no-op; a row resolving to
+more than one candidate is refused and retained. Cleanup never
+infers ownership from timestamps, names or global scans, and the
+exact-job selectors (222/223) mean a copy of one request can never be
+promoted or consumed by another.
+
+A claimed request whose worker dies within the 60-minute lifetime
+cannot be re-claimed (claims are pending-only); it is reaped at TTL
+as `late_completion` (failed), and the recovery path then cleans its
+exactly associated copy. Orphan verified copies from pre-224-b
+operator runs (no recorded request) are structurally never
+auto-expired: they occupy budget (fail-closed admission) and remain
+inspectable for exact operator cleanup — a deliberate limitation, not
+a silent sweep.
+
+### Cleanup and live-session law
+
+`cleanup_pending` from `verified_unpublished` is allowed only when no
+USABLE live session still binds the copy: no unrevoked unexpired
+session exists, OR the bound account is disabled, OR its credential
+generation was reset. An account disable or reset releases the copy
+immediately — every session of that account is already dead at first
+use (the per-use recheck law) — so cleanup is no longer gated on the
+60-minute lifetime. A live session with an enabled,
+generation-matching account still refuses cleanup
+(`web_cleanup_refused_live_session`).
+
+Residual window (documented, test-proven): the cleanup count and its
+state CAS are separate statements. A web session issued inside that
+window (after the count, before the CAS) is INVALIDATED EARLY: its
+first use is refused (`web_request_not_verified`, the bound request is
+no longer `verified_unpublished`) and fresh issuance on that request
+is refused. No browser can ever reach a copy cleanup is about to
+remove; the safe direction is a not-yet-used demo session losing its
+one shot, never a browser touching removed data.
+
+### Transport boundary (unchanged)
+
+Same as 221/222/223: worker-only PG client tools through a 0600
+pgpass file, separate target service, and `ssl=False` on the asyncpg
+control/target connections — target traffic must stay on a trusted
+private loopback/Compose network; this stage does not support
+verified remote DB TLS.
+
+### Failure, restart, no survivors
+
+A failure after 221 (222/223 error, mid-job crash, worker restart)
+leaves the failed request row durably bound to its job; recovery finds
+exactly that job through the association, drops the target database
+first, then the owned custody leaves, and only then marks `cleaned`.
+Foreign, extra-leaf or identity-mismatched custody cases are refused
+and retained as `cleanup_pending` with the private manifest intact for
+operator inspection (safe aggregate code `cleanup_failed`). Nothing
+here is browser-visible; the demo remains unusable until the later
+224 suffixes.

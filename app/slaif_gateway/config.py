@@ -516,6 +516,21 @@ class Settings(BaseSettings):
     # the independent read-only verification for one job.
     DEMO_SNAPSHOT_FILES_MAX_ELAPSED_SECONDS: int = 300
 
+    # -- private demo web worker control connection (objective 224-b; default OFF)
+    # The per-login exact worker reaches the demo_control tables through its
+    # OWN restricted worker-role credential, NEVER the owner DATABASE_URL.
+    # The operator creates the role and applies the reviewed 224-a grant
+    # matrix first (docs/demo-admin.md); nothing here creates roles.
+    # Validation is feature-local in the 224-b worker config builder, so an
+    # ordinary demo-disabled gateway never fails to start because of an
+    # optional demo setting. The password is an operator-supplied
+    # environment value and is never rendered to logs/output.
+    DEMO_WEB_WORKER_CONTROL_HOST: str = ""
+    DEMO_WEB_WORKER_CONTROL_PORT: int = 5432
+    DEMO_WEB_WORKER_CONTROL_DATABASE: str = ""
+    DEMO_WEB_WORKER_CONTROL_USER: str = ""
+    DEMO_WEB_WORKER_CONTROL_PASSWORD: str = ""
+
     model_config = SettingsConfigDict(env_prefix="", case_sensitive=False)
 
     @model_validator(mode="after")

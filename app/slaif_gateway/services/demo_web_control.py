@@ -598,6 +598,19 @@ class DemoWebControlService:
         copy (a reused copy can never carry two concurrent sessions -
         also enforced by the partial unique index). The session expires
         exactly when the copy does. The raw token is returned ONCE.
+
+        Residual race (documented, 224-b): the live-session count and
+        the worker's cleanup ``count-actives-then-CAS`` are not
+        serialized, so a session can be issued in the instant between
+        the worker's count and its transition to ``cleanup_pending``.
+        Such a session is INVALIDATED EARLY by design and is safe: its
+        FIRST use is refused by ``validate_session`` because the bound
+        request is no longer ``verified_unpublished`` (and a fresh
+        ``create_session`` on a cleanup-pending/cleaned copy is refused
+        with ``web_request_not_verified``), i.e. before any browser use
+        can touch a copy that cleanup is about to remove. The token is
+        opaque and only its hash is stored, so the invalidated session
+        leaks nothing.
         """
         request = await self._load_request(request_id, read_lock=False)
         if request.account_id != account_id:
@@ -978,11 +991,19 @@ class DemoWebControlService:
     ) -> DemoSnapshotRequestProjection:
         """Worker: mark cleanup pending (idempotent).
 
-        From verified_unpublished ONLY when no live session still binds
-        the copy (or the copy has expired) - a verified copy with a live
-        session must not enter cleanup. From failed: always. This is the
-        worker side of the revocation/cleanup contract: the web role
-        revokes its sessions, the worker observes and cleans up.
+        From verified_unpublished ONLY when no USABLE live session still
+        binds the copy (or the copy has expired). A live session makes
+        the copy usable ONLY while the bound account is still enabled
+        with the recorded credential generation - the per-use recheck
+        law of session validation. An account disable or credential
+        reset therefore kills every session at its next use, and the
+        copy may then enter cleanup IMMEDIATELY (physical cleanup may
+        be asynchronous, but it is no longer gated on the 60-minute
+        copy lifetime). A live session with an enabled, generation-
+        matching account still refuses cleanup. From failed: always.
+        This is the worker side of the revocation/cleanup contract: the
+        web role revokes its sessions, the worker observes and cleans
+        up.
         """
         request = await self._load_request(request_id)
         if request.state == REQUEST_STATE_CLEANUP_PENDING:
@@ -991,14 +1012,24 @@ class DemoWebControlService:
             from_states = (REQUEST_STATE_FAILED,)
         elif request.state == REQUEST_STATE_VERIFIED_UNPUBLISHED:
             now = _utcnow()
-            if now < request.expires_at and (
-                await self._requests.count_active_sessions_for_request(request_id) > 0
-            ):
-                raise DemoWebControlError(
-                    "web_cleanup_refused_live_session",
-                    "The verified copy still has a live session; cleanup "
-                    "is refused.",
+            if now < request.expires_at:
+                account = await self._load_account(request.account_id)
+                account_usable = (
+                    account.is_enabled
+                    and int(account.credential_generation)
+                    == int(request.credential_generation)
                 )
+                if account_usable and (
+                    await self._requests.count_active_sessions_for_request(
+                        request_id
+                    )
+                    > 0
+                ):
+                    raise DemoWebControlError(
+                        "web_cleanup_refused_live_session",
+                        "The verified copy still has a live session; cleanup "
+                        "is refused.",
+                    )
             from_states = (REQUEST_STATE_VERIFIED_UNPUBLISHED,)
         else:
             raise DemoWebControlError(

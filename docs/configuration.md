@@ -1783,6 +1783,31 @@ display law and fail-closed codes.
 | `DEMO_SNAPSHOT_FILES_MAX_TOTAL_BYTES` | `134217728` (128 MiB) | Aggregate byte cap across all captured files of one copy (64 MiB–4096 MiB); must be at least the per-file cap. |
 | `DEMO_SNAPSHOT_FILES_MAX_ELAPSED_SECONDS` | `300` | ONE absolute elapsed deadline per copy covering capture, write and independent verification (10–3600 s). |
 
+### Demo web worker control connection (objective 224-b)
+
+The 224-b worker handoff commands (`demo-snapshot-worker
+process-request` / `cleanup`) connect to the control database with a
+dedicated WORKER-only PostgreSQL role — never the owner
+`DATABASE_URL` credential. All five values must be set together for the
+worker path (the 224-a role grant matrix is documented in
+`docs/database-schema.md`); they are validated feature-locally in the
+worker path only, so missing or malformed values refuse the worker
+command with `WEB_WORKER_MISCONFIGURED` and can never affect ordinary
+gateway startup while the demo worker is off. The code validates closed
+PostgreSQL identifier syntax for the user and database (no interpolation
+escape); the operator contract is that the worker role is granted
+exactly the 224-a matrix on that database. The password is used only to
+build the worker control connection URL and is never rendered in output,
+logs or errors.
+
+| Setting | Default | Meaning |
+| --- | --- | --- |
+| `DEMO_WEB_WORKER_CONTROL_HOST` | empty | Control PostgreSQL host for the worker role. |
+| `DEMO_WEB_WORKER_CONTROL_PORT` | `5432` | Control PostgreSQL port. |
+| `DEMO_WEB_WORKER_CONTROL_DATABASE` | empty | Control database name (the operator must grant the worker role the 224-a matrix on this database). |
+| `DEMO_WEB_WORKER_CONTROL_USER` | empty | Dedicated worker-only control role (column-limited SELECT on account facts, UPDATE on its own request transitions, column-limited SELECT on session facts — never `token_hash`). |
+| `DEMO_WEB_WORKER_CONTROL_PASSWORD` | empty | Worker role password; never emitted anywhere. |
+
 ## Production Notes
 
 - Never commit `.env`.

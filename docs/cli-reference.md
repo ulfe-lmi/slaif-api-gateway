@@ -1052,6 +1052,14 @@ slaif-gateway demo-snapshot-worker sanitize [--json]
 # Capture, sanitize + independently verify every 222 copy's display
 # files (objective 223); idempotent: file-verified copies are skipped
 slaif-gateway demo-snapshot-worker files [--json]
+
+# Process ONE exact demo snapshot request end-to-end (objective 224-b,
+# worker-only): claim, ONE fresh 221 copy, 222 + 223 for THAT copy,
+# worker-held proof, verified handoff
+slaif-gateway demo-snapshot-worker process-request REQUEST_ID [--json]
+
+# Bounded recovery/cleanup (objective 224-b, worker-only, schedulable)
+slaif-gateway demo-snapshot-worker cleanup [--limit N] [--json]
 ```
 
 Success exits 0 with `state: RAW_UNVERIFIED`; every failure class exits
@@ -1085,6 +1093,38 @@ per-copy codes remain in the private custody manifests)
 `UNEXPECTED`). Output is the same fixed safe vocabulary: state, code,
 copy counts, elapsed milliseconds — never a file path outside the
 operator's custody, a database name, or raw content.
+
+### 224-b worker handoff commands
+
+`demo-snapshot-worker process-request REQUEST_ID` processes exactly one
+`demo_snapshot_requests` row (worker role): it claims the pending
+request, creates ONE fresh 221 raw copy for it (writing the private
+request association into the custody manifest before the target
+database exists), sanitizes and file-captures THAT copy only, re-reads
+and re-digests the worker-held artifacts as proof, and records the
+verified handoff. It exits 0 with `state: verified_unpublished` only on
+full success; a refused claim exits 1 with `state: claim_refused`, and
+any pipeline, proof or handoff failure exits 1 with `state: failed` and
+a safe finite `code` (`worker_failed`, `internal_error`, the 221/222/223
+safe codes, or a 224-a control code such as `web_state_conflict`).
+`REQUEST_ID` must be a valid UUID (invalid input exits 1 with
+`code: WEB_WORKER_MISCONFIGURED`).
+
+`demo-snapshot-worker cleanup [--limit N]` runs the bounded recovery
+pass: it reaps stuck pending/claimed rows, marks failed and
+session-released verified rows `cleanup_pending`, then for each
+`cleanup_pending` row drops ONLY its bound target database and removes
+ONLY its owned custody leaves before marking it `cleaned`. Retained
+rows (cleanup refused or failed) stay inspectable for retry and are
+counted, never deleted or silently marked cleaned. Both commands
+require the separate worker-control credential configuration (see
+Configuration → Demo web worker control connection) and NEVER use the
+owner `DATABASE_URL`.
+
+Both commands emit the same fixed safe vocabulary as the other worker
+commands: state, finite failure code, counts, elapsed milliseconds —
+never a job id, a target database name, a custody path, a DSN, a
+password or row content.
 
 ## Codex and diagnostics
 

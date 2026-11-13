@@ -3983,26 +3983,38 @@ def _verify_leaf_policy(kind: object, data: bytes, slot: str | None) -> None:
     _verify_json_policy(kind, data)
 
 
-def verify_files(
+def _reprove_files_tree(
     job_dir: Path,
-    manifest: ds.SnapshotManifest,
     config: FileSnapshotConfig,
     deadline: float,
-) -> None:
-    """Independently re-prove the job's display tree (read-only).
+    expected_job_identity: tuple[int, int] | None = None,
+) -> tuple[int, int]:
+    """Shared read-only re-proof of the job's display tree (224-b).
 
-    Re-reads every leaf through the anchored boundary and rechecks the
-    files-directory identity, the exact leaf set (no foreign entry, no
-    missing leaf), per-leaf digest / byte count / 0600 mode / inode
-    identity and the per-leaf display policy. Per-file and cumulative
-    byte bounds come from the TRUSTED configured caps (bounded by the
-    absolute verification ceilings); the untrusted manifest counts only
-    ever shrink the read. The caller's ABSOLUTE deadline is re-checked
-    before every leaf read and before a clean return, so a large
-    verifier re-read can never outlive the copy budget. Any drift is a
-    FILES_VERIFY_FAILED refusal;
-    only a fully re-proven tree allows the caller to promote the main
-    manifest.
+    The complete identity/inventory law used by BOTH the 223 write
+    verifier and the 224-b worker-held pre-publication proof: every
+    leaf re-read through the anchored no-follow boundary; the
+    files-directory identity; the EXACT leaf set (no foreign entry, no
+    missing leaf, no duplicate or invalid name); per-leaf regular
+    type / 0600 mode / byte count / inode identity; and the per-leaf
+    digest plus display policy. It deliberately has NO
+    already-verified short-circuit: a promoted (``FILES_VERIFIED``)
+    tree is re-proven from the held files exactly as hard as a fresh
+    one. Per-file and cumulative byte bounds come from the TRUSTED
+    configured caps (bounded by the absolute verification ceilings);
+    the untrusted manifest counts only ever shrink the read. The
+    ABSOLUTE deadline is re-checked before every leaf read and before
+    a clean return.
+
+    ``expected_job_identity`` (224-b): when given, the freshly opened
+    job-directory handle must have EXACTLY this ``(st_dev, st_ino)`` -
+    the identity captured by a PRECEDING held handle on the same job
+    directory. A directory swapped between the two handles (the
+    per-handle name binding alone cannot detect a swap across two
+    unrelated opens) is a refusal.
+
+    Returns ``(total_bytes, leaf_count)``; any drift is a
+    ``FILES_VERIFY_FAILED`` refusal.
     """
 
     def _deadline_check() -> None:
@@ -4012,17 +4024,17 @@ def verify_files(
                 "File verification exceeded its elapsed bound."
             )
 
-    _deadline_check()
-    if manifest.state != ds.STATE_DB_SANITIZED_UNPUBLISHED:
-        raise ds.DemoSnapshotError(
-            CODE_FILES_VERIFY_FAILED,
-            "The copy is not in the 222 verified DB state.",
-        )
-    if manifest.files_state == FILES_STATE_VERIFIED:
-        return  # already verified: idempotent
     handle = catfs.open_anchored_handle(job_dir)
     try:
         handle.assert_name_binding(str(job_dir))
+        if (
+            expected_job_identity is not None
+            and handle.identity != tuple(expected_job_identity)
+        ):
+            raise ds.DemoSnapshotError(
+                CODE_FILES_VERIFY_FAILED,
+                "The job directory identity drifted between reads.",
+            )
         try:
             files_fd = os.open(
                 FILES_DIR_NAME,
@@ -4163,14 +4175,56 @@ def verify_files(
                     slot = logical.split("/", 1)[1]
                 _verify_leaf_policy(entry.get("kind"), data, slot)
                 total_bytes += len(data)
-            manifest.files_bytes = total_bytes
-            manifest.files_count = len(entries)
         finally:
             os.close(files_fd)
         handle.assert_name_binding(str(job_dir))
     finally:
         handle.close()
     _deadline_check()
+    return total_bytes, len(entries)
+
+
+def verify_files(
+    job_dir: Path,
+    manifest: ds.SnapshotManifest,
+    config: FileSnapshotConfig,
+    deadline: float,
+) -> None:
+    """Independently re-prove the job's display tree (read-only).
+
+    Re-reads every leaf through the anchored boundary and rechecks the
+    files-directory identity, the exact leaf set (no foreign entry, no
+    missing leaf), per-leaf digest / byte count / 0600 mode / inode
+    identity and the per-leaf display policy. Per-file and cumulative
+    byte bounds come from the TRUSTED configured caps (bounded by the
+    absolute verification ceilings); the untrusted manifest counts only
+    ever shrink the read. The caller's ABSOLUTE deadline is re-checked
+    before every leaf read and before a clean return, so a large
+    verifier re-read can never outlive the copy budget. Any drift is a
+    FILES_VERIFY_FAILED refusal;
+    only a fully re-proven tree allows the caller to promote the main
+    manifest.
+    The re-proof itself is the shared ``_reprove_files_tree`` law
+    (no short-circuit inside it); this wrapper adds the 223 state
+    gates and the idempotent already-verified return, then records
+    the proven totals on the manifest.
+    """
+
+    if time.monotonic() > deadline:
+        raise ds.DemoSnapshotError(
+            CODE_FILES_BUDGET_EXCEEDED,
+            "File verification exceeded its elapsed bound."
+        )
+    if manifest.state != ds.STATE_DB_SANITIZED_UNPUBLISHED:
+        raise ds.DemoSnapshotError(
+            CODE_FILES_VERIFY_FAILED,
+            "The copy is not in the 222 verified DB state.",
+        )
+    if manifest.files_state == FILES_STATE_VERIFIED:
+        return  # already verified: idempotent
+    total_bytes, leaf_count = _reprove_files_tree(job_dir, config, deadline)
+    manifest.files_bytes = total_bytes
+    manifest.files_count = leaf_count
 
 
 # ---------------------------------------------------------------------------
@@ -4509,7 +4563,42 @@ def _completion_link_gate(
         )
 
 
-def run_files_job(config: FileSnapshotConfig, settings: Settings) -> FilesJobResult:
+def _select_exact_files_job(
+    config: FileSnapshotConfig,
+    job_id: str,
+) -> tuple[list[Path], str | None, bool]:
+    """Resolve EXACTLY one custody job for the 224-b worker (no scan).
+
+    Returns ``(job_dirs, error_code, already_verified)``: the single
+    addressable job to process, a safe finite error code when the exact
+    job is missing, inconsistent or in an unexpected state, or a
+    ``already_verified`` flag when the exact job is already
+    file-verified (idempotent no-op success). The job is addressed ONLY
+    by its closed ``snap-<32 hex>`` name under the validated custody
+    root; the manifest's own job id must agree. Unrelated pre-existing
+    copies are never touched or promoted.
+    """
+    if not isinstance(job_id, str) or not re.fullmatch(r"snap-[0-9a-f]{32}", job_id):
+        return [], ds.CODE_EXACT_COPY_UNAVAILABLE, False
+    job_dir = config.custody_dir / job_id
+    manifest = ds.read_manifest(job_dir)
+    if manifest is None or manifest.job_id != job_id:
+        return [], ds.CODE_EXACT_COPY_UNAVAILABLE, False
+    if manifest.state == ds.STATE_DB_AND_FILES_VERIFIED_UNPUBLISHED:
+        if manifest.files_state == FILES_STATE_VERIFIED:
+            return [], None, True
+        return [], ds.CODE_EXACT_COPY_UNAVAILABLE, False
+    if manifest.state == ds.STATE_DB_SANITIZED_UNPUBLISHED:
+        return [job_dir], None, False
+    return [], ds.CODE_EXACT_COPY_UNAVAILABLE, False
+
+
+def run_files_job(
+    config: FileSnapshotConfig,
+    settings: Settings,
+    *,
+    job_id: str | None = None,
+) -> FilesJobResult:
     """Run the bounded files stage over every 222 verified copy.
 
     Idempotent: already file-verified copies are skipped. Each copy gets
@@ -4519,6 +4608,14 @@ def run_files_job(config: FileSnapshotConfig, settings: Settings) -> FilesJobRes
     its partial display tree is cleaned (exact leaves only); a cleanup
     failure is reported as FILES_CLEANUP_FAILED and the artifacts are
     retained for operator inspection.
+
+    ``job_id`` (224-b exact worker): run the files stage for EXACTLY
+    that one custody job (addressed by its closed ``snap-<32 hex>``
+    name, never by directory order, timestamps or target database). A
+    missing, inconsistent or unexpected-state exact job is a safe
+    finite failure (``EXACT_COPY_UNAVAILABLE``); an already
+    file-verified exact job is an idempotent no-op success. Unrelated
+    pre-existing copies are never touched or promoted.
     """
     ds.validate_custody_dir(config.custody_dir)
     # The combined DB/files link gate addresses the exact copied
@@ -4533,7 +4630,32 @@ def run_files_job(config: FileSnapshotConfig, settings: Settings) -> FilesJobRes
     failed = 0
     first_failure_code: str | None = None
     try:
-        for job_dir in ds.list_job_dirs(config.custody_dir):
+        targets: list[Path] = []
+        if job_id is not None:
+            targets, exact_error, already_verified = _select_exact_files_job(
+                config, job_id
+            )
+            if exact_error is not None:
+                return FilesJobResult(
+                    "FAILED", 0, 1,
+                    int((time.monotonic() - started) * 1000),
+                    exact_error,
+                )
+            if already_verified:
+                return FilesJobResult(
+                    "FILES_VERIFIED", 0, 0,
+                    int((time.monotonic() - started) * 1000),
+                    None,
+                )
+        else:
+            for job_dir in ds.list_job_dirs(config.custody_dir):
+                manifest = ds.read_manifest(job_dir)
+                if (
+                    manifest is not None
+                    and manifest.state == ds.STATE_DB_SANITIZED_UNPUBLISHED
+                ):
+                    targets.append(job_dir)
+        for job_dir in targets:
             manifest = ds.read_manifest(job_dir)
             if manifest is None or manifest.state != ds.STATE_DB_SANITIZED_UNPUBLISHED:
                 continue

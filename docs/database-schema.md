@@ -1,7 +1,7 @@
 # Database Schema for `slaif-api-gateway`
 
 > **Authority:** Current SQLAlchemy/Alembic schema contract
-> **Migration head:** `0027_demo_admin_accounts`
+> **Migration head:** `0028_demo_web_control`
 
 This reference describes the schema at the named Alembic head. The runtime
 stack is:
@@ -2874,7 +2874,7 @@ keys.
 
 ## 10. Current table inventory
 
-Migration head `0027_demo_admin_accounts` contains 35 tables.
+Migration head `0028_demo_web_control` contains 37 tables.
 
 Current Gateway and operator-path tables:
 
@@ -2903,16 +2903,20 @@ budget_periods                policy_bundles
 policy_bundle_revisions       approved_catalog_entries
 demo_control.fake_admin_accounts
 demo_control.fake_admin_account_events
+demo_control.demo_snapshot_requests
+demo_control.demo_web_sessions
 ```
 
 Presence in this inventory proves migration/model existence only. Consult the
 product and compatibility contracts before treating a foundation table as an
 implemented authentication, tenancy, budget, policy, or job workflow.
 
-The `demo_control` tables (objective 220 foundation) are an isolated
-schema: CLI-managed demo fake-admin identities with no HTTP route and no
-normal-admin wiring at this stage. See
-[demo-admin.md](demo-admin.md) and sections 5.26/5.27.
+The `demo_control` tables are an isolated schema. The objective 220
+foundation (5.26/5.27) provides CLI-managed demo fake-admin identities
+with no HTTP route and no normal-admin wiring; objective 224-a
+(5.28/5.29) adds the demo control session foundation - the snapshot
+request and web-session state machines behind the future demo login -
+still with no HTTP route. See [demo-admin.md](demo-admin.md).
 
 ---
 
