@@ -3097,9 +3097,11 @@ installation facts. Concretely:
 The Operations index's compatibility marker is a real link to the
 admitted index once these GETs work (previously "unavailable in
 this demo"). No raw key, provider credential, operator source
-path/host, signed review payload or writable action endpoint appears
-in any demo response; links remain safe links to copy-backed pages
-only.
+path/host or signed review payload appears in any demo response;
+links remain safe links to copy-backed pages only. (224-v
+correction: the compatibility review form does carry a visible
+POST action, but the central demo gate makes it a pre-body quiet
+204 no-op with no effective write authority.)
 
 ### Evidence (224-u)
 
