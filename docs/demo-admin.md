@@ -77,9 +77,9 @@ set and the near misses.
    dedicated demo host; nothing in the web process triggers the
    worker.
 2. **CLI-only fake-admin credentials.** Accounts exist only through
-   the 220 CLI demo-admin commands (create/enable/disable/reset/
-   delete, operator-supplied passwords). The web role can never
-   create or mutate accounts.
+   the 220 CLI demo-admin commands (create/list/enable/disable/
+   reset-password, operator-supplied passwords). The web role can
+   never create or mutate accounts.
 3. **Process and role separation.** Demo web (restricted web role,
    224-a column grants) + privileged snapshot worker
    (`demo-snapshot-worker process-request` / `cleanup`, worker role)
@@ -99,10 +99,11 @@ set and the near misses.
    control database holds the request/session state machine. Restart
    does not extend any TTL; configuration changes require a restart
    of the demo process.
-8. **Stop / clean up.** Disable or delete the fake-admin accounts
-   (zero active ⇒ 404 everywhere), run worker cleanup for any
-   pending/verified requests, and remove the demo roles/databases
-   per the stage runbooks below.
+8. **Stop / clean up.** Disable the fake-admin accounts
+   (disable-last-account ⇒ zero active ⇒ 404 everywhere; the CLI has
+   no delete command), run worker cleanup for any pending/verified
+   requests, and remove the demo roles/databases per the stage
+   runbooks below.
 9. **Privacy limitations (explicitly accepted).** Identity is masked,
    but the frozen view **retains usage patterns** of the source; the
    key-configuration JSON export is **intentionally unavailable**

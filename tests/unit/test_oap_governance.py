@@ -12,10 +12,37 @@ AGENTS_FILE = REPO_ROOT / "AGENTS.md"
 PROTOCOL_FILE = REPO_ROOT / "OAP-COMMUNICATION-coding-agent.md"
 
 
+# 224-aa: ONE human-authorized exceptional identifier (2026-11-14,
+# "Approving whatever you need to finish that work") for the CI repair
+# round on objective 224. The exception is EXACTLY the identifier
+# `224-aa`: `224-ab` and every other two-letter suffix are NOT
+# accepted, and the normal `NNN-a`..`NNN-z` law is otherwise
+# unchanged. No general change to future OAP identifiers.
+_ACTIVE_IDENTIFIER_RE = re.compile(rb"(?:[0-9]{3}-[a-z]|224-aa)\n?")
+
+
 def _active_identifier() -> str:
     payload = ACTIVE_FILE.read_bytes()
-    assert re.fullmatch(rb"[0-9]{3}-[a-z]\n?", payload)
+    assert _ACTIVE_IDENTIFIER_RE.fullmatch(payload)
     return payload.decode("ascii").removesuffix("\n")
+
+
+def test_active_identifier_shape_law_with_224aa_exception() -> None:
+    # Normal single-letter identifiers still pass...
+    for ok in (b"000-a", b"013-b\n", b"224-z", b"999-z\n"):
+        assert _ACTIVE_IDENTIFIER_RE.fullmatch(ok), ok
+    # ...and the ONE human-authorized exception passes (with or
+    # without the trailing newline)...
+    for ok in (b"224-aa", b"224-aa\n"):
+        assert _ACTIVE_IDENTIFIER_RE.fullmatch(ok), ok
+    # ...while every other two-letter suffix, malformed number, or
+    # extra byte stays refused.
+    for bad in (
+        b"224-ab", b"224-ab\n", b"224-az", b"225-aa", b"224-aaa",
+        b"224-aa\n\n", b"22-aa", b"0224-a", b"224-a1", b"224-",
+        b"224-aa ", b"",
+    ):
+        assert not _ACTIVE_IDENTIFIER_RE.fullmatch(bad), bad
 
 
 def _active_order() -> tuple[str, Path, str]:
