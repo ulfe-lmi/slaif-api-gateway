@@ -336,7 +336,7 @@ def test_every_admin_table_has_structural_ordinal_column() -> None:
     # 224-k: +1 for the demo-only catalog snapshot index table.
     # 224-m: +1 for the demo-only catalog run detail captured-artifacts
     # table.
-    assert len(tables) == 58, f"expected 58 sortable admin tables, got {len(tables)}"
+    assert len(tables) == 62, f"expected 62 sortable admin tables, got {len(tables)}"
     problems: list[str] = []
     for name, tag, block in tables:
         thead = re.search(r"<thead>.*?</thead>", block, flags=re.DOTALL)

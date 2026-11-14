@@ -225,6 +225,25 @@ async def _first_id(san: _Env, copy_db: str, table: str) -> str:
         await s.close()
 
 
+async def _first_public_key_id(san: _Env, copy_db: str, key_id: str) -> str:
+    """224-w: the COPIED public_key_id of one exact copied key (the
+    browser download assertions compare against the copy, never a
+    source value)."""
+    s = await asyncpg.connect(**_conn_kwargs(
+        san.target["host"], san.target["port"],
+        san.target["user"], san.target["password"], copy_db,
+    ))
+    try:
+        row = await s.fetchrow(
+            "SELECT public_key_id FROM gateway_keys WHERE id = $1",
+            key_id,
+        )
+        assert row is not None
+        return row["public_key_id"]
+    finally:
+        await s.close()
+
+
 async def _login_phase(cfg, env: dict[str, Any]) -> tuple[uuid.UUID, str]:
     """HTTP login as the known account; return (request_id, pending cookie)."""
     facade = PgDemoWebFacade(cfg)
@@ -728,22 +747,25 @@ def test_e2e_admin_gate_two_sessions_distinct_copies(
                             # 224-q: the exact /calibration, /clone and
                             # /clone/receipts GETs are now ADMITTED
                             # (proven just below); near-misses and the
-                            # POST/JSON subpaths stay denied.
+                            # POST subpaths stay denied. 224-w admits
+                            # the two JSON attachment GETs (proven in
+                            # the 224-w block).
                             f"/admin/keys/{key_id}/clones",
                             f"/admin/keys/{key_id}/calibrations",
                             f"/admin/keys/{key_id}/calibration/",
                             f"/admin/keys/{key_id}/calibration/preview",
-                            f"/admin/keys/{key_id}/calibration/summary.json",
                             f"/admin/keys/{key_id}/calibration/create-template",
-                            f"/admin/keys/{key_id}/configuration.json",
                             f"/admin/keys/{key_id}/clone/",
                             f"/admin/keys/{key_id}/clone/review",
                             f"/admin/keys/{key_id}/clone/apply",
                             f"/admin/keys/{key_id}/clone/receipts/",
                             f"/admin/keys/{key_id}/clone/receipts/extra",
                             f"/admin/templates/{template_id}/edit",
-                            f"/admin/routes/{route_id}/configuration",
-                            f"/admin/routes/{route_id}/codex-profile/profile",
+                            # 224-w: the route configuration GET and
+                            # the finite codex-profile artifact
+                            # family are now ADMITTED (proven in the
+                            # 224-w block); their near-misses stay
+                            # denied there.
                             f"/admin/usage/{usage_id}/export.csv",
                         ):
                             assert (await client.get(gated)).status_code == 404, gated
@@ -2375,7 +2397,12 @@ def test_e2e_admin_gate_two_sessions_distinct_copies(
                             },
                         )
                         assert r.status_code == 200
-                        assert "No retained record matches" in r.text
+                        # 224-w: the demo not-found wording no longer
+                        # suggests a live retention window.
+                        assert (
+                            "No copied record matches this exact ID in "
+                            "this frozen snapshot." in r.text
+                        )
                         # Session A: the one-key scope shows the
                         # copied reference (view-time active split of
                         # the copied expiries, worker-captured TTL).
@@ -2456,6 +2483,491 @@ def test_e2e_admin_gate_two_sessions_distinct_copies(
                             await s.close()
                         finally:
                             raise
+
+                    # --- 224-w: SMTP + key JSON attachments + route
+                    # configuration over the verified copies ----------
+                    # TARGET-SIDE INSERTION (honest label): the test
+                    # inserts ONE test-only trusted_calibration key
+                    # row (structurally copied from an already-
+                    # sanitized fixture key) into COPY A only,
+                    # through the owned target-owner connection.
+                    # The completion-choices leaf asserted below is
+                    # the REAL worker-built 223 capture (the fixture
+                    # worker runs WITH a configured profile
+                    # directory); only the digest corruption is
+                    # test-induced and restored before the
+                    # invariance phase. This proves REAL
+                    # route/handler/READ-ONLY transport over the
+                    # worker-built copies - NOT 222 source capture of
+                    # the key row (the configured-file installed
+                    # proof remains objective 225).
+                    from slaif_gateway.services.email_admin_operations import (
+                        SMTP_TEST_DEFAULT_BODY as _W_SMTP_BODY,
+                        SMTP_TEST_DEFAULT_SUBJECT as _W_SMTP_SUBJECT,
+                    )
+
+                    _w_key_a = await _first_id(san_env, target_a, "gateway_keys")
+                    _w_key_b = await _first_id(san_env, target_b, "gateway_keys")
+                    _w_route_a = await _first_id(san_env, target_a, "model_routes")
+                    _w_route_b = await _first_id(san_env, target_b, "model_routes")
+                    _w_cal_key = str(uuid.uuid4())
+
+                    async def _w_insert_key(new_id: str, purpose: str) -> None:
+                        s = await _target_conn()
+                        try:
+                            row = await s.fetchrow(
+                                "SELECT * FROM gateway_keys "
+                                "ORDER BY created_at, id LIMIT 1"
+                            )
+                            assert row is not None
+                            vals = dict(row)
+                            vals["id"] = new_id
+                            vals["public_key_id"] = f"224w-{purpose}-public"
+                            vals["token_hash"] = (
+                                "224w-" + _art_hashlib.sha256(
+                                    new_id.encode()
+                                ).hexdigest()
+                            )
+                            vals["key_purpose"] = purpose
+                            vals["capability_policy_mode"] = (
+                                "trusted_calibration_discovery"
+                                if purpose == "trusted_calibration"
+                                else "standard"
+                            )
+                            cols = list(vals.keys())
+                            ph = ", ".join(
+                                f"${i + 1}" for i in range(len(cols))
+                            )
+                            await s.execute(
+                                f"INSERT INTO gateway_keys "
+                                f"({', '.join(cols)}) VALUES ({ph})",
+                                *[vals[c] for c in cols],
+                            )
+                        finally:
+                            await s.close()
+
+                    _w_leaf_corrupt = False
+                    try:
+                        # (1) SMTP: the two exact GETs render the fixed
+                        # "not recorded" state for BOTH sessions (the
+                        # 223 capture records no SMTP facts; the demo
+                        # process's dummy settings are never shown or
+                        # used).
+                        for _w_client, _w_target in (
+                            (client_a, target_a),
+                            (client_b, target_b),
+                        ):
+                            r = await _w_client.get(
+                                "/admin/email-operations/smtp-test"
+                            )
+                            assert r.status_code == 200
+                            assert r.headers["cache-control"] == "private, no-store"
+                            _w_text = " ".join(r.text.split())
+                            assert "Demo snapshot view" in _w_text
+                            assert (
+                                "email and SMTP settings were not recorded"
+                                in _w_text
+                            )
+                            assert "no message is ever sent" in _w_text
+                            assert "Prepare reviewed test (demo no-op)" in _w_text
+                            assert _W_SMTP_SUBJECT in r.text
+                            assert _W_SMTP_BODY in r.text
+                            assert _w_target not in r.text
+                        r = await client_a.get(
+                            "/admin/email-operations/smtp-test/apply"
+                        )
+                        assert r.status_code == 200
+                        assert r.headers["cache-control"] == "private, no-store"
+                        _w_text = " ".join(r.text.split())
+                        assert "Sanitized demo snapshot view" in _w_text
+                        assert "no live one-use token" in _w_text
+                        assert "no message is ever sent" in _w_text
+                        assert target_a not in r.text
+                        # Gate near-misses and the query-free law.
+                        for _w_p in (
+                            "/admin/email-operations/smtp-test/",
+                            "/admin/email-operations/smtp-test/apply/",
+                            "/admin/email-operations/smtp-test/x",
+                            "/admin/email-operations/smtp-test?x=1",
+                            "/admin/email-operations/smtp-test/apply?x=1",
+                        ):
+                            r = await client_a.get(_w_p)
+                            assert r.status_code == 404, _w_p
+                        # The normal review/apply POSTs are the SAME
+                        # quiet pre-body 204 cut (nothing is sent).
+                        for _w_p in (
+                            "/admin/email-operations/smtp-test",
+                            "/admin/email-operations/smtp-test/apply",
+                        ):
+                            r = await client_a.post(
+                                _w_p,
+                                content=b"x" * 200_000,
+                                headers={"content-type": "text/garbage"},
+                            )
+                            assert r.status_code == 204, _w_p
+                            assert r.content == b""
+                        # (2) key JSON attachments: one test-only
+                        # trusted-calibration key row into COPY A only
+                        # (structurally copied from an already-
+                        # sanitized fixture key; transport-only).
+                        await _w_insert_key(_w_cal_key, "trusted_calibration")
+                        _w_pub = "224w-trusted_calibration-public"
+                        _w_token_hash = (
+                            "224w-"
+                            + _art_hashlib.sha256(_w_cal_key.encode()).hexdigest()
+                        )
+                        _w_cal_query = (
+                            "?start_at=2026-01-01T00:00:00Z"
+                            "&end_at=2026-02-01T00:00:00Z&multiplier=3"
+                        )
+                        r = await client_a.get(
+                            f"/admin/keys/{_w_cal_key}"
+                            f"/calibration/summary.json{_w_cal_query}"
+                        )
+                        assert r.status_code == 200
+                        assert r.headers["content-type"] == "application/json"
+                        assert r.headers["content-disposition"] == (
+                            "attachment; filename="
+                            f'"slaif-calibration-summary-{_w_cal_key}.json"'
+                        )
+                        # The gate normalizes every admitted dynamic
+                        # response to exactly one private, no-store
+                        # header (the no-store law).
+                        assert r.headers["cache-control"] == "private, no-store"
+                        assert r.headers["pragma"] == "no-cache"
+                        assert r.headers["x-content-type-options"] == "nosniff"
+                        _w_doc = json.loads(r.content)
+                        # Copied-data recalculation over the FROZEN
+                        # copied usage: the fresh key has none, so the
+                        # honest empty observation with the exact
+                        # copied public id - no source/copy locator or
+                        # key material anywhere.
+                        assert _w_doc["is_empty"] is True
+                        assert _w_doc["summary"]["public_key_id"] == _w_pub
+                        assert _w_doc["summary"]["observed_request_count"] == 0
+                        assert target_a not in r.text
+                        assert _w_token_hash not in r.text
+                        # The SAME key's allowlisted version-1
+                        # configuration document (pure render of the
+                        # exact copied key state).
+                        r = await client_a.get(
+                            f"/admin/keys/{_w_cal_key}/configuration.json"
+                        )
+                        assert r.status_code == 200
+                        assert r.headers["content-type"] == "application/json"
+                        assert r.headers["content-disposition"] == (
+                            "attachment; filename="
+                            f'"slaif-key-configuration-{_w_pub}.json"'
+                        )
+                        assert r.headers["cache-control"] == "private, no-store"
+                        assert r.headers["x-content-type-options"] == "nosniff"
+                        s = await _target_conn()
+                        _w_krow = await s.fetchrow(
+                            "SELECT cost_limit_eur, token_limit_total, "
+                            "request_limit_total, allowed_models "
+                            "FROM gateway_keys WHERE id = $1",
+                            _w_cal_key,
+                        )
+                        await s.close()
+                        _w_doc = json.loads(r.content)
+                        # The strict version-1 ALLOWLISTED policy
+                        # projection of the EXACT copied key state:
+                        # identity in the attachment filename, the
+                        # copied policy fields in the body, and no key
+                        # material, locator or source value anywhere.
+                        assert _w_doc["schema_version"] == 1
+                        assert _w_doc["cost_limit_eur"] == str(
+                            _w_krow["cost_limit_eur"]
+                        )
+                        assert _w_doc["token_limit_total"] == (
+                            _w_krow["token_limit_total"]
+                        )
+                        assert _w_doc["request_limit_total"] == (
+                            _w_krow["request_limit_total"]
+                        )
+                        _w_models = _w_krow["allowed_models"]
+                        if isinstance(_w_models, str):
+                            _w_models = json.loads(_w_models)
+                        assert _w_doc["allowed_models"] == list(_w_models)
+                        assert target_a not in r.text
+                        assert _w_token_hash not in r.text
+                        # Purpose gate: the fixture's STANDARD key gets
+                        # the fixed safe 400 refusal (never a summary).
+                        r = await client_a.get(
+                            f"/admin/keys/{_w_key_a}"
+                            "/calibration/summary.json?multiplier=3"
+                        )
+                        assert r.status_code == 400
+                        assert "The download input was invalid." in r.text
+                        # Semantic input refusal: the gate's ISO
+                        # grammar admits month 13, the normal strict
+                        # parser refuses it BEFORE any copy read.
+                        r = await client_a.get(
+                            f"/admin/keys/{_w_cal_key}"
+                            "/calibration/summary.json"
+                            "?start_at=2026-13-45T99:99:99Z&multiplier=3"
+                        )
+                        assert r.status_code == 400
+                        assert "The download input was invalid." in r.text
+                        # Gate query law: unknown/duplicate/
+                        # grammatically invalid/oversized queries and
+                        # trailing-slash near-misses are fixed 404s.
+                        for _w_q in (
+                            f"/admin/keys/{_w_cal_key}"
+                            "/calibration/summary.json?x=1",
+                            f"/admin/keys/{_w_cal_key}"
+                            "/calibration/summary.json?multiplier=3"
+                            "&multiplier=3",
+                            f"/admin/keys/{_w_cal_key}"
+                            "/calibration/summary.json?multiplier=abc",
+                            f"/admin/keys/{_w_cal_key}"
+                            "/calibration/summary.json?" + "a" * 300,
+                            f"/admin/keys/{_w_cal_key}"
+                            "/configuration.json?x=1",
+                            f"/admin/keys/{_w_cal_key}"
+                            "/calibration/summary.json/",
+                            f"/admin/keys/{_w_cal_key}"
+                            "/configuration.json/",
+                        ):
+                            r = await client_a.get(_w_q)
+                            assert r.status_code == 404, _w_q
+                        # Path-identity alias: the PATH key id as an
+                        # incoming cookie value is a fixed 400 BEFORE
+                        # any copy read (no echo).
+                        client_a.cookies.set("w-canary-uuid", _w_cal_key)
+                        r = await client_a.get(
+                            f"/admin/keys/{_w_cal_key}/configuration.json"
+                        )
+                        assert r.status_code == 400
+                        assert _w_cal_key not in r.text
+                        # Whole-output alias: a cookie value matching a
+                        # NESTED document string (the copied allowed
+                        # model) refuses the WHOLE output (no partial
+                        # substitution, no echo).
+                        _w_canary_model = list(_w_models)[0]
+                        client_a.cookies.set(
+                            "w-canary-pub", _w_canary_model
+                        )
+                        r = await client_a.get(
+                            f"/admin/keys/{_w_cal_key}/configuration.json"
+                        )
+                        assert r.status_code == 400
+                        assert _w_canary_model not in r.text
+                        client_a.cookies.delete("w-canary-pub")
+                        client_a.cookies.delete("w-canary-uuid")
+                        # Copy isolation: session B 404s A's inserted
+                        # key (per-copy independent UUIDs; no
+                        # cross-copy read)...
+                        r = await client_b.get(
+                            f"/admin/keys/{_w_cal_key}/configuration.json"
+                        )
+                        assert r.status_code == 404
+                        # ...and B's OWN fixture key renders from B's
+                        # copy with B's exact copied public id.
+                        s = await asyncpg.connect(**_conn_kwargs(
+                            san_env.target["host"], san_env.target["port"],
+                            san_env.target["user"], san_env.target["password"],
+                            target_b,
+                        ))
+                        _w_pub_b = (
+                            await s.fetchrow(
+                                "SELECT public_key_id FROM gateway_keys "
+                                "WHERE id = $1",
+                                _w_key_b,
+                            )
+                        )["public_key_id"]
+                        await s.close()
+                        r = await client_b.get(
+                            f"/admin/keys/{_w_key_b}/configuration.json"
+                        )
+                        assert r.status_code == 200
+                        assert r.headers["content-disposition"] == (
+                            "attachment; filename="
+                            f'"slaif-key-configuration-{_w_pub_b}.json"'
+                        )
+                        assert json.loads(r.content)["schema_version"] == 1
+                        # (3) route configuration form: copied route +
+                        # copy-backed choices. The fixture worker ran
+                        # WITH a configured completion-profile
+                        # directory, so the copy carries the REAL
+                        # worker-built sanitized completion-choices
+                        # leaf (223 capture - not a test-only
+                        # insertion).
+                        s = await _target_conn()
+                        _w_route_row = await s.fetchrow(
+                            "SELECT requested_model, endpoint, "
+                            "capabilities FROM model_routes WHERE id = $1",
+                            _w_route_a,
+                        )
+                        _w_leaf_row = await s.fetchrow(
+                            "SELECT body, sha256 FROM demo_display.leaves "
+                            "WHERE logical_name = "
+                            "'profiles/completion-choices.json'"
+                        )
+                        await s.close()
+                        assert _w_leaf_row is not None
+                        _w_leaf_ids = json.loads(
+                            bytes(_w_leaf_row["body"])
+                        )["profiles"]
+                        assert _w_leaf_ids
+                        _w_leaf_sha = _w_leaf_row["sha256"]
+                        _w_caps = _w_route_row["capabilities"]
+                        if isinstance(_w_caps, str):
+                            _w_caps = json.loads(_w_caps)
+                        _w_sel_profile = (
+                            _w_caps.get("completion_service", {})
+                            .get("profile")
+                        )
+                        # The copied route's DB value links to the
+                        # fictional choice in its own copy's leaf.
+                        assert _w_sel_profile in _w_leaf_ids
+                        r = await client_a.get(
+                            f"/admin/routes/{_w_route_a}/configuration"
+                        )
+                        assert r.status_code == 200
+                        assert r.headers["cache-control"] == "private, no-store"
+                        _w_text = " ".join(r.text.split())
+                        assert "Sanitized demo snapshot display" in _w_text
+                        assert "FROZEN copied rows" in _w_text
+                        assert (
+                            "sanitized capture of the source operator "
+                            "directory" in _w_text
+                        )
+                        assert (
+                            "In this demo, submission does nothing: no plan "
+                            "is prepared and nothing is applied." in _w_text
+                        )
+                        # The form is pre-filled from the COPIED row
+                        # and the copied leaf's remapped profiles are
+                        # listed.
+                        assert _w_route_row["requested_model"] in r.text
+                        assert _w_route_row["endpoint"] in r.text
+                        for _w_lid in _w_leaf_ids:
+                            assert _w_lid in r.text
+                        assert target_a not in r.text
+                        # Copy isolation: B's copy carries its OWN
+                        # worker-built leaf, and B's page lists B's
+                        # ids (its own copy read).
+                        s_b = await asyncpg.connect(**_conn_kwargs(
+                            san_env.target["host"], san_env.target["port"],
+                            san_env.target["user"], san_env.target["password"],
+                            target_b,
+                        ))
+                        _w_leaf_row_b = await s_b.fetchrow(
+                            "SELECT body FROM demo_display.leaves "
+                            "WHERE logical_name = "
+                            "'profiles/completion-choices.json'"
+                        )
+                        await s_b.close()
+                        assert _w_leaf_row_b is not None
+                        _w_leaf_ids_b = json.loads(
+                            bytes(_w_leaf_row_b["body"])
+                        )["profiles"]
+                        assert _w_leaf_ids_b
+                        r = await client_b.get(
+                            f"/admin/routes/{_w_route_b}/configuration"
+                        )
+                        assert r.status_code == 200
+                        for _w_lid in _w_leaf_ids_b:
+                            assert _w_lid in r.text
+                        # Corruption in copy A: a wrong stored digest
+                        # is ONE fixed safe 503, never the leaf body.
+                        s = await _target_conn()
+                        await s.execute(
+                            "UPDATE demo_display.leaves SET sha256 = $2 "
+                            "WHERE logical_name = $1",
+                            "profiles/completion-choices.json", "f" * 64,
+                        )
+                        await s.close()
+                        _w_leaf_corrupt = True
+                        r = await client_a.get(
+                            f"/admin/routes/{_w_route_a}/configuration"
+                        )
+                        assert r.status_code == 503
+                        assert _w_sel_profile not in r.text
+                        # (4) codex-profile artifact boundary: the
+                        # fixture route has NO registered codex
+                        # profile in the copy, so the whole finite
+                        # artifact family is safe 404 (the eligible
+                        # inert bytes are proven by the unit suite).
+                        for _w_art in ("base", "profile", "catalog"):
+                            r = await client_a.get(
+                                f"/admin/routes/{_w_route_a}"
+                                f"/codex-profile/{_w_art}"
+                            )
+                            assert r.status_code == 404, _w_art
+                        for _w_p in (
+                            f"/admin/routes/{_w_route_a}/codex-profile",
+                            f"/admin/routes/{_w_route_a}/codex-profile/badname",
+                            f"/admin/routes/{_w_route_a}/codex-profile/base/",
+                            f"/admin/routes/{_w_route_a}/codex-profile/base?x=1",
+                            f"/admin/routes/{_w_route_a}/configuration/",
+                            f"/admin/routes/{_w_route_a}/configuration?x=1",
+                        ):
+                            r = await client_a.get(_w_p)
+                            assert r.status_code == 404, _w_p
+                        # The normal plan/apply POSTs are the SAME
+                        # quiet 204 cut.
+                        for _w_p in (
+                            f"/admin/routes/{_w_route_a}/configuration",
+                            f"/admin/routes/{_w_route_a}/codex-profile/base",
+                        ):
+                            r = await client_a.post(
+                                _w_p,
+                                content=b"x" * 200_000,
+                                headers={"content-type": "text/garbage"},
+                            )
+                            assert r.status_code == 204, _w_p
+                            assert r.content == b""
+                        # Exact cleanup: restore the worker-built leaf
+                        # digest and remove the inserted key (exact
+                        # id, exact name).
+                        s = await _target_conn()
+                        await s.execute(
+                            "UPDATE demo_display.leaves SET sha256 = $2 "
+                            "WHERE logical_name = $1",
+                            "profiles/completion-choices.json",
+                            _w_leaf_sha,
+                        )
+                        await s.execute(
+                            "DELETE FROM gateway_keys WHERE id = $1",
+                            _w_cal_key,
+                        )
+                        await s.close()
+                        _w_leaf_corrupt = False
+                        # Cleanup proven: the page renders 200 again
+                        # with its worker-built leaf, and the
+                        # inserted key 404s.
+                        r = await client_a.get(
+                            f"/admin/routes/{_w_route_a}/configuration"
+                        )
+                        assert r.status_code == 200
+                        for _w_lid in _w_leaf_ids:
+                            assert _w_lid in r.text
+                        r = await client_a.get(
+                            f"/admin/keys/{_w_cal_key}/configuration.json"
+                        )
+                        assert r.status_code == 404
+                    finally:
+                        # Same exact restore on failure (idempotent;
+                        # the invariance phase must see untouched
+                        # copies).
+                        s = await _target_conn()
+                        try:
+                            if _w_leaf_corrupt:
+                                await s.execute(
+                                    "UPDATE demo_display.leaves "
+                                    "SET sha256 = $2 "
+                                    "WHERE logical_name = $1",
+                                    "profiles/completion-choices.json",
+                                    _w_leaf_sha,
+                                )
+                            await s.execute(
+                                "DELETE FROM gateway_keys WHERE id = $1",
+                                _w_cal_key,
+                            )
+                        finally:
+                            await s.close()
 
                     # --- CSRF-verified demo sign-out (session A) ---------
                     csrf_a = _demo_csrf_token(cfg.cookie_secret, token_a)
@@ -2894,6 +3406,12 @@ def test_browser_smoke_demo_copy_pages(
     a_info = asyncio.run(_r_copy_receipt_info(san_env, target))
     b_key = asyncio.run(_r_copy_single_key(san_env, target_b))
     b_key_count = asyncio.run(_count_table(san_env, target_b, "gateway_keys"))
+    # 224-w pre-computed copy facts (same greenlet constraint): the
+    # first copied route and key of copy A, and the key's COPIED
+    # public id (the download assertions compare against the copy).
+    _w_route = asyncio.run(_first_id(san_env, target, "model_routes"))
+    _w_key = asyncio.run(_first_id(san_env, target, "gateway_keys"))
+    _w_pub_key = asyncio.run(_first_public_key_id(san_env, target, _w_key))
 
     port = _free_port()
     base_url = f"http://127.0.0.1:{port}"
@@ -3478,6 +3996,104 @@ def test_browser_smoke_demo_copy_pages(
             )
             page.screenshot(path=str(shot_r))
             print(f"DEMO_BROWSER_224R_SCREENSHOT={shot_r}")
+
+            # --- 224-w: SMTP no-op, real JSON download, route config,
+            # inert-artifact boundary in the real browser -------------
+            # The SMTP form renders the fixed "not recorded" state
+            # with the visible (labeled no-op) submit control...
+            r = page.goto("/admin/email-operations/smtp-test")
+            assert r is not None and r.status == 200
+            assert r.headers["cache-control"] == "private, no-store"
+            _ww_page = page.content()
+            _ww_flat = " ".join(_ww_page.split())
+            assert "Demo snapshot view" in _ww_flat
+            assert "no message is ever sent" in _ww_flat
+            assert "Prepare reviewed test (demo no-op)" in _ww_flat
+            assert target not in _ww_page
+            # ...and the REAL submit is the quiet pre-body 204 no-op
+            # (no reviewed test is prepared and nothing is sent).
+            page.fill(
+                'input[name="recipient"]', "224w-browser-probe@canary.invalid"
+            )
+            page.click(
+                'button[type="submit"]:has-text("Prepare reviewed test")'
+            )
+            page.wait_for_timeout(300)
+            _ww_posted = [
+                (u, st)
+                for (u, st, _cc) in all_responses
+                if u.endswith("/admin/email-operations/smtp-test/review")
+                and st == 204
+            ]
+            assert _ww_posted, "no 204 no-op recorded for the SMTP form POST"
+            # The apply-recovery page is the fixed no-send notice.
+            r = page.goto("/admin/email-operations/smtp-test/apply")
+            assert r is not None and r.status == 200
+            _ww_flat = " ".join(page.content().split())
+            assert "Sanitized demo snapshot view" in _ww_flat
+            assert "no live one-use token" in _ww_flat
+            # A REAL download through the authenticated browser
+            # context: the exact copied key's configuration document
+            # (attachment bytes + safety headers, copied public id,
+            # never a source/copy locator).
+            _ww_resp = context.request.get(
+                f"/admin/keys/{_w_key}/configuration.json"
+            )
+            assert _ww_resp.status == 200
+            assert _ww_resp.headers["content-type"] == "application/json"
+            assert _ww_resp.headers["content-disposition"] == (
+                'attachment; filename='
+                f'"slaif-key-configuration-{_w_pub_key}.json"'
+            )
+            assert _ww_resp.headers.get("x-content-type-options") == "nosniff"
+            assert "no-store" in _ww_resp.headers.get("cache-control", "")
+            _ww_body = _ww_resp.body().decode("utf-8")
+            _ww_doc = json.loads(_ww_body)
+            assert _ww_doc["schema_version"] == 1
+            assert target not in _ww_body
+            # The fixture's STANDARD key gets the fixed safe 400
+            # calibration refusal in the real browser context too
+            # (never a summary).
+            _ww_resp = context.request.get(
+                f"/admin/keys/{_w_key}/calibration/summary.json?multiplier=3"
+            )
+            assert _ww_resp.status == 400
+            assert "The download input was invalid." in _ww_resp.body().decode()
+            # The route detail page: the fixture route has NO
+            # registered Codex profile in the copy, so NO codex
+            # artifact link or live render appears...
+            r = page.goto(f"/admin/routes/{_w_route}")
+            assert r is not None and r.status == 200
+            _ww_page = page.content()
+            assert "/codex-profile/" not in _ww_page
+            assert "Inert Codex reference artifacts" not in _ww_page
+            assert "localhost" not in _ww_page
+            # ...and the exact artifact path is a safe 404.
+            r = page.goto(f"/admin/routes/{_w_route}/codex-profile/profile")
+            assert r is not None and r.status == 404
+            # The route configuration form renders the copied row with
+            # the persistent frozen/no-op cue (a real rendered-page
+            # proof of the demo branch).
+            r = page.goto(f"/admin/routes/{_w_route}/configuration")
+            assert r is not None and r.status == 200
+            _ww_flat = " ".join(page.content().split())
+            assert "Sanitized demo snapshot display" in _ww_flat
+            assert "FROZEN copied rows" in _ww_flat
+            assert (
+                "In this demo, submission does nothing: no plan is "
+                "prepared and nothing is applied." in _ww_flat
+            )
+            assert (
+                "sanitized capture of the source operator directory"
+                in _ww_flat
+            )
+            assert target not in page.content()
+            shot_ww = Path(
+                f"/tmp/slaif-224w-browser-route-config-{os.getpid()}-"
+                f"{uuid.uuid4().hex[:10]}.png"
+            )
+            page.screenshot(path=str(shot_ww))
+            print(f"DEMO_BROWSER_224W_SCREENSHOT={shot_ww}")
 
             # --- 224-i: an admitted form renders; the operational submit
             # is a quiet 204 no-op that changes nothing -------------------

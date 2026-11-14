@@ -572,10 +572,22 @@ async def demo_operations_diagnostics(request: Request) -> Response:
         return _diagnostics_unavailable()
 
     withheld: set[str] = set()
+    demo_id_withheld: set[str] = set()
     facts: dict[str, str] = {}
     if lookup_result is not None and lookup_result.record is not None:
         # The normal page's exact output-side alias withholding.
         withheld = _withheld_record_fields(request, lookup_result.record)
+        # The FOUND detail also prints two UUID identities
+        # (gateway_key_id / route_id), outside the string-field
+        # withholding vocabulary: apply the same output-side alias
+        # check to their canonical string form and never echo or
+        # link a matching value.
+        for _id_field in ("gateway_key_id", "route_id"):
+            _id_value = getattr(lookup_result.record, _id_field, None)
+            if _id_value is not None and _is_incoming_alias(
+                request, str(_id_value)
+            ):
+                demo_id_withheld.add(_id_field)
         record = lookup_result.record
         facts = {
             "positions": _format_fact_map(record.positions),
@@ -636,6 +648,7 @@ async def demo_operations_diagnostics(request: Request) -> Response:
             "lookup_namespace": namespace_raw,
             "lookup_result": lookup_result,
             "withheld_fields": withheld,
+            "demo_id_withheld": demo_id_withheld,
             "facts": facts,
             "picker_options": [],
             "recent_rows": recent_rows,

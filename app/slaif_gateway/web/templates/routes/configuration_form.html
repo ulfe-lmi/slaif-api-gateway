@@ -26,6 +26,22 @@
   <div class="admin-flash admin-flash-error" role="alert">{{ error }}</div>
   {% endif %}
 
+  {%- if demo_admin %}
+  <div class="admin-flash" role="status">
+    <strong>Sanitized demo snapshot display:</strong> the route and the
+    choice lists below are the FROZEN copied rows of this session's
+    private copy, read from the verified copy only (no provider network or
+    source file read). The form is shown for familiarity; submitting it
+    does nothing in this demo - no plan is prepared, nothing is applied,
+    and no audit row is written.{% if demo_completion_unconfigured %} The
+    source deployment recorded no operator completion profiles in this
+    copy, so the profile list is empty; the normal form would offer the
+    package defaults instead.{% else %} The installed completion profile
+    list is the sanitized capture of the source operator directory (ids
+    remapped).{% endif %}
+  </div>
+  {%- endif %}
+
   <form class="create-form" method="post" action="/admin/routes/{{ route_id }}/configuration/plan" data-cfg-root>
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
     <p class="field-help" id="route-config-form-help">
@@ -313,7 +329,8 @@
 
     <section class="action-panel" aria-labelledby="route-config-plan-heading">
       <h2 id="route-config-plan-heading">Prepare reviewed plan</h2>
-      <p class="muted">Planning is READ ONLY: it mutates nothing and writes no audit row. The next page shows the readable diff and the review state for this route.</p>
+      <p class="muted">Planning is READ ONLY: it mutates nothing and writes no audit row. The next page shows the readable diff and the review state for this route.</p>{% if demo_admin %}
+      <p class="warning-text">In this demo, submission does nothing: no plan is prepared and nothing is applied.</p>{% endif %}
       <button type="submit">Prepare plan</button>
     </section>
   </form>

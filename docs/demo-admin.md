@@ -3297,3 +3297,197 @@ pages).
 * No schema migration, role, grant, configuration, release,
   deployment or merge is introduced; the fake admin remains a
   sanitized display surface with no write authority.
+## Read-only SMTP test, key JSON attachments, and route configuration reads (objective 224-w)
+
+The demo surface gains four further exact read-only families, all
+over the visitor's verified per-login SELECT-only copy. As before,
+every operational submission stays the gate's quiet pre-body 204
+no-op (except the CSRF-verified demo logout), no source
+database/file/settings/provider/mail access is reachable, and every
+new read re-checks `current_database()` and
+`transaction_read_only` inside its one request-local transaction.
+
+### 224-v repairs folded into 224-w
+
+* The demo diagnostics page now shows ONLY the working read-only
+  GET lookup (the normal POST lookup was a silent no-op, so it is
+  not offered); the normal lookup branch stays byte-identical, and
+  the cleanup action control stays visible as a labeled no-op.
+* The demo not-found wording no longer suggests the copied row fell
+  outside a live retention window ("No copied record matches this
+  exact ID in this frozen snapshot."), and the replay preview help
+  no longer implies ongoing traffic can change the frozen copy.
+* The duplicate source-level guidance IDs
+  (`cleanup-confirm-help`, `cleanup-reason-help`,
+  `preview-expired-help`, `preview-reason-help`) are unique in the
+  template source and correctly linked in both rendered branches;
+  the new lookup input and namespace select carry their own linked
+  help.
+* **Correction of the 224-v claim**: the 224-v report stated that
+  output-side alias withholding applied to the found/recent
+  projections. That was overstated: the found detail's raw
+  `gateway_key_id` / `route_id` UUID strings were NOT withheld at
+  224-v time. 224-w withholds them in the demo branch whenever the
+  UUID string matches a known incoming bearer/cookie/session/proxy
+  alias, exactly like the other displayed fields (no echo, no
+  link). Normal-admin output is unchanged.
+
+### Admission law (central gate, before the copy)
+
+Admitted (GET only): `/admin/email-operations/smtp-test`,
+`/admin/email-operations/smtp-test/apply` (both query-free);
+`/admin/keys/{canonical-lowercase-UUID}/calibration/summary.json`
+(the one bounded positive query law below);
+`/admin/keys/{canonical-lowercase-UUID}/configuration.json`
+(query-free); `/admin/routes/{canonical-lowercase-UUID}/configuration`
+(query-free); and
+`/admin/routes/{canonical-lowercase-UUID}/codex-profile/{base|profile|catalog}`
+(ONE finite artifact vocabulary, query-free). No alternate slash,
+subpath, broad prefix or arbitrary query is admitted; every unsafe
+method on the admitted paths is the pre-body quiet 204.
+
+The calibration summary carries a bounded POSITIVE query law
+enforced before any copy binding: a small whole-raw-byte ceiling
+first, then a strict single-pass percent-decode (the normal
+template link urlencodes the datetimes; an invalid or truncated
+escape is refused, `+` is not a space), then at most one of each of
+the exact parameters `start_at` / `end_at` / `multiplier` - no
+unknown names, no duplicates, no oversized values, and strict value
+grammars (ISO-8601 date/datetime; positive decimal) that no
+credential-shaped value can fit. The handler re-runs the normal
+strict parsers, so a grammar-level value that is semantically
+invalid (for example month 13) is a fixed safe 400 before any copy
+read.
+
+### SMTP test reads (no captured facts)
+
+The 223 capture records NO source email/SMTP facts (there is no
+SMTP display leaf and no copied SMTP settings table), so both GETs
+render the fixed "not recorded" state: the demo process's own dummy
+SMTP settings are NEVER used as source readiness, and no SMTP host,
+user or password is displayed or used. The existing styled form and
+recovery views are shown with their useful recipient/subject/body
+product-constant hints and visible review/send controls clearly
+labeled quiet no-ops; the apply-recovery page is a fixed no-send
+notice. There is no live one-use token, no test send, no
+broker/mail access, and no false success.
+
+### Key JSON attachments (copied key state only)
+
+Both attachments are produced by the proven read-only normal
+rendering services bound to the request-local copy session and the
+demo app's fixed neutral settings (no ambient `get_settings()`
+read). The key must exist in THIS copy (fixed 404 otherwise).
+
+* `configuration.json`: the SAME allowlisted strict version-1
+  policy document the normal export renders for the exact copied
+  key (identity in the attachment filename; the body is a pure
+  policy projection - no key material, provider credential, raw
+  metadata, replay token, source ID or copy locator).
+* `calibration/summary.json`: the SAME service and the SAME strict
+  input validation as the normal download, recalculated over the
+  FROZEN copied usage rows (copied-data recalculation, never live
+  current usage); non-trusted-calibration keys get the fixed safe
+  400 refusal.
+
+Whole-output refusal: when ANY nested string of the serialized
+artifact equals or embeds a known incoming authentication alias
+(the same pure request-aware classifier as the normal calibration
+export), the WHOLE output is refused with a fixed safe error - no
+partial secret substitution, no echo of the refused value. The
+path key id itself as an incoming alias is refused BEFORE any copy
+binding. A finite 1 MiB output ceiling refuses oversize output
+explicitly (never truncated). Both attachments are
+application/json with the attachment disposition and private
+no-store/no-cache plus nosniff headers.
+
+### Route configuration form (copy-backed choices only)
+
+The route and the four database-backed choice families (provider,
+requested model, upstream model, endpoint) are loaded from the
+visitor's verified SELECT-only copy with the same bounded read-only
+choice law as the normal form. The optional operator completion
+choices come ONLY from the 223-verified sanitized
+`profiles/completion-choices.json` display leaf - metadata first
+(kind/size/digest/actual length), the bounded body re-asserting
+every condition as bound parameters, exact length + SHA256, and the
+typed verifier law. There is NO live
+`COMPLETION_SERVICE_PROFILE_DIR` or filesystem fallback in the demo
+process: an absent leaf means the source deployment recorded no
+operator completion profiles, and the page labels the package
+defaults instead; a corrupt configured leaf is the fixed safe 503.
+The existing form, field hints and visible action controls are
+kept with a persistent frozen/no-op cue. No provider network or
+source file read occurs.
+
+### Inert Codex reference artifacts (no runnable profile)
+
+The demo host cannot forward `/v1`, so the normal live
+`PUBLIC_BASE_URL` is never used to emit a runnable profile. For a
+copied route that is eligible under the same pure copy-bound
+qualification inspection the normal route detail uses, the three
+finite attachments (`base`, `profile`, and `catalog` only where the
+profile includes one) are rendered by the same pure renderer over
+the finite packaged profile data with the reserved non-routable
+placeholder URL `https://api.slaif.invalid/v1`, under clearly
+labeled `.reference` inert filenames. They contain no bearer, no
+real source host, no provider credential and point to no usable
+endpoint. An ineligible route, an unknown/unsupported profile id,
+or an unavailable catalog is a safe 404; every response is private
+no-store and nosniff. The demo route-detail page links the inert
+artifacts truthfully for eligible routes and stays
+byte-identical for the normal admin.
+
+### Evidence (224-w)
+
+* **Focused mocked units**: the new `test_w_` unit suite in
+  `tests/unit/test_demo_web.py` (gate exact-path/near-miss/
+  query-law/percent-decode/unsafe-204 law; SMTP not-recorded
+  render, preflight-mismatch 503 and no-demo-state 404; key
+  attachment positive/missing/alias/oversized/preflight cases
+  including the path-identity refusal proven with a never-called
+  copy session; route-configuration copy-backed positive,
+  unconfigured-leaf labeling and corrupt-leaf 503; codex artifact
+  eligible-inert bytes, no-catalog 404, ineligible 404 and
+  render-failure 404), plus the repaired 224-v unit failures
+  (usability sortable-table inventory 58 -> 62, the linked demo
+  lookup help, the unique guidance IDs, and the diagnostics
+  found-UUID alias withholding canary) - all green with Ruff
+  clean.
+* **Byte-identity oracle**: the modified templates (smtp test
+  form/review, route configuration form, route detail, key detail,
+  diagnostics, replay scope) render byte-identical under
+  representative NORMAL contexts against the activation-commit
+  originals; the demo branches render the expected content in a
+  separate demo smoke render.
+* **Owned PostgreSQL, two simultaneous copies**: the owned
+  two-copy fixture proves, with ONE test-only trusted-calibration
+  key row inserted into copy A only through the owned target-owner
+  connection (honest label: transport proof, NOT 222 source
+  capture or worker publication; exact-id cleanup before the
+  invariance phase), the SMTP "not recorded" pages for both
+  sessions, the calibration summary over frozen copied usage for
+  the test-only trusted-calibration key, the allowlisted
+  configuration document with the copied policy fields and copied
+  identity filename, the purpose-gate 400, the semantic-input 400,
+  the gate query-law 404s, the path-identity and whole-output
+  alias refusals with no echo, the per-copy configuration
+  isolation (copy B 404s copy A's inserted key and renders its own
+  key from its own copy), the route-configuration copy-backed
+  form over the REAL worker-built completion-choices leaf (the
+  copied route's DB value linked to its copy's leaf, per-copy leaf
+  reads, and the corrupt-leaf 503 with exact digest restore), and
+  the codex artifact 404 boundary for the fixture's non-eligible
+  route (the eligible inert bytes are proven by the unit suite).
+* **Real Chromium**: the owned browser fixture proves the SMTP
+  form render and the REAL submit landing on the quiet 204 no-op
+  (nothing sent), the apply-recovery no-send notice, a REAL
+  authenticated-context download of the copied key's
+  configuration document (attachment bytes, safety headers,
+  copied identity filename), the standard-key calibration 400 in
+  the browser, the route-detail page without any codex artifact
+  link, the exact artifact-path 404, and the route-configuration
+  render with the persistent no-op cue.
+* No schema migration, role, grant, configuration, release,
+  deployment or merge is introduced; the fake admin remains a
+  sanitized display surface with no write authority.

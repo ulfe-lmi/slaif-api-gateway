@@ -91,22 +91,27 @@
           <input type="text" id="demo-lookup-id" name="lookup" value="{{ lookup_value }}"
                  maxlength="128" autocomplete="off" required
                  aria-label="Diagnostic request ID"
+                 aria-describedby="demo-lookup-id-help"
                  placeholder="gw-&#8230; or client ID">
         </label>
       </div>
+      <p class="field-help" id="demo-lookup-id-help">One safe diagnostic ID from this frozen copy: a gateway ID (gw-…) or a client request ID. The lookup is read-only and never writes or deletes anything.</p>
       <div class="form-grid">
         <label>
           Namespace
-          <select name="namespace" aria-label="Lookup namespace">
+          <select name="namespace" id="demo-lookup-namespace" aria-label="Lookup namespace"
+                  aria-describedby="demo-lookup-namespace-help">
           <option value="any" {% if lookup_namespace == "any" %}selected{% endif %}>Any (gateway + client)</option>
           <option value="gateway" {% if lookup_namespace == "gateway" %}selected{% endif %}>Gateway</option>
           <option value="client" {% if lookup_namespace == "client" %}selected{% endif %}>Client</option>
           </select>
         </label>
       </div>
+      <p class="field-help" id="demo-lookup-namespace-help">Which stored ID to match: the gateway ID, the client ID, or either.</p>
       <button type="submit">Look up (read-only)</button>
     </form>
     {%- endif %}
+    {%- if not demo_admin %}
     <form class="create-form" method="post" action="/admin/operations/diagnostics/lookup">
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
       {{ record_choice("lookup_id", "diagnostic_request_id", "Diagnostic request ID", options=picker_options, selected_id=lookup_value, nojs_value=lookup_value, allow_new=true, placeholder="Select or enter a gateway (gw-…) or client ID", help="One control for selection and entry: up to 100 retained IDs for the selected namespace (newest first); selecting one fills this field without submitting. Typing searches retained IDs beyond the initial list (max 200 characters per search) or enters a new ID (max 128 characters). Values that are not safe identifiers, or that are a known incoming authentication value, are refused and are not stored or redisplayed.", help_id="lookup-id-help") }}
@@ -122,6 +127,7 @@
       <p class="field-help" id="lookup-namespace-help">Which stored ID to match: the gateway ID, the client ID, or either.</p>
       <button type="submit">Look up</button>
     </form>
+    {%- endif %}
   </section>
 
   <section class="action-panel" aria-labelledby="diagnostics-result-heading">
@@ -143,7 +149,7 @@
         <dt>Positions</dt><dd>{{ facts.positions }}</dd>
         <dt>Counts</dt><dd>{{ facts.counts }}</dd>
         <dt>Limits</dt><dd>{{ facts.limits }}</dd>
-        <dt>Gateway key / route</dt><dd>{{ record.gateway_key_id or "—" }} / {{ record.route_id or "—" }}{% if "route_pattern" not in withheld_fields and record.route_pattern %} (<code>{{ record.route_pattern }}</code>){% endif %}</dd>
+        <dt>Gateway key / route</dt><dd>{% if demo_admin %}{% if "gateway_key_id" in demo_id_withheld %}unavailable{% else %}{{ record.gateway_key_id or "—" }}{% endif %} / {% if "route_id" in demo_id_withheld %}unavailable{% else %}{{ record.route_id or "—" }}{% endif %}{% else %}{{ record.gateway_key_id or "—" }} / {{ record.route_id or "—" }}{% endif %}{% if "route_pattern" not in withheld_fields and record.route_pattern %} (<code>{{ record.route_pattern }}</code>){% endif %}</dd>
         <dt>Deployment revision</dt><dd>{% if "deployment_revision" in withheld_fields %}unavailable{% else %}{{ record.deployment_revision or "not recorded" }}{% endif %}</dd>
         <dt>Client module identity</dt><dd>Not recorded (no client module identity is stored with the diagnostic record; nothing is inferred from the currently bound module)</dd>
         <dt>Token facts</dt>
@@ -172,34 +178,23 @@
             </tr>
           </thead>
           <tbody>
-            {%- if demo_admin %}
-            {% for c in demo_candidates %}
+            {%- set _cand_rows = demo_candidates if demo_admin else lookup_result.candidates %}
+            {% for c in _cand_rows %}
             <tr>
               <td class="row-ordinal">{{ loop.index }}</td>
-              <td>{% if c.gateway_display is none %}<span class="muted">unavailable (known incoming value withheld)</span>{% else %}<code>{{ c.gateway_display }}</code>{% endif %}</td>
+              <td>{% if demo_admin %}{% if c.gateway_display is none %}<span class="muted">unavailable (known incoming value withheld)</span>{% else %}<code>{{ c.gateway_display }}</code>{% endif %}{% else %}<code>{{ c.gateway_request_id }}</code>{% endif %}</td>
               <td>{{ c.matched_namespace }}</td>
               <td title="{{ c.occurred_at.isoformat() }}">{{ c.occurred_at | utc_date_display }} ({{ c.occurred_at.isoformat() }})</td>
-              <td>{% if c.resolve_href %}<a class="button-link" href="{{ c.resolve_href }}">Resolve in gateway</a>{% else %}<span class="muted">withheld</span>{% endif %}</td>
-            </tr>
-            {% endfor %}
-            {%- else %}
-            {% for candidate in lookup_result.candidates %}
-            <tr>
-              <td class="row-ordinal">{{ loop.index }}</td>
-              <td><code>{{ candidate.gateway_request_id }}</code></td>
-              <td>{{ candidate.matched_namespace }}</td>
-              <td title="{{ candidate.occurred_at.isoformat() }}">{{ candidate.occurred_at | utc_date_display }} ({{ candidate.occurred_at.isoformat() }})</td>
-              <td>
+              <td>{% if demo_admin %}{% if c.resolve_href %}<a class="button-link" href="{{ c.resolve_href }}">Resolve in gateway</a>{% else %}<span class="muted">withheld</span>{% endif %}{% else %}
                 <form method="post" action="/admin/operations/diagnostics/lookup">
                   <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                  <input type="hidden" name="lookup_id" value="{{ candidate.gateway_request_id }}">
+                  <input type="hidden" name="lookup_id" value="{{ c.gateway_request_id }}">
                   <input type="hidden" name="lookup_namespace" value="gateway">
                   <button type="submit">Resolve in gateway</button>
                 </form>
-              </td>
+              {% endif %}</td>
             </tr>
             {% endfor %}
-            {%- endif %}
             {% if not lookup_result.candidates %}
             <tr data-no-sort class="empty-state"><td colspan="5">No candidates.</td></tr>
             {% endif %}
@@ -207,7 +202,7 @@
         </table>
       </div>
     {% elif lookup_result.outcome.value == "not_found" %}
-      <p class="muted">No retained record matches this ID (it may be expired, never recorded, or outside the retention window).</p>
+      {% if demo_admin %}<p class="muted">No copied record matches this exact ID in this frozen snapshot.</p>{% else %}<p class="muted">No retained record matches this ID (it may be expired, never recorded, or outside the retention window).</p>{% endif %}
     {% else %}
       <p class="muted">The diagnostics store is unavailable; no rows were read.</p>
     {% endif %}
@@ -278,23 +273,13 @@
                  autocomplete="off" aria-describedby="cleanup-reason-help">
         </label>
       </div>
-      {%- if demo_admin %}
-      <p class="field-help" id="cleanup-reason-help">In normal use this reason is recorded in the audit log together with your user ID and the deleted count (max 512 characters). In this demo, submission does nothing, so nothing is recorded.</p>
-      {%- endif %}
-      {%- if not demo_admin %}
-      <p class="field-help" id="cleanup-reason-help">Recorded in the audit log together with your user ID and the deleted count (max 512 characters).</p>
-      {%- endif %}
+      <p class="field-help" id="cleanup-reason-help">{% if demo_admin %}In normal use this reason is recorded in the audit log together with your user ID and the deleted count (max 512 characters). In this demo, submission does nothing, so nothing is recorded.{% else %}Recorded in the audit log together with your user ID and the deleted count (max 512 characters).{% endif %}</p>
       <div class="checkbox-row">
         <input type="checkbox" id="cleanup-confirm" name="confirm" value="1"
                aria-describedby="cleanup-confirm-help">
         <label for="cleanup-confirm">I confirm this cleanup of expired records</label>
       </div>
-      {%- if demo_admin %}
-      <p class="field-help" id="cleanup-confirm-help">In normal use the operation is bounded: at most {{ cleanup_batch_limit | num }} expired records per run and retained records are never deleted. In this demo, submission does nothing.</p>
-      {%- endif %}
-      {%- if not demo_admin %}
-      <p class="field-help" id="cleanup-confirm-help">The operation is bounded: at most {{ cleanup_batch_limit | num }} expired records per run and retained records are never deleted. If the limit is reached, another run may be needed.</p>
-      {%- endif %}
+      <p class="field-help" id="cleanup-confirm-help">{% if demo_admin %}In normal use the operation is bounded: at most {{ cleanup_batch_limit | num }} expired records per run and retained records are never deleted. In this demo, submission does nothing.{% else %}The operation is bounded: at most {{ cleanup_batch_limit | num }} expired records per run and retained records are never deleted. If the limit is reached, another run may be needed.{% endif %}</p>
       <button type="submit">Run cleanup</button>
     </form>
     </details>

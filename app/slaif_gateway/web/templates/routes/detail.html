@@ -63,7 +63,27 @@
       <p class="muted small">Exact registered profile {{ route.codex_profile_id }} (metadata v{{ route.codex_metadata_version }}) is locally qualified; live provider E2E is {% if route.codex_real_provider_e2e %}qualified{% else %}not claimed{% endif %}.</p>
       {% endif %}
       {% if demo_admin %}
-      <p class="warning-text">Demo read-only preview: Codex profile artifacts are not rendered in this snapshot because the demo host does not forward /v1.</p>
+      {% if route.codex_protocol_ready and route.codex_profile_id %}
+      <section class="action-panel" aria-labelledby="codex-demo-artifacts-heading">
+        <h2 id="codex-demo-artifacts-heading">Inert Codex reference artifacts</h2>
+        <p class="warning-text">
+          Demo read-only snapshot: these attachments are INERT references only. They are rendered from
+          the copied route facts and the packaged profile data with the reserved non-routable
+          placeholder URL <code>https://api.slaif.invalid/v1</code>; they contain no credentials and
+          point to no live endpoint, so they are not runnable against any deployment. The model
+          catalog is available only for profiles that include one (otherwise a safe 404).
+        </p>
+        <p>
+          <a href="/admin/routes/{{ route.id }}/codex-profile/base">Download base fragment (inert reference)</a>
+          &middot;
+          <a href="/admin/routes/{{ route.id }}/codex-profile/profile">Download Codex config (inert reference)</a>
+          &middot;
+          <a href="/admin/routes/{{ route.id }}/codex-profile/catalog">Download model catalog (inert reference)</a>
+        </p>
+      </section>
+      {% else %}
+      <p class="warning-text">Demo read-only preview: this copied route has no registered Codex profile, so no reference artifacts exist in this snapshot.</p>
+      {% endif %}
       {% elif codex_profile_artifacts %}
       <section class="action-panel" aria-labelledby="codex-artifacts-heading">
         <h2 id="codex-artifacts-heading">Credential-free Codex artifacts</h2>

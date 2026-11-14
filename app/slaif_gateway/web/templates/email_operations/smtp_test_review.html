@@ -10,7 +10,7 @@
       <h1 id="smtp-test-review-heading">SMTP Test Review</h1>
       <p class="muted">
         Review the exact test content below, then confirm. The reviewed facts are bound to this
-        signed-in admin and session and expire in 15 minutes; each reviewed intent is one-use.
+        signed-in admin and session and expire in 15 minutes; each reviewed intent is one-use.{% if demo_admin %} In this demo, no reviewed test content exists: no live reviewed intent was ever created, nothing is bound to this session, and no message can be sent.{% endif %}
       </p>
     </div>
     <div class="header-actions">
@@ -22,6 +22,16 @@
       </form>
     </div>
   </header>
+
+  {%- if demo_admin %}
+  <div class="admin-flash" role="status">
+    <strong>Sanitized demo snapshot view:</strong> the source deployment's
+    email and SMTP settings were not recorded in this sanitized copy, so no
+    reviewed test content is shown. Submitting any form here does nothing in
+    this demo: no reviewed intent is ever created, no live one-use token
+    exists, and no message is ever sent.
+  </div>
+  {%- endif %}
 
   {% if error %}
   <section class="action-panel">

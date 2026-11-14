@@ -1649,13 +1649,11 @@ def test_gate_admission_law_closed_sets():
                 "/admin/accounts/revoke",
                 "/admin/key-batch/plan",
                 # 224-i negatives: keys/templates have no edit forms;
-                # action GETs and download GETs stay 404.
+                # action GETs stay 404. The 224-w admitted route
+                # configuration and codex-profile artifact GETs are
+                # proven positive/negative in the 224-w tests.
                 f"/admin/keys/{KEY_UUID}/edit",
                 f"/admin/templates/{KEY_UUID}/edit",
-                f"/admin/routes/{KEY_UUID}/configuration",
-                f"/admin/routes/{KEY_UUID}/codex-profile/base",
-                f"/admin/routes/{KEY_UUID}/codex-profile/profile",
-                f"/admin/routes/{KEY_UUID}/codex-profile/catalog",
             ):
                 r = await client.get(p)
                 assert r.status_code == 404, p
@@ -2185,9 +2183,11 @@ def test_gate_static_passthrough_serves_bundled_assets():
 
 
 def test_route_detail_demo_skips_codex_profile_artifacts(monkeypatch):
-    """224-i: demo route detail must not render Codex profile artifacts
-    (no localhost/live base URL, no profile TOML, no download links) and
-    must show the demo-only hint; normal admin still renders them."""
+    """224-i/224-w: demo route detail must never render the LIVE Codex
+    profile block (no localhost/live base URL, no profile TOML body);
+    224-w replaces the 224-i hint with three INERT reference-attachment
+    links on the reserved non-routable api.slaif.invalid placeholder.
+    Normal admin still renders the live artifact block."""
     from types import SimpleNamespace
 
     import slaif_gateway.api.admin as admin_mod
@@ -2238,9 +2238,9 @@ def test_route_detail_demo_skips_codex_profile_artifacts(monkeypatch):
     )
 
     async def run():
-        # DEMO: render_codex_profile must not run at all (a profile from
-        # the neutral localhost base URL would be misleading) and the
-        # hint replaces the artifact block.
+        # DEMO: render_codex_profile must not run at all during the
+        # detail render (the inert attachments are served by the
+        # dedicated 224-w codex-artifact route instead).
         def _explode(*_a, **_k):
             raise AssertionError("render_codex_profile must not run in demo mode")
 
@@ -2253,9 +2253,12 @@ def test_route_detail_demo_skips_codex_profile_artifacts(monkeypatch):
         request = _fake_admin_request(f"/admin/routes/{KEY_UUID}", demo_admin=demo_admin)
         response = await admin_mod.admin_route_detail(request, KEY_UUID)
         html = response.body.decode("utf-8")
-        assert "Codex profile artifacts are not rendered in this snapshot" in html
+        assert "Inert Codex reference artifacts" in html
+        assert "api.slaif.invalid" in html
+        assert f'href="/admin/routes/{KEY_UUID}/codex-profile/base"' in html
+        assert f'href="/admin/routes/{KEY_UUID}/codex-profile/profile"' in html
+        assert f'href="/admin/routes/{KEY_UUID}/codex-profile/catalog"' in html
         assert "localhost:8000" not in html
-        assert "codex-profile" not in html
         assert "Credential-free Codex artifacts" not in html
         assert "224i-upstream-model" in html
         assert "Demo preview:" in html
@@ -5855,8 +5858,11 @@ def test_q_gate_admission_exact_paths():
                 assert r.headers["location"] == "/fakeadmin/login"
             # ...and every malformed/near-miss shape stays default-
             # denied BEFORE routing: bad IDs, extra/missing segments,
-            # trailing slashes, the JSON attachment GETs, and every
-            # submit/apply/preview/retry POST subpath.
+            # trailing slashes, and every
+            # submit/apply/preview/retry POST subpath. The two 224-w
+            # JSON attachment GETs (calibration/summary.json and
+            # configuration.json) are admitted; proven in the 224-w
+            # tests.
             for p in (
                 f"/admin/keys/{KEY_UUID.upper()}/calibration",
                 "/admin/keys/0123456789abcdef0123456789abcdef/calibration",
@@ -5866,9 +5872,7 @@ def test_q_gate_admission_exact_paths():
                 f"/admin/keys/{KEY_UUID}/calibration/",
                 f"/admin/keys/{KEY_UUID}/calibration/extra",
                 f"/admin/keys/{KEY_UUID}/calibration/preview",
-                f"/admin/keys/{KEY_UUID}/calibration/summary.json",
                 f"/admin/keys/{KEY_UUID}/calibration/create-template",
-                f"/admin/keys/{KEY_UUID}/configuration.json",
                 f"/admin/keys/{KEY_UUID}/clone/",
                 f"/admin/keys/{KEY_UUID}/clone/review",
                 f"/admin/keys/{KEY_UUID}/clone/apply",
@@ -6201,7 +6205,6 @@ def test_t_gate_admission_exact_paths():
                 "/admin/operations/compatibility",
                 "/admin/operations/compatibility//",
                 "/admin/operations/replay-maintenance",
-                "/admin/email-operations/smtp-test",
                 T_PC_URL + "/",                 # trailing slash
                 T_PC_URL + "x",                 # prefix sibling
                 T_PC_URL + "/extra",            # deeper path
@@ -7741,7 +7744,7 @@ def test_v_gate_diagnostics_query_law(monkeypatch):
             )
             assert status == 200, body[:200]
             text = body.decode()
-            assert "No retained record matches" in text
+            assert "No copied record matches this exact ID in this frozen snapshot." in text
             assert 'value="gw:abc-123"' in text
             r = await client.get(V_DIAG_URL, params={"namespace": "client"})
             assert r.status_code == 200
@@ -7816,7 +7819,7 @@ def test_v_diagnostics_positive_found(monkeypatch):
             assert "not recorded in this demo snapshot" in r.text
             assert "lookup=gw:abc-123&amp;namespace=any" in r.text
             assert "gw-999" in r.text
-            assert "No retained record matches" not in r.text
+            assert "No copied record matches this exact ID" not in r.text
             # exact selector: the FOUND typed rendering.
             r = await client.get(V_DIAG_URL, params={"lookup": _V_SAFE_ID})
             assert r.status_code == 200
@@ -8133,6 +8136,14 @@ def test_v_replay_scope_key_positive(monkeypatch):
             # bounded recent rows: safe metadata only.
             assert "openai" in r.text
             assert "no HMAC digests" in r.text
+            # 224-w: the demo help never implies ongoing traffic can
+            # change the frozen copy, and every help id renders exactly
+            # once on the page.
+            assert "Ongoing traffic" not in r.text
+            assert "this frozen copy never changes" in r.text
+            assert r.text.count('id="preview-expired-help"') == 1
+            assert r.text.count('id="preview-reason-help"') == 1
+            assert r.text.count('id="preview-bounds-help"') == 1
             # the visible no-op forms stay on the page.
             assert 'action="/admin/operations/replay-maintenance/inspect"' in r.text
             assert 'action="/admin/operations/replay-maintenance/preview"' in r.text
@@ -8308,5 +8319,1147 @@ def test_v_replay_ttl_unavailable_labeled(monkeypatch):
             r = await client.get(V_REPLAY_IDX_URL)
             assert r.status_code == 200
             assert "unavailable (not recorded in this demo snapshot)" in r.text
+
+    asyncio.run(run())
+
+# ---------------------------------------------------------------------------
+# 224-w: demo diagnostics usability + UUID identity withholding
+# ---------------------------------------------------------------------------
+
+
+def test_w_diag_demo_get_lookup_only(monkeypatch):
+    """224-w: the demo diagnostics page shows ONLY the working GET
+    lookup (with linked help) - the normal POST lookup form is hidden
+    in demo while the cleanup no-op control stays visible - and the
+    not-found wording makes no expiry/retention suggestion."""
+
+    async def run():
+        session = _VDiagFakeSession((0, None, None), [])
+        calls: list = []
+        _v_patch_diag_lookup(monkeypatch, [], 0, calls)
+        fake = FakeFacade()
+        app, _ = _v_diag_app(fake, monkeypatch, session)
+        async with _client(app) as client:
+            await _verified_session_client(fake, client)
+            r = await client.get(V_DIAG_URL, params={"lookup": "gw-miss-1"})
+            assert r.status_code == 200
+            # demo not-found wording: frozen snapshot, no retention talk.
+            assert (
+                "No copied record matches this exact ID in this frozen snapshot."
+                in r.text
+            )
+            assert (
+                "it may be expired, never recorded, or outside the retention window"
+                not in r.text
+            )
+            # the working GET selector with linked, visible help.
+            assert 'method="get" action="/admin/operations/diagnostics"' in r.text
+            assert 'aria-describedby="demo-lookup-id-help"' in r.text
+            assert 'id="demo-lookup-id-help"' in r.text
+            assert 'aria-describedby="demo-lookup-namespace-help"' in r.text
+            assert 'id="demo-lookup-namespace-help"' in r.text
+            # the normal POST lookup form is NOT offered in demo.
+            assert 'action="/admin/operations/diagnostics/lookup"' not in r.text
+            # the cleanup action control remains visible (quiet no-op).
+            assert 'action="/admin/operations/diagnostics/cleanup"' in r.text
+            assert r.text.count('id="cleanup-reason-help"') == 1
+            assert r.text.count('id="cleanup-confirm-help"') == 1
+
+    asyncio.run(run())
+
+
+def test_w_diag_found_uuid_alias_withheld(monkeypatch):
+    """224-w: the FOUND detail withholds gateway_key_id / route_id
+    UUIDs whose string is a known incoming (cookie) alias - neither
+    value is echoed; without the alias both render as before."""
+
+    async def run():
+        key_alias = uuid.uuid4()
+        route_alias = uuid.uuid4()
+        rec = _v_diag_record(_V_SAFE_ID)
+        rec.gateway_key_id = key_alias
+        rec.route_id = route_alias
+        session = _VDiagFakeSession((1, None, None), [rec])
+        calls: list = []
+        _v_patch_diag_lookup(monkeypatch, [rec], 1, calls)
+        fake = FakeFacade()
+        app, _ = _v_diag_app(fake, monkeypatch, session)
+        async with _client(app) as client:
+            await _verified_session_client(fake, client)
+            # no incoming alias: the UUID identities render.
+            r0 = await client.get(V_DIAG_URL, params={"lookup": _V_SAFE_ID})
+            assert r0.status_code == 200
+            assert str(key_alias) in r0.text
+            assert str(route_alias) in r0.text
+            # the same UUIDs as incoming cookie values: withheld.
+            client.cookies.set("w-canary-key", str(key_alias))
+            client.cookies.set("w-canary-route", str(route_alias))
+            r = await client.get(V_DIAG_URL, params={"lookup": _V_SAFE_ID})
+            assert r.status_code == 200
+            assert str(key_alias) not in r.text
+            assert str(route_alias) not in r.text
+            assert "unavailable / unavailable" in r.text
+
+    asyncio.run(run())
+
+
+
+# --- 224-w: demo SMTP / key attachments / route config / codex artifacts -------
+
+import json as _w_json  # noqa: E402
+from decimal import Decimal as _WDecimal  # noqa: E402
+from types import SimpleNamespace as _WNS  # noqa: E402
+
+from slaif_gateway.api import demo_admin_smtp as dsmtp  # noqa: E402
+from slaif_gateway.api import demo_admin_key_attachments as dkey  # noqa: E402
+from slaif_gateway.api import demo_admin_route_configuration as drcfg  # noqa: E402
+from slaif_gateway.api import demo_admin_codex_artifacts as dcodex  # noqa: E402
+from slaif_gateway.db.models import (  # noqa: E402
+    GatewayKey,
+    ModelRoute,
+    UsageProfile,
+)
+from slaif_gateway.services import demo_snapshot_files as _w_dsf  # noqa: E402
+
+W_KEY_UUID = "01234567-89ab-4cde-8f01-23456789abcd"
+W_ROUTE_UUID = "99999999-8888-4a77-b666-555544443333"
+W_SMTP_URL = "/admin/email-operations/smtp-test"
+W_SMTP_APPLY_URL = "/admin/email-operations/smtp-test/apply"
+W_CALIB_URL = f"/admin/keys/{W_KEY_UUID}/calibration/summary.json"
+W_CONFIG_URL = f"/admin/keys/{W_KEY_UUID}/configuration.json"
+W_ROUTE_CFG_URL = f"/admin/routes/{W_ROUTE_UUID}/configuration"
+W_CODEX_URL = f"/admin/routes/{W_ROUTE_UUID}/codex-profile"
+
+
+def test_w_gate_admission_exact_paths():
+    async def run():
+        app = _app(FakeFacade())
+        async with _client(app) as client:
+            for p in (
+                W_SMTP_URL,
+                W_SMTP_APPLY_URL,
+                W_CALIB_URL,
+                W_CONFIG_URL,
+                W_ROUTE_CFG_URL,
+                W_CODEX_URL + "/base",
+                W_CODEX_URL + "/profile",
+                W_CODEX_URL + "/catalog",
+            ):
+                r = await client.get(p)
+                assert r.status_code == 303, p
+                assert r.headers["location"] == "/fakeadmin/login"
+            for p in (
+                W_SMTP_URL + "/",
+                W_SMTP_URL + "s",
+                W_SMTP_URL + "/extra",
+                "/admin/email-operations/smtp-test-apply",
+                W_SMTP_APPLY_URL + "/",
+                W_CALIB_URL + "/",
+                W_CALIB_URL + "/extra",
+                f"/admin/keys/{W_KEY_UUID}/calibration/summary.jsonx",
+                W_CONFIG_URL + "/",
+                f"/admin/keys/{W_KEY_UUID}/configuration.json/extra",
+                W_ROUTE_CFG_URL + "/",
+                W_ROUTE_CFG_URL + "x",
+                W_CODEX_URL,                 # missing artifact name
+                W_CODEX_URL + "/",
+                W_CODEX_URL + "/base/",
+                W_CODEX_URL + "/blob",       # not the finite vocabulary
+                W_CODEX_URL + "/BASE",
+                W_CODEX_URL + "/base/extra",
+                f"/admin/routes/{W_ROUTE_UUID}/configuration.json",
+                f"/admin/keys/{W_KEY_UUID}/calibration/summary.csv",
+            ):
+                r = await client.get(p)
+                assert r.status_code == 404, p
+            # the query-free shapes refuse ANY query
+            for p in (
+                W_SMTP_URL,
+                W_SMTP_APPLY_URL,
+                W_CONFIG_URL,
+                W_ROUTE_CFG_URL,
+                W_CODEX_URL + "/base",
+            ):
+                r = await client.get(p + "?x=1")
+                assert r.status_code == 404, p
+
+    asyncio.run(run())
+
+
+def test_w_gate_calibration_query_law():
+    async def run():
+        app = _app(FakeFacade())
+        async with _client(app) as client:
+            for raw in (
+                "",
+                "multiplier=3",
+                "multiplier=2.5",
+                "start_at=2026-01-02T03:04:05Z",
+                "start_at=2026-01-02",
+                "end_at=2026-01-02T23:59:59+02:00",
+                # percent-encoded exactly as the template link emits
+                "start_at=2026-01-02T03%3A04%3A05Z",
+                "start_at=2026-01-02&end_at=2026-01-03T23%3A59%3A59%2B02%3A00&multiplier=10",
+            ):
+                r = await client.get(W_CALIB_URL + ("?" + raw if raw else ""))
+                assert r.status_code == 303, raw
+            for raw in (
+                "x=1",                            # unknown
+                "start_at=a&start_at=b",          # duplicate
+                "multiplier=",                    # empty multiplier
+                "multiplier=abc",                 # not decimal
+                "multiplier=-1",                  # negative
+                "multiplier=1e3",                 # exponent not admitted
+                "start_at=%41%42",                # decodes to non-datetime
+                "start_at=%ZZ",                   # invalid escape
+                "start_at=%2",                    # truncated escape
+                "start_at=%C3%A9",                # non-ascii decoded
+                "start_at=" + "z" * 65,           # oversized value
+                "start_at=2026-01-02" + "&x=1",   # unknown param
+            ):
+                r = await client.get(W_CALIB_URL + "?" + raw)
+                assert r.status_code == 404, raw
+            r = await client.get(W_CALIB_URL + "?" + "a" * 257)
+            assert r.status_code == 404
+
+    asyncio.run(run())
+
+
+def test_w_gate_unsafe_methods_quiet_noop():
+    async def run():
+        app = _app(FakeFacade())
+        async with _client(app) as client:
+            _session_cookie(client)
+            for p in (
+                W_SMTP_URL,
+                W_SMTP_APPLY_URL,
+                W_CALIB_URL,
+                W_CONFIG_URL,
+                W_ROUTE_CFG_URL,
+                W_CODEX_URL + "/base",
+            ):
+                for method in ("POST", "PUT", "PATCH", "DELETE"):
+                    r = await client.request(
+                        method,
+                        p,
+                        content=b"x" * 200_000,
+                        headers={"content-type": "text/garbage"},
+                    )
+                    assert r.status_code == 204, (method, p)
+                    assert r.content == b""
+        async with _client(app) as anon:
+            r = await anon.post(W_CALIB_URL, content=b"y" * 200_000)
+            assert r.status_code == 404
+
+    asyncio.run(run())
+
+
+# --- 224-w: SMTP GETs ------------------------------------------------------------
+
+
+def test_w_smtp_form_demo_not_recorded(monkeypatch):
+    async def run():
+        fake = FakeFacade()
+        fake.worker_target_db = COPY_OK
+        _preflight_case(monkeypatch, COPY_OK, "on")
+        monkeypatch.setattr(
+            dsmtp, "get_sessionmaker_from_app", lambda _req: lambda: _WNoopFakeSession(COPY_OK, "on")
+        )
+        app = _app(fake)
+        async with _client(app) as client:
+            await _verified_session_client(fake, client)
+            r = await client.get(W_SMTP_URL)
+            assert r.status_code == 200
+            assert r.headers.get("cache-control") == "private, no-store"
+            text = r.text
+            assert "smtp-test-demo-heading" in text
+            import re as _re
+
+            norm = _re.sub(r"\s+", " ", text)
+            assert "were not recorded in this sanitized copy" in norm
+            assert "the demo process's own settings are never used" in norm
+            # the styled form with its useful hints stays visible...
+            assert 'action="/admin/email-operations/smtp-test/review"' in text
+            assert "Test recipient (required)" in text
+            # ...clearly labeled a quiet no-op...
+            assert "Prepare reviewed test (demo no-op)" in text
+            assert "submitting this form does nothing" in norm
+            # ...and no readiness fact or credential-shaped setting leaks.
+            assert "ENABLE_EMAIL_DELIVERY" not in text
+            assert "SMTP_HOST" not in text
+            assert "SMTP_FROM" not in text
+            assert "unit-test-copy-password" not in text
+
+    asyncio.run(run())
+
+
+def test_w_smtp_form_preflight_mismatch_503(monkeypatch):
+    async def run():
+        for db, ro in ((COPY_OK, "off"), ("some_other_db", "on")):
+            fake = FakeFacade()
+            fake.worker_target_db = COPY_OK
+            _preflight_case(monkeypatch, COPY_OK, "on")
+            session = _WNoopFakeSession(db, ro)
+            monkeypatch.setattr(
+                dsmtp, "get_sessionmaker_from_app", lambda _req: lambda: session
+            )
+            app = _app(fake)
+            async with _client(app) as client:
+                await _verified_session_client(fake, client)
+                for url in (W_SMTP_URL, W_SMTP_APPLY_URL):
+                    r = await client.get(url)
+                    assert r.status_code == 503, (db, ro, url)
+                    assert r.headers.get("cache-control") == "private, no-store"
+                    assert dsmtp._SAFE_UNAVAILABLE in r.text
+                    assert COPY_OK not in r.text
+
+    asyncio.run(run())
+
+
+def test_w_smtp_apply_recovery_demo(monkeypatch):
+    async def run():
+        fake = FakeFacade()
+        fake.worker_target_db = COPY_OK
+        _preflight_case(monkeypatch, COPY_OK, "on")
+        monkeypatch.setattr(
+            dsmtp, "get_sessionmaker_from_app", lambda _req: lambda: _WNoopFakeSession(COPY_OK, "on")
+        )
+        app = _app(fake)
+        async with _client(app) as client:
+            await _verified_session_client(fake, client)
+            r = await client.get(W_SMTP_APPLY_URL)
+            assert r.status_code == 200
+            import re as _re
+
+            norm = _re.sub(r"\s+", " ", r.text)
+            # the fixed no-send notice + the demo banner.
+            assert "This page only accepts the reviewed test submission" in r.text
+            assert "no reviewed test content is shown" in norm
+            assert "no live one-use token" in norm
+            # no reviewed content, no outcome, no live deadline.
+            assert "Reviewed test content" not in r.text
+            assert "Outcome" not in r.text
+            assert "per-attempt deadline" not in r.text
+
+    asyncio.run(run())
+
+
+def test_w_smtp_handler_without_demo_state_404():
+    async def run():
+        app = _app(FakeFacade())
+        request = _bare_request(app)
+        assert (await dsmtp.demo_smtp_test_form(request)).status_code == 404
+        assert (await dsmtp.demo_smtp_test_apply_recovery(request)).status_code == 404
+
+    asyncio.run(run())
+
+
+class _WNoopFakeSession:
+    """A request-local copy session that runs only the recheck
+    scalars (the SMTP pages record no further copy reads)."""
+
+    def __init__(self, db, ro) -> None:
+        self.db = db
+        self.ro = ro
+        self.executed = []
+
+    def begin(self):
+        return self
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *a):
+        return False
+
+    async def scalar(self, clause):
+        text = str(clause)
+        if "current_database" in text:
+            return self.db
+        return self.ro
+
+    async def execute(self, clause, params=None):
+        self.executed.append(str(clause))
+        return _WResult([])
+
+
+# --- 224-w: key JSON attachments -------------------------------------------------
+
+
+class _WResult:
+    def __init__(self, rows) -> None:
+        self._rows = list(rows)
+
+    def first(self):
+        return self._rows[0] if self._rows else None
+
+    def all(self):
+        return list(self._rows)
+
+    def scalar_one_or_none(self):
+        if len(self._rows) > 1:
+            raise RuntimeError("multiple rows")
+        return self._rows[0] if self._rows else None
+
+    def scalars(self):
+        outer = self
+
+        class _S:
+            def all(self):
+                return [row[0] if isinstance(row, tuple) else row for row in outer._rows]
+
+        return _S()
+
+
+class _WKeyFakeSession:
+    """Recheck scalars + ``session.get`` (key existence) + ``execute``
+    (the calibration service's admin-detail key read and usage-profile
+    list). Every statement is recorded for the seam assertions."""
+
+    def __init__(self, key_obj, profile_rows, db, ro) -> None:
+        self.key_obj = key_obj
+        self.profile_rows = profile_rows
+        self.db = db
+        self.ro = ro
+        self.get_calls: list[str] = []
+        self.executed: list[str] = []
+
+    def begin(self):
+        return self
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *a):
+        return False
+
+    async def scalar(self, clause):
+        text = str(clause)
+        if "current_database" in text:
+            return self.db
+        return self.ro
+
+    async def get(self, model, ident):
+        self.get_calls.append(model.__name__)
+        if self.key_obj is not None and ident == self.key_obj.id:
+            return self.key_obj
+        return None
+
+    async def execute(self, stmt, params=None):
+        text = str(stmt)
+        self.executed.append(text)
+        if "usage_profiles" in text:
+            return _WResult(self.profile_rows)
+        return _WResult([self.key_obj] if self.key_obj is not None else [])
+
+
+def _w_key_app(monkeypatch, session):
+    fake = FakeFacade()
+    fake.worker_target_db = COPY_OK
+    _preflight_case(monkeypatch, COPY_OK, "on")
+    monkeypatch.setattr(
+        dkey, "get_sessionmaker_from_app", lambda _req: lambda: session
+    )
+    return _app(fake), fake
+
+
+def _w_trusted_key(**over):
+    kw = dict(
+        id=uuid.UUID(W_KEY_UUID),
+        public_key_id="pk-w-1",
+        status="active",
+        key_purpose="trusted_calibration",
+        capability_policy_mode="trusted_calibration_discovery",
+    )
+    kw.update(over)
+    return GatewayKey(**kw)
+
+
+def _w_profile_rows():
+    from datetime import datetime, timezone
+
+    now = datetime.now(timezone.utc)
+    return [
+        UsageProfile(
+            id=uuid.uuid4(),
+            gateway_key_id=uuid.UUID(W_KEY_UUID),
+            created_at=now,
+            endpoint_path="/v1/chat/completions",
+            provider="openai",
+            requested_model="gpt-4.1-mini",
+            resolved_upstream_model="gpt-4.1-mini",
+            provider_host="api.openai.com",
+            provider_endpoint_path="/chat/completions",
+            input_tokens=100,
+            output_tokens=50,
+            total_tokens=150,
+            reasoning_tokens=None,
+            cached_tokens=10,
+            slaif_calculated_cost=_WDecimal("0.001"),
+            provider_reported_cost=None,
+            cost_currency="USD",
+            cost_source="slaif_calculated",
+            profile_metadata={},
+        )
+    ]
+
+
+def test_w_key_config_positive_attachment(monkeypatch):
+    async def run():
+        key = _w_trusted_key()
+        session = _WKeyFakeSession(key, [], COPY_OK, "on")
+        app, fake = _w_key_app(monkeypatch, session)
+        async with _client(app) as client:
+            await _verified_session_client(fake, client)
+            r = await client.get(W_CONFIG_URL)
+            assert r.status_code == 200
+            assert r.headers["content-type"] == "application/json"
+            assert r.headers["content-disposition"] == (
+                'attachment; filename="slaif-key-configuration-pk-w-1.json"'
+            )
+            assert "no-store" in r.headers["cache-control"]
+            assert r.headers["x-content-type-options"] == "nosniff"
+            doc = _w_json.loads(r.content)
+            assert doc["allowed_models"] == []
+            assert doc["allow_all_models"] is False
+        # the key was read ONLY through the copy session's get().
+        assert session.get_calls == ["GatewayKey"]
+        assert session.executed == []
+
+    asyncio.run(run())
+
+
+def test_w_key_config_missing_key_404(monkeypatch):
+    async def run():
+        session = _WKeyFakeSession(None, [], COPY_OK, "on")
+        app, fake = _w_key_app(monkeypatch, session)
+        async with _client(app) as client:
+            await _verified_session_client(fake, client)
+            r = await client.get(W_CONFIG_URL)
+            assert r.status_code == 404
+            assert r.content == b"Not Found"
+
+    asyncio.run(run())
+
+
+def test_w_key_config_alias_whole_refusal_no_echo(monkeypatch):
+    # A copied allowed model that equals an incoming cookie credential:
+    # the WHOLE attachment is refused, no partial substitution, no echo.
+    canary = "w-canary-model-token-123"
+
+    async def run():
+        key = _w_trusted_key(allowed_models=[canary])
+        session = _WKeyFakeSession(key, [], COPY_OK, "on")
+        app, fake = _w_key_app(monkeypatch, session)
+        async with _client(app) as client:
+            await _verified_session_client(fake, client)
+            client.cookies.set("w-canary-cookie", canary)
+            r = await client.get(W_CONFIG_URL)
+            assert r.status_code == 400
+            assert canary not in r.text
+            assert dkey._SAFE_REFUSAL in r.text
+
+    asyncio.run(run())
+
+
+def test_w_key_config_oversized_refused_not_truncated(monkeypatch):
+    async def run():
+        monkeypatch.setattr(dkey, "_MAX_ATTACHMENT_BYTES", 10)
+        key = _w_trusted_key()
+        session = _WKeyFakeSession(key, [], COPY_OK, "on")
+        app, fake = _w_key_app(monkeypatch, session)
+        async with _client(app) as client:
+            await _verified_session_client(fake, client)
+            r = await client.get(W_CONFIG_URL)
+            assert r.status_code == 400
+            assert dkey._SAFE_OVERSIZED in r.text
+
+    asyncio.run(run())
+
+
+def test_w_key_calib_positive_copied_data(monkeypatch):
+    async def run():
+        key = _w_trusted_key()
+        session = _WKeyFakeSession(key, _w_profile_rows(), COPY_OK, "on")
+        app, fake = _w_key_app(monkeypatch, session)
+        async with _client(app) as client:
+            await _verified_session_client(fake, client)
+            r = await client.get(W_CALIB_URL, params={"multiplier": "3"})
+            assert r.status_code == 200
+            assert r.headers["content-type"] == "application/json"
+            assert r.headers["content-disposition"] == (
+                f'attachment; filename="slaif-calibration-summary-{W_KEY_UUID}.json"'
+            )
+            assert "no-store" in r.headers["cache-control"]
+            assert r.headers["x-content-type-options"] == "nosniff"
+            doc = _w_json.loads(r.content)
+            summary = doc["summary"]
+            assert summary["observed_request_count"] == 1
+            assert summary["public_key_id"] == "pk-w-1"
+            assert doc["is_empty"] is False
+        # copy reads: existence get() + the service's admin-detail key
+        # select + the usage-profile list.
+        assert session.get_calls == ["GatewayKey"]
+        assert len(session.executed) == 2
+        assert any("usage_profiles" in t for t in session.executed)
+
+    asyncio.run(run())
+
+
+def test_w_key_calib_not_trusted_400(monkeypatch):
+    async def run():
+        key = _w_trusted_key(
+            key_purpose="standard", capability_policy_mode="standard"
+        )
+        session = _WKeyFakeSession(key, _w_profile_rows(), COPY_OK, "on")
+        app, fake = _w_key_app(monkeypatch, session)
+        async with _client(app) as client:
+            await _verified_session_client(fake, client)
+            r = await client.get(W_CALIB_URL, params={"multiplier": "3"})
+            assert r.status_code == 400
+            assert dkey._SAFE_INPUT_REFUSAL in r.text
+
+    asyncio.run(run())
+
+
+def test_w_key_calib_semantic_input_400_before_copy(monkeypatch):
+    # The gate admits strict GRAMMAR; the handler re-runs the normal
+    # STRICT parsers. A grammatical but impossible date is refused with
+    # a fixed 400 BEFORE any copy read.
+    async def run():
+        session = _WKeyFakeSession(_w_trusted_key(), [], COPY_OK, "on")
+        app, fake = _w_key_app(monkeypatch, session)
+        async with _client(app) as client:
+            await _verified_session_client(fake, client)
+            r = await client.get(W_CALIB_URL, params={"start_at": "2026-13-99"})
+            assert r.status_code == 400
+            assert "2026-13-99" not in r.text
+            assert session.get_calls == []
+            assert session.executed == []
+
+    asyncio.run(run())
+
+
+def test_w_key_calib_multiplier_bound_400(monkeypatch):
+    # multiplier=11 passes the gate decimal grammar; the normal service
+    # bound (1.0..10.0) refuses it with a fixed 400 after the copy
+    # binding (the input itself was strict-valid).
+    async def run():
+        key = _w_trusted_key()
+        session = _WKeyFakeSession(key, [], COPY_OK, "on")
+        app, fake = _w_key_app(monkeypatch, session)
+        async with _client(app) as client:
+            await _verified_session_client(fake, client)
+            r = await client.get(W_CALIB_URL, params={"multiplier": "11"})
+            assert r.status_code == 400
+            assert dkey._SAFE_INPUT_REFUSAL in r.text
+            assert "11" not in r.text
+
+    asyncio.run(run())
+
+
+def test_w_key_calib_alias_whole_refusal_no_echo(monkeypatch):
+    canary = "w-canary-provider-777"
+
+    async def run():
+        key = _w_trusted_key()
+        rows = _w_profile_rows()
+        rows[0].provider = canary
+        session = _WKeyFakeSession(key, rows, COPY_OK, "on")
+        app, fake = _w_key_app(monkeypatch, session)
+        async with _client(app) as client:
+            await _verified_session_client(fake, client)
+            client.cookies.set("w-canary-cookie", canary)
+            r = await client.get(W_CALIB_URL, params={"multiplier": "3"})
+            assert r.status_code == 400
+            assert canary not in r.text
+            assert dkey._SAFE_REFUSAL in r.text
+
+    asyncio.run(run())
+
+
+def test_w_key_path_identity_alias_refused_before_copy(monkeypatch):
+    # The path key UUID itself as an incoming cookie value: fixed 400
+    # BEFORE any copy binding (the replay-page alias law).
+    async def run():
+        session = _WKeyFakeSession(_w_trusted_key(), [], COPY_OK, "on")
+        app, fake = _w_key_app(monkeypatch, session)
+        async with _client(app) as client:
+            await _verified_session_client(fake, client)
+            client.cookies.set("w-canary-uuid", W_KEY_UUID)
+            r1 = await client.get(W_CONFIG_URL)
+            r2 = await client.get(W_CALIB_URL, params={"multiplier": "3"})
+            assert r1.status_code == 400
+            assert r2.status_code == 400
+            assert W_KEY_UUID not in r1.text
+            assert session.get_calls == []
+            assert session.executed == []
+
+    asyncio.run(run())
+
+
+def test_w_key_preflight_mismatch_503(monkeypatch):
+    async def run():
+        for db, ro in ((COPY_OK, "off"), ("some_other_db", "on")):
+            session = _WKeyFakeSession(_w_trusted_key(), [], db, ro)
+            app, fake = _w_key_app(monkeypatch, session)
+            async with _client(app) as client:
+                await _verified_session_client(fake, client)
+                r1 = await client.get(W_CONFIG_URL)
+                r2 = await client.get(W_CALIB_URL, params={"multiplier": "3"})
+                assert r1.status_code == 503, (db, ro)
+                assert r2.status_code == 503, (db, ro)
+                assert dkey._SAFE_UNAVAILABLE in r1.text
+                assert session.get_calls == []
+                assert session.executed == []
+
+    asyncio.run(run())
+
+
+# --- 224-w: route configuration form ---------------------------------------------
+
+
+_W_PROFILE_A = "demo-profile-" + "a" * 24
+_W_PROFILE_B = "demo-profile-" + "b" * 24
+
+
+def _w_completion_leaf_body(profiles):
+    doc = {
+        "schema": _w_dsf.DEMO_SCHEMA_VERSION,
+        "kind": _w_dsf.KIND_COMPLETION_CHOICES,
+        "schema_version": 1,
+        "profiles": list(profiles),
+    }
+    return _w_json.dumps(doc, sort_keys=True).encode("utf-8")
+
+
+def _w_completion_meta(body, **corrupt):
+    import hashlib
+
+    row = dict(
+        kind=_w_dsf.KIND_COMPLETION_CHOICES,
+        byte_count=len(body),
+        sha256=hashlib.sha256(body).hexdigest(),
+        captured_at=1_700_000_000.0,
+        actual_bytes=len(body),
+    )
+    row.update(corrupt)
+    return (row["kind"], row["byte_count"], row["sha256"], row["captured_at"], row["actual_bytes"])
+
+
+class _WRouteFakeSession:
+    """Recheck scalars + ``session.get`` (the copied route) + ``execute``
+    (the choice selects and the completion-leaf metadata/body)."""
+
+    def __init__(self, route_obj, provider_rows, completion_meta, completion_body, db, ro):
+        self.route_obj = route_obj
+        self.provider_rows = provider_rows
+        self.completion_meta = completion_meta
+        self.completion_body = completion_body
+        self.db = db
+        self.ro = ro
+        self.get_calls: list[str] = []
+        self.executed: list[tuple[str, dict]] = []
+
+    def begin(self):
+        return self
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *a):
+        return False
+
+    async def scalar(self, clause):
+        text = str(clause)
+        if "current_database" in text:
+            return self.db
+        return self.ro
+
+    async def get(self, model, ident):
+        self.get_calls.append(model.__name__)
+        if self.route_obj is not None and ident == self.route_obj.id:
+            return self.route_obj
+        return None
+
+    async def execute(self, stmt, params=None):
+        text = str(stmt)
+        params = dict(params or {})
+        self.executed.append((text, params))
+        if text.lstrip().startswith("SELECT body"):
+            rows = [(b,) for b in self.completion_body]
+        elif "demo_display.leaves" in text:
+            rows = self.completion_meta
+        elif "provider_configs" in text:
+            rows = self.provider_rows
+        else:
+            rows = []
+        return _WResult(rows)
+
+
+def _w_route_app(monkeypatch, session):
+    fake = FakeFacade()
+    fake.worker_target_db = COPY_OK
+    _preflight_case(monkeypatch, COPY_OK, "on")
+    monkeypatch.setattr(
+        drcfg, "get_sessionmaker_from_app", lambda _req: lambda: session
+    )
+    return _app(fake), fake
+
+
+def _w_route_obj(**over):
+    kw = dict(
+        id=uuid.UUID(W_ROUTE_UUID),
+        requested_model="gpt-4.1-mini",
+        match_type="exact",
+        endpoint="/v1/chat/completions",
+        provider="openai",
+        upstream_model=None,
+        priority=100,
+        notes="route note",
+        capabilities={"chat_completions": {}},
+    )
+    kw.update(over)
+    return ModelRoute(**kw)
+
+
+def test_w_route_config_positive_copy_backed(monkeypatch):
+    body = _w_completion_leaf_body([_W_PROFILE_A, _W_PROFILE_B])
+    provider_rows = [
+        _WNS(id=uuid.uuid4(), provider="openai", display_name="OpenAI", enabled=True)
+    ]
+    session = _WRouteFakeSession(
+        _w_route_obj(), provider_rows, [_w_completion_meta(body)], [body], COPY_OK, "on"
+    )
+    app, fake = _w_route_app(monkeypatch, session)
+
+    async def run():
+        async with _client(app) as client:
+            await _verified_session_client(fake, client)
+            r = await client.get(W_ROUTE_CFG_URL)
+            assert r.status_code == 200
+            assert r.headers.get("cache-control") == "private, no-store"
+            import re as _re
+
+            norm = _re.sub(r"\s+", " ", r.text)
+            # persistent frozen/no-op cue + copied-fact provenance.
+            assert "FROZEN copied rows" in norm
+            assert "no plan is prepared, nothing is applied" in norm
+            assert "sanitized capture of the source operator directory" in norm
+            # copy-backed provider choice rendered...
+            assert "OpenAI" in r.text
+            # ...and the sanitized completion choices.
+            assert _W_PROFILE_A in r.text
+            assert _W_PROFILE_B in r.text
+            # the visible action control stays.
+            assert f'action="/admin/routes/{W_ROUTE_UUID}/configuration/plan"' in r.text
+
+    asyncio.run(run())
+    # the metadata-first leaf law: metadata query, then the bounded
+    # body query re-asserting every condition as bound parameters.
+    leaf_queries = [
+        (t, p) for t, p in session.executed if "demo_display.leaves" in t
+    ]
+    assert len(leaf_queries) == 2
+    meta_text, meta_params = leaf_queries[0]
+    assert "octet_length(body)" in meta_text
+    assert meta_params == {"name": drcfg._COMPLETION_CHOICES_NAME}
+    body_text, body_params = leaf_queries[1]
+    assert body_text.lstrip().startswith("SELECT body")
+    assert body_params == {
+        "name": drcfg._COMPLETION_CHOICES_NAME,
+        "cap": _w_dsf._COMPLETION_PROFILE_MAX_BYTES,
+        "size": len(body),
+        "digest": session.completion_meta[0][2],
+        "kind": _w_dsf.KIND_COMPLETION_CHOICES,
+    }
+    # the route came from the copy session's get().
+    assert session.get_calls == ["ModelRoute"]
+
+
+def test_w_route_config_completion_unconfigured(monkeypatch):
+    session = _WRouteFakeSession(
+        _w_route_obj(), [], [], [], COPY_OK, "on"
+    )
+    app, fake = _w_route_app(monkeypatch, session)
+
+    async def run():
+        async with _client(app) as client:
+            await _verified_session_client(fake, client)
+            r = await client.get(W_ROUTE_CFG_URL)
+            assert r.status_code == 200
+            import re as _re
+
+            norm = _re.sub(r"\s+", " ", r.text)
+            assert "recorded no operator completion profiles" in norm
+            assert "package defaults" in norm
+
+    asyncio.run(run())
+    # absent leaf: the metadata query ran, the body query never did.
+    leaf_queries = [t for t, _ in session.executed if "demo_display.leaves" in t]
+    assert len(leaf_queries) == 1
+
+
+def test_w_route_config_completion_corrupt_503(monkeypatch):
+    body = _w_completion_leaf_body([_W_PROFILE_A])
+    async def run():
+        for bad_meta in (
+            _w_completion_meta(body, kind="Completion_Choices"),
+            _w_completion_meta(body, byte_count=len(body) + 1,
+                               actual_bytes=len(body) + 1),
+            _w_completion_meta(body, actual_bytes=len(body) + 1),
+            _w_completion_meta(body, sha256="Z" * 64),
+            (None, None, None, None, None),
+        ):
+            session = _WRouteFakeSession(
+                _w_route_obj(), [], [bad_meta], [body], COPY_OK, "on"
+            )
+            app, fake = _w_route_app(monkeypatch, session)
+            async with _client(app) as client:
+                await _verified_session_client(fake, client)
+                r = await client.get(W_ROUTE_CFG_URL)
+                assert r.status_code == 503, bad_meta
+                assert drcfg._SAFE_UNAVAILABLE in r.text
+                assert "payload" not in r.text
+
+    asyncio.run(run())
+
+
+def test_w_route_config_missing_route_404(monkeypatch):
+    session = _WRouteFakeSession(None, [], [], [], COPY_OK, "on")
+    app, fake = _w_route_app(monkeypatch, session)
+
+    async def run():
+        async with _client(app) as client:
+            await _verified_session_client(fake, client)
+            r = await client.get(W_ROUTE_CFG_URL)
+            assert r.status_code == 404
+            assert r.content == b"Not Found"
+
+    asyncio.run(run())
+
+
+def test_w_route_config_selected_completion_hydrated(monkeypatch):
+    # The copied route's completion profile (a sanitizer-remapped id)
+    # is hydrated into the choice list even when the captured list does
+    # not contain it.
+    selected = "demo-profile-" + "c" * 24
+    body = _w_completion_leaf_body([_W_PROFILE_A])
+    route = _w_route_obj(
+        capabilities={
+            "completion_service": {"version": 1, "profile": selected}
+        }
+    )
+    session = _WRouteFakeSession(
+        route, [], [_w_completion_meta(body)], [body], COPY_OK, "on"
+    )
+    app, fake = _w_route_app(monkeypatch, session)
+
+    async def run():
+        async with _client(app) as client:
+            await _verified_session_client(fake, client)
+            r = await client.get(W_ROUTE_CFG_URL)
+            assert r.status_code == 200
+            assert selected in r.text
+            assert _W_PROFILE_A in r.text
+
+    asyncio.run(run())
+
+
+# --- 224-w: inert Codex reference artifacts --------------------------------------
+
+
+def _w_codex_artifacts(catalog=True):
+    return _WNS(
+        base_config_toml="BASE-TOML",
+        profile_config_toml="PROFILE-TOML",
+        profile="slaif",
+        model_catalog_json='{"models": []}' if catalog else None,
+        model_catalog_target="slaif-model-catalog.json" if catalog else None,
+        profile_config_self_contained=False,
+    )
+
+
+def _w_qual_result(route_id, *, state="protocol_qualified", profile_id="w-qual-1"):
+    from slaif_gateway.services.codex_qualification import (
+        CodexQualificationResult,
+    )
+
+    return CodexQualificationResult(
+        state=state,
+        requested_model="gpt-4.1-mini",
+        provider="openai",
+        endpoint="/v1/chat/completions",
+        route_id=route_id,
+        paired_route_id=None,
+        reason_codes=(),
+        profile_id=profile_id,
+        metadata_version=2,
+    )
+
+
+def _w_fake_qual_service(monkeypatch, results):
+    class _FakeQualService:
+        def __init__(self, **kw) -> None:
+            pass
+
+        async def inspect(self, **kw):
+            return list(results)
+
+    monkeypatch.setattr(dcodex, "CodexQualificationService", _FakeQualService)
+
+
+def _w_codex_app(monkeypatch, session):
+    fake = FakeFacade()
+    fake.worker_target_db = COPY_OK
+    _preflight_case(monkeypatch, COPY_OK, "on")
+    monkeypatch.setattr(
+        dcodex, "get_sessionmaker_from_app", lambda _req: lambda: session
+    )
+    return _app(fake), fake
+
+
+def test_w_codex_artifacts_eligible_inert(monkeypatch):
+    calls = []
+
+    def _fake_render(base_url, profile_id):
+        calls.append((base_url, profile_id))
+        return _w_codex_artifacts(catalog=True)
+
+    monkeypatch.setattr(dcodex, "render_codex_profile", _fake_render)
+    route = _w_route_obj()
+    _w_fake_qual_service(monkeypatch, [_w_qual_result(route.id)])
+    session = _WRouteFakeSession(route, [], [], [], COPY_OK, "on")
+    app, fake = _w_codex_app(monkeypatch, session)
+
+    async def run():
+        async with _client(app) as client:
+            await _verified_session_client(fake, client)
+            r = await client.get(W_CODEX_URL + "/base")
+            assert r.status_code == 200
+            assert r.content == b"BASE-TOML"
+            assert r.headers["content-type"].startswith("text/plain")
+            assert r.headers["content-disposition"] == (
+                'attachment; filename="codex-provider.config.reference.toml"'
+            )
+            assert "no-store" in r.headers["cache-control"]
+            assert r.headers["x-content-type-options"] == "nosniff"
+            r = await client.get(W_CODEX_URL + "/profile")
+            assert r.status_code == 200
+            assert r.content == b"PROFILE-TOML"
+            assert r.headers["content-disposition"] == (
+                'attachment; filename="slaif.config.reference.toml"'
+            )
+            r = await client.get(W_CODEX_URL + "/catalog")
+            assert r.status_code == 200
+            assert r.content == b'{"models": []}'
+            assert r.headers["content-type"] == "application/json"
+            assert r.headers["content-disposition"] == (
+                'attachment; filename="slaif-model-catalog.reference.json"'
+            )
+            # the normal process settings PUBLIC_BASE_URL is NEVER read:
+            # the SAME pure renderer got the reserved inert URL only.
+            assert all(base == "https://api.slaif.invalid/v1" for base, _ in calls)
+            assert all(pid == "w-qual-1" for _, pid in calls)
+
+    asyncio.run(run())
+    # the inert URL is accepted by the SAME validator the renderer uses
+    # (a reserved non-routable placeholder, no live host).
+    from slaif_gateway.services.codex_qualification import (
+        validate_codex_gateway_base_url,
+    )
+
+    assert validate_codex_gateway_base_url("https://api.slaif.invalid/v1") == (
+        "https://api.slaif.invalid/v1"
+    )
+
+
+def test_w_codex_artifacts_no_catalog_404(monkeypatch):
+    monkeypatch.setattr(dcodex, "render_codex_profile",
+                        lambda _b, _p: _w_codex_artifacts(catalog=False))
+    route = _w_route_obj()
+    _w_fake_qual_service(monkeypatch, [_w_qual_result(route.id)])
+    session = _WRouteFakeSession(route, [], [], [], COPY_OK, "on")
+    app, fake = _w_codex_app(monkeypatch, session)
+
+    async def run():
+        async with _client(app) as client:
+            await _verified_session_client(fake, client)
+            assert (await client.get(W_CODEX_URL + "/base")).status_code == 200
+            r = await client.get(W_CODEX_URL + "/catalog")
+            assert r.status_code == 404
+            assert r.content == b"Not Found"
+
+    asyncio.run(run())
+
+
+def test_w_codex_artifacts_ineligible_or_missing_404(monkeypatch):
+    def _boom(*a, **k):
+        raise AssertionError("renderer must not run for ineligible routes")
+
+    monkeypatch.setattr(dcodex, "render_codex_profile", _boom)
+
+    async def run():
+        # not ready
+        route = _w_route_obj()
+        _w_fake_qual_service(
+            monkeypatch,
+            [_w_qual_result(route.id, state="not_declared", profile_id=None)],
+        )
+        session = _WRouteFakeSession(route, [], [], [], COPY_OK, "on")
+        app, fake = _w_codex_app(monkeypatch, session)
+        async with _client(app) as client:
+            await _verified_session_client(fake, client)
+            r = await client.get(W_CODEX_URL + "/base")
+            assert r.status_code == 404
+        # ready but no registered profile id
+        route = _w_route_obj()
+        _w_fake_qual_service(
+            monkeypatch,
+            [_w_qual_result(route.id, profile_id=None)],
+        )
+        session = _WRouteFakeSession(route, [], [], [], COPY_OK, "on")
+        app, fake = _w_codex_app(monkeypatch, session)
+        async with _client(app) as client:
+            await _verified_session_client(fake, client)
+            r = await client.get(W_CODEX_URL + "/base")
+            assert r.status_code == 404
+        # no qualification result for this route
+        route = _w_route_obj()
+        _w_fake_qual_service(monkeypatch, [])
+        session = _WRouteFakeSession(route, [], [], [], COPY_OK, "on")
+        app, fake = _w_codex_app(monkeypatch, session)
+        async with _client(app) as client:
+            await _verified_session_client(fake, client)
+            r = await client.get(W_CODEX_URL + "/base")
+            assert r.status_code == 404
+        # missing route
+        _w_fake_qual_service(monkeypatch, [])
+        session = _WRouteFakeSession(None, [], [], [], COPY_OK, "on")
+        app, fake = _w_codex_app(monkeypatch, session)
+        async with _client(app) as client:
+            await _verified_session_client(fake, client)
+            r = await client.get(W_CODEX_URL + "/base")
+            assert r.status_code == 404
+
+    asyncio.run(run())
+
+
+def test_w_codex_artifacts_render_failure_404(monkeypatch):
+    def _boom(*a, **k):
+        raise ValueError("unknown profile")
+
+    monkeypatch.setattr(dcodex, "render_codex_profile", _boom)
+    route = _w_route_obj()
+    _w_fake_qual_service(monkeypatch, [_w_qual_result(route.id, profile_id="w-bad")])
+    session = _WRouteFakeSession(route, [], [], [], COPY_OK, "on")
+    app, fake = _w_codex_app(monkeypatch, session)
+
+    async def run():
+        async with _client(app) as client:
+            await _verified_session_client(fake, client)
+            r = await client.get(W_CODEX_URL + "/profile")
+            assert r.status_code == 404
+            assert "Traceback" not in r.text
 
     asyncio.run(run())

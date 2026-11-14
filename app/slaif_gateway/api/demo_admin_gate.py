@@ -284,6 +284,48 @@ _CATALOG_RUN_DETAIL_RE = re.compile(
 _CANONICAL_UUID_RE = re.compile(
     r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
 )
+# 224-w: the exact read-only SMTP-test GET shapes (query-free; every
+# unsafe method stays the pre-body quiet 204).
+ADMITTED_SMTP_TEST_PATH = "/admin/email-operations/smtp-test"
+ADMITTED_SMTP_TEST_APPLY_PATH = "/admin/email-operations/smtp-test/apply"
+# 224-w: the exact key JSON attachment shapes (canonical lowercase
+# UUID; the calibration summary carries the bounded positive query
+# law below, the configuration document is query-free).
+_KEY_CALIBRATION_SUMMARY_RE = re.compile(
+    rf"/admin/keys/{_KEY_CANONICAL_UUID}/calibration/summary\.json\Z"
+)
+_KEY_CONFIGURATION_JSON_RE = re.compile(
+    rf"/admin/keys/{_KEY_CANONICAL_UUID}/configuration\.json\Z"
+)
+# 224-w: the exact route read shapes (canonical UUID, query-free),
+# including the ONE finite codex-profile artifact vocabulary.
+_ROUTE_CONFIGURATION_RE = re.compile(
+    rf"/admin/routes/{_KEY_CANONICAL_UUID}/configuration\Z"
+)
+_ROUTE_CODEX_PROFILE_RE = re.compile(
+    rf"/admin/routes/{_KEY_CANONICAL_UUID}/codex-profile/(?:base|profile|catalog)\Z"
+)
+# 224-w calibration query law: the WHOLE raw query is checked against
+# this small ceiling BEFORE it is split or decoded, so an oversized
+# or malformed query is a fixed default-denied 404 without
+# allocation or echo. The ceiling covers the worst-case legitimate
+# query with margin, INCLUDING percent-encoded values (the normal
+# template link urlencodes the datetimes): "start_at=" (8) + enc(40)
+# + "&end_at=" (7) + enc(40) + "&multiplier=" (11) + 32 = 182 raw
+# bytes for the longest valid ISO-8601 datetimes.
+_CALIBRATION_QUERY_MAX_LEN = 256
+_CALIBRATION_VALUE_MAX_LEN = 64
+# Strict value grammars consistent with the normal read selector
+# (_parse_admin_datetime / _parse_required_admin_decimal): no
+# credential-shaped value can fit them, so the gate needs no separate
+# alias classifier for these values. The handler re-runs the normal
+# strict parsers (semantic validation stays server-side).
+_CALIBRATION_DATETIME_RE = re.compile(
+    r"[0-9]{4}-[0-9]{2}-[0-9]{2}"
+    r"(?:[T ][0-9]{2}:[0-9]{2}(?::[0-9]{2}(?:\.[0-9]{1,6})?)?"
+    r"(?:Z|[+-][0-9]{2}:[0-9]{2})?)?\Z"
+)
+_CALIBRATION_DECIMAL_RE = re.compile(r"[0-9]+(?:\.[0-9]+)?\Z")
 ADMIN_LOGIN_PATH = "/admin/login"
 ADMIN_STATIC_PREFIX = "/admin/static"
 DEMO_LOGOUT_PATH = "/admin/logout"
@@ -408,6 +450,81 @@ def _key_read_page_query_admitted(path: str, query_string: bytes) -> bool:
     if name != b"operation":
         return False
     return len(value) <= _KEY_RECEIPTS_OPERATION_MAX_LEN
+
+
+_HEX_DIGITS = frozenset("0123456789abcdefABCDEF")
+
+
+def _percent_decode_once(raw: str) -> str:
+    """Strict single-pass percent-decode of an ASCII query string.
+
+    Every ``%`` must begin exactly two hex digits (an invalid or
+    truncated sequence is refused). ``+`` is NOT a space here: only
+    the template's ``urlencode`` / HTML-form encoding is admitted, and
+    a literal ``+`` can only fail the closed value grammars downstream.
+    Raises ``ValueError`` on malformed input; the result may still
+    contain non-ASCII bytes, which the value grammars then refuse."""
+    out: list[str] = []
+    i = 0
+    n = len(raw)
+    while i < n:
+        ch = raw[i]
+        if ch != "%":
+            out.append(ch)
+            i += 1
+            continue
+        if i + 2 >= n:
+            raise ValueError("truncated percent escape")
+        hi, lo = raw[i + 1], raw[i + 2]
+        if hi not in _HEX_DIGITS or lo not in _HEX_DIGITS:
+            raise ValueError("invalid percent escape")
+        out.append(chr(int(hi + lo, 16)))
+        i += 3
+    return "".join(out)
+
+
+def _calibration_query_admitted(query_string: bytes) -> bool:
+    """224-w: the bounded POSITIVE query law for the demo calibration
+    summary download (``start_at`` / ``end_at`` / ``multiplier``),
+    enforced BEFORE any copy binding.
+
+    A finite raw-byte ceiling first, then a strict single-pass
+    percent-decode (the normal template link urlencodes the datetimes;
+    the handler's normal strict parsers validate the decoded values),
+    then: at most one of each exact parameter, no unknown names, no
+    duplicates, no oversized values, and strict value grammars
+    (ISO-8601 date/datetime; positive decimal) that no
+    credential-shaped value can fit. ``multiplier`` is required
+    (the normal selector's default applies only when the parameter is
+    absent, not when it is empty)."""
+    if not query_string:
+        return True
+    if not isinstance(query_string, (bytes, bytearray)):
+        return False
+    if len(query_string) > _CALIBRATION_QUERY_MAX_LEN:
+        return False
+    try:
+        raw = bytes(query_string).decode("ascii")
+    except UnicodeDecodeError:
+        return False
+    try:
+        raw = _percent_decode_once(raw)
+    except ValueError:
+        return False
+    seen: set[str] = set()
+    for pair in raw.split("&"):
+        name, sep, value = pair.partition("=")
+        if not sep or name not in {"start_at", "end_at", "multiplier"}:
+            return False
+        if name in seen or len(value) > _CALIBRATION_VALUE_MAX_LEN:
+            return False
+        seen.add(name)
+        if name == "multiplier":
+            if _CALIBRATION_DECIMAL_RE.fullmatch(value) is None:
+                return False
+        elif value and _CALIBRATION_DATETIME_RE.fullmatch(value) is None:
+            return False
+    return True
 
 
 def _diagnostics_query_admitted(
@@ -613,6 +730,21 @@ def _is_admitted_path_with_query(
             and _CANONICAL_UUID_RE.fullmatch(rest) is not None
             and not query_string
         )
+    # 224-w: the exact read-only SMTP-test GET shapes (query-free).
+    if path in (ADMITTED_SMTP_TEST_PATH, ADMITTED_SMTP_TEST_APPLY_PATH):
+        return not query_string
+    # 224-w: the exact key JSON attachment shapes.
+    if _KEY_CALIBRATION_SUMMARY_RE.fullmatch(path) is not None:
+        # the bounded positive query law (start_at/end_at/multiplier),
+        # enforced BEFORE any copy binding.
+        return _calibration_query_admitted(query_string)
+    if _KEY_CONFIGURATION_JSON_RE.fullmatch(path) is not None:
+        return not query_string
+    # 224-w: the exact route read shapes (query-free).
+    if _ROUTE_CONFIGURATION_RE.fullmatch(path) is not None:
+        return not query_string
+    if _ROUTE_CODEX_PROFILE_RE.fullmatch(path) is not None:
+        return not query_string
     if _KEY_READ_PAGE_RE.fullmatch(path) is not None:
         # 224-q: exact shape admitted only under the bounded query
         # law (the receipts page's single optional `operation`).

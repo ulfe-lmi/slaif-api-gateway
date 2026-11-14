@@ -860,6 +860,18 @@ def _mount_demo_admin_routers(app: FastAPI) -> None:
     from slaif_gateway.api.admin_catalog_refresh import (
         router as admin_catalog_refresh_router,
     )
+    from slaif_gateway.api.demo_admin_codex_artifacts import (
+        router as demo_admin_codex_artifacts_router,
+    )
+    from slaif_gateway.api.demo_admin_key_attachments import (
+        router as demo_admin_key_attachments_router,
+    )
+    from slaif_gateway.api.demo_admin_route_configuration import (
+        router as demo_admin_route_configuration_router,
+    )
+    from slaif_gateway.api.demo_admin_smtp import (
+        router as demo_admin_smtp_router,
+    )
     from slaif_gateway.api.admin_compatibility import (
         router as admin_compatibility_router,
     )
@@ -901,7 +913,19 @@ def _mount_demo_admin_routers(app: FastAPI) -> None:
     app.include_router(demo_admin_branding_router)
     app.include_router(branding_router)
     app.include_router(admin_record_choices_router)
+    # 224-w: the demo key JSON attachments win over the normal
+    # download routes (request-local copy binding, whole-output alias
+    # refusal, 1 MiB ceiling, no ambient settings).
+    app.include_router(demo_admin_key_attachments_router)
+    # 224-w: the demo inert Codex reference artifacts win over the
+    # normal live-URL artifact route (no runnable profile is emitted);
+    # that route lives on the core admin router, so this demo router
+    # must register before it.
+    app.include_router(demo_admin_codex_artifacts_router)
     app.include_router(admin_router)
+    # 224-w: the demo SMTP-test GETs win over the normal form/apply
+    # routes (the normal POSTs stay the gate's quiet pre-body 204).
+    app.include_router(demo_admin_smtp_router)
     app.include_router(admin_email_operations_router)
     app.include_router(admin_accounting_operations_router)
     app.include_router(admin_accounts_router)
@@ -910,6 +934,9 @@ def _mount_demo_admin_routers(app: FastAPI) -> None:
     app.include_router(admin_catalog_refresh_router)
     app.include_router(admin_key_clone_router)
     app.include_router(admin_key_batch_router)
+    # 224-w: the demo route configuration GET wins over the normal
+    # form route (copy-backed choices, sanitized completion leaf).
+    app.include_router(demo_admin_route_configuration_router)
     app.include_router(admin_provider_route_configuration_router)
     # Demo-specific operations index + captured process-configuration
     # pages win over the normal live-Settings operations routes (224-t).

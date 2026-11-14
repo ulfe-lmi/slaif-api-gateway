@@ -222,10 +222,11 @@
                placeholder="2026-01-02T00:00:00Z" aria-describedby="preview-bounds-help">
       </div>
       <p class="field-help" id="preview-bounds-help">ISO 8601 UTC timestamps; blank means
-      unbounded. Ongoing traffic can add references between preview and apply, which
+      unbounded. {% if demo_admin %}This demo form is shown for completeness: submitting
+      it does nothing and this frozen copy never changes.{% else %}Ongoing traffic can add references between preview and apply, which
       legitimately makes an unbounded window stale and asks for a fresh preview. An explicit
       created-until cutoff (or a smaller scope) stabilizes the review; nothing is ever silently
-      cut off or relaxed.</p>
+      cut off or relaxed.{% endif %}</p>
       <div class="field-row">
         <label for="preview-ttl-seconds">Total lifetime, seconds (from ORIGINAL creation)</label>
         <input type="number" id="preview-ttl-seconds" name="ttl_seconds" min="{{ ttl_min }}"
@@ -245,31 +246,21 @@
                aria-describedby="preview-expired-help">
         <label for="preview-include-expired">Also include references already expired at preview time</label>
       </div>
-      {%- if demo_admin %}
-      <p class="field-help" id="preview-expired-help">Off by default; include-expired is an explicit choice. In normal use it lengthens the expiry of already-expired eligible references within the selected lifetime, but it cannot restore unusable material. In this demo, submission does nothing: no extension is ever applied.</p>
-      {%- endif %}
-      {%- if not demo_admin %}
-      <p class="field-help" id="preview-expired-help">Off by default; include-expired is an
+      <p class="field-help" id="preview-expired-help">{% if demo_admin %}Off by default; include-expired is an explicit choice. In normal use it lengthens the expiry of already-expired eligible references within the selected lifetime, but it cannot restore unusable material. In this demo, submission does nothing: no extension is ever applied.{% else %}Off by default; include-expired is an
       explicit choice. It lengthens the expiry of already-expired eligible references within the
       selected lifetime, but it cannot restore unusable material: a reference still needs an
       active, valid key, a finalized usage-ledger row, a supported item kind, and a configured
       secret for its stored HMAC version. Excluded references and the reasons are shown in the
-      preview.</p>
-      {%- endif %}
+      preview.{% endif %}</p>
       <div class="field-row">
         <label for="preview-reason">{% if demo_admin %}Reason (in this demo, not recorded){% else %}Audit reason{% endif %}</label>
         <input type="text" id="preview-reason" name="reason" maxlength="{{ 512 }}"
                placeholder="Extend reviewed replay references for the Q2 audit window"
                aria-describedby="preview-reason-help" required>
       </div>
-      {%- if demo_admin %}
-      <p class="field-help" id="preview-reason-help">Up to 512 characters. In this demo, submission does nothing, so the reason is not stored and no audit record is written.</p>
-      {%- endif %}
-      {%- if not demo_admin %}
-      <p class="field-help" id="preview-reason-help">Up to 512 characters, saved exactly as
+      <p class="field-help" id="preview-reason-help">{% if demo_admin %}Up to 512 characters. In this demo, submission does nothing, so the reason is not stored and no audit record is written.{% else %}Up to 512 characters, saved exactly as
       entered (nothing is trimmed). Do not include passwords or keys. The reason is stored with
-      one audit record when the extension is applied.</p>
-      {%- endif %}
+      one audit record when the extension is applied.{% endif %}</p>
       <button type="submit">Preview extension</button>
     </form>
   </section>
