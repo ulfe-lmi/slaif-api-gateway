@@ -321,7 +321,9 @@ def test_e2e_web_entry_full_cycle(
                 assert token
                 r = await client.get("/fakeadmin/ready")
                 assert r.status_code == 200
-                assert "not enabled yet" in r.text
+                # 224-z: the ready page offers the mounted read GUI.
+                assert 'href="/admin"' in r.text
+                assert "not enabled yet" not in r.text
                 csrf2 = r.cookies["slaif_demo_csrf"]
                 r = await client.post("/fakeadmin/logout", data={"csrf": csrf2})
                 assert r.status_code == 303

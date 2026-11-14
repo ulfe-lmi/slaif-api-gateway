@@ -3,17 +3,20 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Demo Login</title>
+  <title>Demo Admin Login</title>
   <link rel="stylesheet" href="/fakeadmin/static/css/admin.css">
 </head>
 <body>
   <section class="auth-panel" aria-labelledby="login-heading">
     <div class="auth-header">
-      <h1 id="login-heading">Demo Login</h1>
+      <h1 id="login-heading">Demo Admin Login</h1>
     </div>
-    <p class="muted small">
-      This demo entry prepares a private, identity-masked snapshot for the
-      signed-in operator. Copy browsing is enabled in a later stage.
+    <p class="muted small" role="note">
+      Signing in starts a fresh private, identity-masked snapshot for
+      THIS session: the source data is captured after sign-in and is
+      available only once verified and anonymized. The frozen view
+      retains usage patterns, and operational controls on the demo
+      pages have no effect.
     </p>
 
     {% if error %}

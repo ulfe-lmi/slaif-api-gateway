@@ -13,18 +13,22 @@
     </div>
 
     <p>
-      Your private, identity-masked demo snapshot is ready and this session
-      is active.
+      Your private, identity-masked demo snapshot is ready and this
+      session is active. It is a frozen view of the source captured
+      at sign-in (database and file captures carry their own recorded
+      times); usage patterns are retained, and operational controls
+      on the demo pages have no effect.
     </p>
     <p>
-      You can open the
-      <a href="/fakeadmin/copy-preview">read-only copy preview</a>,
-      which shows bounded counts from your own verified copy.
+      <a class="primary-link" href="/admin">Open the admin dashboard
+      (demo view)</a>
     </p>
-    <p class="form-error" role="note">
-      Full GUI browsing is <strong>not enabled yet</strong> in this
-      stage: only the entry, login, wait, session flow, and the
-      read-only copy preview are available.
+    <p class="muted small">
+      Optional previews from your own verified copy:
+      <a href="/fakeadmin/copy-preview">read-only copy preview</a>
+      (bounded row counts) and
+      <a href="/fakeadmin/files-preview">read-only files preview</a>
+      (bounded display-file metadata).
     </p>
 
     <form method="post" action="/fakeadmin/logout" class="form-stack">

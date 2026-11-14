@@ -15,7 +15,7 @@
     </div>
     <div class="header-actions">
       <a class="button-link secondary" href="/admin/email-operations/smtp-test">New SMTP test</a>
-      <a class="button-link secondary" href="/admin/operations">Operations</a>
+      <a class="button-link secondary" href="/admin/operations{% if demo_admin %}/{% endif %}">Operations</a>
       <form method="post" action="/admin/logout">
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         <button type="submit" class="signout">Sign out</button>

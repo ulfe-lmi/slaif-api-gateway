@@ -1,12 +1,24 @@
 """Objective 224-c: the isolated demo web entry (default OFF).
 
-A purpose-built, STANDALONE ASGI app (``create_demo_app``) serving ONLY
-the ``/fakeadmin`` demo entry surface (login / wait / ready / logout)
-plus the packaged static assets it needs. It does NOT import or call
-``main.create_app`` or its lifespan (which would bootstrap provider
-modules, normal routes and normal database/Redis services); it
-registers NO ``/v1``, ``/admin`` or ordinary admin routes, so those
-paths are unreachable on this process.
+A purpose-built, STANDALONE ASGI app (``create_demo_app``) serving the
+``/fakeadmin`` demo entry surface (login / wait / ready / previews /
+logout) plus the packaged static assets it needs. It does NOT import
+or call ``main.create_app`` or its lifespan (which would bootstrap
+provider modules, normal routes and normal database/Redis services)
+and registers NO ``/v1`` routes, so the gateway API is unreachable on
+this process.
+
+Historically (224-c) the standalone app registered no ``/admin``
+routes at all. Since 224-e it mounts the EXISTING admin routers in
+this process ONLY, reachable exclusively through the central
+default-deny demo gate (``demo_admin_gate.DemoAdminGate``): admitted
+read GETs dispatch to the reused handlers against the visitor's own
+request-local verified copy (plus the purpose-built demo adapters
+``demo_admin_*``), every other admin GET is default-denied, and every
+unsafe method on ``/admin`` is cut pre-body to the uniform quiet 204
+no-op (the single exception being the demo sign-out POST
+``/admin/logout``). That mounted read GUI is the current state; the
+224-c "no /admin routes" description above applies to history only.
 
 The demo app's ONLY database connection is a dedicated demo WEB
 control-role connection (the reviewed 224-a column grants), with an

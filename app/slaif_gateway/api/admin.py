@@ -383,8 +383,11 @@ _DEMO_NAV_SECTIONS: tuple[tuple[str, str], ...] = (
     ("/admin/templates", "Templates"),
     ("/admin/fx", "FX"),
     ("/admin/usage", "Usage"),
+    # 224-z: the demo index REQUIRES its trailing slash (gate law).
+    ("/admin/operations/", "Operations"),
     ("/admin/audit", "Audit"),
     ("/admin/email-deliveries", "Email"),
+    ("/admin/openai-assisted", "OpenAI"),
     ("/admin/accounts", "Accounts"),
 )
 

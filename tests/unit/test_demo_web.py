@@ -1081,7 +1081,9 @@ def test_ready_requires_valid_session():
     asyncio.run(run())
 
 
-def test_ready_page_states_browsing_not_enabled():
+def test_ready_page_offers_admin_dashboard_entry():
+    # 224-z: the ready page truthfully offers the mounted read GUI as
+    # its primary entry, plus the optional bounded previews.
     async def run():
         fake = FakeFacade()
         app = _app(fake)
@@ -1089,7 +1091,17 @@ def test_ready_page_states_browsing_not_enabled():
             client.cookies["slaif_demo_session"] = "unit-token-1"
             r = await client.get("/fakeadmin/ready")
             assert r.status_code == 200
-            assert "not enabled yet" in r.text
+            assert (
+                '<a class="primary-link" href="/admin">Open the admin '
+                "dashboard (demo view)</a>" in _norm(r.text)
+            )
+            assert "frozen view of the source captured at sign-in" in _norm(r.text)
+            assert "have no effect" in _norm(r.text)
+            assert 'href="/fakeadmin/copy-preview"' in r.text
+            assert 'href="/fakeadmin/files-preview"' in r.text
+            # The stale staging claims are gone.
+            assert "not enabled yet" not in r.text
+            assert "incomplete" not in r.text
 
     asyncio.run(run())
 
@@ -2363,12 +2375,15 @@ def test_base_template_normal_render_unchanged_and_demo_variant():
         assert "Demo preview:" not in out_normal
 
         # Demo mode: persistent read-only banner + ONLY the sections
-        # admitted through 224-i (thirteen).
+        # admitted through 224-z (fifteen: the 224-i set plus the
+        # 224-z Operations and OpenAI entries).
         demo_req = _fake_admin_request("/admin/keys", demo_admin=object())
         out_demo = await _render(demo_req)
-        assert "Demo preview:" in out_demo
-        assert "Read-only" in out_demo
-        assert "incomplete" in out_demo
+        demo_norm = " ".join(out_demo.split())
+        assert "Demo preview:" in demo_norm
+        assert "Read-only" in demo_norm
+        assert "frozen at capture time" in demo_norm
+        assert "incomplete" not in out_demo
         for href in (
             "/admin",
             "/admin/keys",
@@ -2381,15 +2396,15 @@ def test_base_template_normal_render_unchanged_and_demo_variant():
             "/admin/templates",
             "/admin/fx",
             "/admin/usage",
+            "/admin/operations/",
             "/admin/audit",
             "/admin/email-deliveries",
-        ):
-            assert f'href="{href}"' in out_demo
-        for href in (
-            "/admin/operations",
             "/admin/openai-assisted",
         ):
-            assert f'href="{href}"' not in out_demo
+            assert f'href="{href}"' in out_demo
+        # The gate admits ONLY the trailing-slash operations index; the
+        # no-slash form must not be linked from the demo nav.
+        assert 'href="/admin/operations"' not in out_demo
 
     asyncio.run(run())
 
@@ -10679,5 +10694,232 @@ def test_y_openai_copy_failure_503(monkeypatch):
                 assert r.status_code == 503, p
                 assert "unavailable" in r.text
                 assert r.headers.get("cache-control") == "private, no-store"
+
+    asyncio.run(run())
+
+
+# --- 224-z: final GUI audit ---------------------------------------------------
+
+
+def _z_router_admin_get_paths(app) -> list[str]:
+    """The ACTUAL mounted admin GET route templates at this head.
+
+    Walks the real router table (including FastAPI's lazy
+    ``_IncludedRouter`` entries), so a newly mounted admin GET that
+    lacks a gate admission entry fails this audit.
+    """
+    from starlette.routing import Mount
+
+    def walk(routes):
+        for r in routes:
+            orig = getattr(r, "original_router", None)
+            if orig is not None:
+                yield from walk(orig.routes)
+            else:
+                yield r
+
+    paths = set()
+    for r in walk(app.routes):
+        if isinstance(r, Mount):
+            continue
+        if "GET" in (getattr(r, "methods", None) or set()) and r.path.startswith(
+            "/admin"
+        ):
+            paths.add(r.path)
+    return sorted(paths)
+
+
+# demo-run- + 24 lowercase hex / 32 lowercase hex (gate grammar).
+_Z_RUN_ID = "demo-run-0123456789abcdef01234567"
+_Z_JOB_ID = "0123456789abcdef0123456789abcdef"
+# 224-z: the four mounted GET routes beyond root's 99-row checkpoint
+# TSV (demo-adapter attachment aliases and the 224-l/224-m catalog
+# read pages); all four are already gate-admitted.
+_Z_BEYOND_CHECKPOINT = (
+    "/admin/keys/{key_id}/calibration/summary.json",
+    "/admin/keys/{key_id}/configuration.json",
+    "/admin/operations/catalog/artifact",
+    "/admin/operations/catalog/jobs/",
+)
+
+
+def _z_canonical(template: str) -> str:
+    """One canonical admitted sample per router template placeholder."""
+    import re
+
+    from slaif_gateway.api.demo_admin_gate import _shipped_preset_names
+
+    preset = sorted(_shipped_preset_names())[0]
+    path = template.replace("{run_id}", _Z_RUN_ID)
+    path = path.replace("{job_id}", _Z_JOB_ID)
+    path = path.replace("{preset}", "openrouter-chat-text")
+    path = path.replace("{artifact_name}", "profile")
+
+    def _name(_m):
+        if "/package/" in path:
+            return "package-manifest.json"
+        if "/runs/" in path:
+            return "catalog-refresh.json"
+        if "/jobs/" in path:
+            return "bundle-" + _Z_JOB_ID
+        return preset
+
+    path = re.sub(r"\{name\}", _name, path)
+    path = path.replace("{key_id}", KEY_UUID).replace("{gateway_key_id}", KEY_UUID)
+    for var in (
+        "audit_log_id",
+        "email_delivery_id",
+        "cohort_id",
+        "institution_id",
+        "fx_rate_id",
+        "pricing_rule_id",
+        "provider_config_id",
+        "route_id",
+        "template_id",
+        "usage_ledger_id",
+        "owner_id",
+    ):
+        path = path.replace("{%s}" % var, KEY_UUID)
+    return path
+
+
+def test_z_login_page_demo_admin_title_and_snapshot_warning():
+    async def run():
+        app = _app(FakeFacade())
+        async with _client(app) as client:
+            r = await client.get("/fakeadmin/login")
+            assert r.status_code == 200
+            assert "<title>Demo Admin Login</title>" in r.text
+            assert '<h1 id="login-heading">Demo Admin Login</h1>' in r.text
+            text = _norm(r.text)
+            assert "captured after sign-in" in text
+            assert "verified and anonymized" in text
+            assert "retains usage patterns" in text
+            assert "have no effect" in text
+            # No stale staging claim.
+            assert "later stage" not in r.text
+
+    asyncio.run(run())
+
+
+def test_z_copy_preview_points_to_full_gui():
+    async def run():
+        fake = FakeFacade()
+        fake.worker_target_db = COPY_OK
+        factory, _made = _factory(counts=_counts_all(7))
+        app = _app(fake, copy_reader_factory=factory)
+        async with _client(app) as client:
+            await _verified_session_client(fake, client)
+            r = await client.get("/fakeadmin/copy-preview")
+            assert r.status_code == 200
+            assert "not enabled yet" not in r.text
+            assert "full demo admin GUI" in _norm(r.text)
+            assert "ready page" in _norm(r.text)
+
+    asyncio.run(run())
+
+
+def test_z_nav_templates_link_gate_admitted_operations_index():
+    # The four templates that previously linked the no-slash
+    # /admin/operations (a gate 404 in demo) use the demo-conditional
+    # trailing-slash form; the normal render (demo_admin falsy) keeps
+    # the exact original href.
+    from pathlib import Path as _Path
+
+    repo = _Path(__file__).resolve().parents[2]
+    tdir = repo / "app" / "slaif_gateway" / "web" / "templates"
+    for rel in (
+        "dashboard.html",
+        "email_operations/smtp_test.html",
+        "email_operations/smtp_test_review.html",
+        "catalog_refresh/index.html",
+    ):
+        html = (tdir / rel).read_text()
+        assert (
+            'href="/admin/operations{% if demo_admin %}/{% endif %}"' in html
+        ), rel
+        assert 'href="/admin/operations"' not in html, rel
+
+
+def test_z_persistent_demo_nav_lists_operations_and_openai(monkeypatch):
+    # Rendered through the REAL gate + context processor on an
+    # admitted page: the persistent demo nav carries the Operations
+    # (trailing slash) and OpenAI entries and the truthful banner.
+    fake = FakeFacade()
+    fake.worker_target_db = COPY_OK
+    _preflight_case(monkeypatch, COPY_OK, "on")
+    session = _ProcConfigFakeSession([], [], COPY_OK, "on")
+    _t_patch_sessionmaker(monkeypatch, session)
+    app = _app(fake)
+
+    async def run():
+        async with _client(app) as client:
+            await _verified_session_client(fake, client)
+            r = await client.get(T_IDX_URL)
+            assert r.status_code == 200
+            assert 'href="/admin/operations/"' in r.text
+            assert 'href="/admin/openai-assisted"' in r.text
+            assert 'href="/admin/operations"' not in r.text
+            assert "frozen at capture time" in _norm(r.text)
+            assert "incomplete" not in r.text
+
+    asyncio.run(run())
+
+
+def test_z_router_get_inventory_all_admitted_or_excluded():
+    """224-z finite audit: EVERY mounted admin GET route (103 at this
+    head: root's 99-row checkpoint plus the four demo-adapter GETs
+    above) is gate-admitted (sessionless 303 to the demo entry) or
+    listed as an intentional exclusion; near misses stay 404."""
+    app = _app(FakeFacade())
+    paths = _z_router_admin_get_paths(app)
+    assert len(paths) == 103, paths
+    for extra in _Z_BEYOND_CHECKPOINT:
+        assert extra in paths, extra
+    # /admin/login is the ONLY intentional exclusion: it belongs to
+    # normal admin; the demo GET redirects to the demo entry (303, the
+    # same wire shape as every other admission without a session).
+    branding = {
+        "/admin/branding/favicon",
+        "/admin/branding/hero",
+        "/admin/branding/logo",
+        "/admin/branding/logo-compact",
+        "/admin/branding/style.css",
+    }
+
+    async def run():
+        async with _client(app) as client:
+            for template in paths:
+                target = _z_canonical(template)
+                r = await client.get(target)
+                if target in branding:
+                    # The five packaged fallback assets are static
+                    # read-only files: admitted and served (200) even
+                    # without a session.
+                    assert r.status_code == 200, target
+                else:
+                    assert r.status_code == 303, (template, r.status_code)
+                    assert r.headers["location"] == "/fakeadmin/login", template
+            # Near misses around the 224-z nav and the canonical
+            # catalog/compatibility grammars stay default-denied.
+            for bad in (
+                "/admin/operations",  # demo index REQUIRES the slash
+                "/admin/branding",
+                "/admin/openai-assisted?x=1",
+                "/admin/operations/catalog/artifactx",
+                "/admin/operations/catalog/runs/demo-run-xyz/",
+                f"/admin/operations/catalog/runs/{_Z_RUN_ID}/artifact/notes.txt",
+                f"/admin/operations/catalog/jobs/{_Z_JOB_ID}/artifact/review.html",
+                f"/admin/operations/catalog/jobs/{_Z_JOB_ID}/package/{'x' * 4}/routes-proposal.tsv",
+                "/admin/operations/compatibility/preset/not-a-preset",
+                "/admin/operations/replay-maintenance/key/not-a-uuid",
+            ):
+                r = await client.get(bad)
+                assert r.status_code == 404, bad
+            # The exclusion behaves exactly as documented: a 303 to
+            # the demo entry, never the normal login form.
+            r = await client.get("/admin/login")
+            assert r.status_code == 303
+            assert r.headers["location"] == "/fakeadmin/login"
 
     asyncio.run(run())

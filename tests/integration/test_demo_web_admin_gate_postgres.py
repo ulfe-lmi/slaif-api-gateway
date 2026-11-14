@@ -664,12 +664,29 @@ def test_e2e_admin_gate_two_sessions_distinct_copies(
                         assert 'href="/admin/routes"' in r.text
                         # 224-j: the administrator accounts section is in.
                         assert 'href="/admin/accounts"' in r.text
+                        # 224-z: the persistent demo nav gained the
+                        # Operations (gate-required trailing slash)
+                        # and OpenAI entries; the no-slash form is
+                        # never linked.
+                        assert 'href="/admin/operations/"' in r.text
+                        assert 'href="/admin/openai-assisted"' in r.text
                         assert 'href="/admin/operations"' not in r.text
-                        assert 'href="/admin/openai-assisted"' not in r.text
+                        assert "incomplete core preview" not in r.text
                         # canaries: no copy name, DSN fragment or credential.
                         assert target_a not in r.text
                         assert target_b not in r.text
                         assert str(env["reader_role"]) not in r.text
+
+                    # --- 224-z: truthful ready entry + operations slash law
+                    r = await client_a.get("/fakeadmin/ready")
+                    assert r.status_code == 200
+                    assert 'href="/admin"' in r.text
+                    assert "have no effect" in " ".join(r.text.split())
+                    assert "not enabled yet" not in r.text
+                    r = await client_a.get("/admin/operations")
+                    assert r.status_code == 404
+                    r = await client_a.get("/admin/operations/")
+                    assert r.status_code == 200
 
                     # --- EVERY admitted GET family (both sessions) --------
                     for client, target in ((client_a, target_a), (client_b, target_b)):
@@ -4339,12 +4356,19 @@ def test_browser_smoke_demo_copy_pages(
             assert 'href="/admin/usage"' in content
             # 224-i: the routes list/detail is in the demo nav.
             assert 'href="/admin/routes"' in content
+            # 224-z: the demo nav carries the Operations entry in its
+            # gate-required trailing-slash form (never the no-slash
+            # 404 shape) and the OpenAI entry; banner is truthful.
+            assert 'href="/admin/operations/"' in content
+            assert 'href="/admin/openai-assisted"' in content
             assert 'href="/admin/operations"' not in content
+            assert "frozen at capture" in content
+            assert "incomplete" not in content
             nav_labels = [a.inner_text() for a in page.locator("nav a").all()]
             assert nav_labels == [
                 "Dashboard", "Keys", "Owners", "Institutions", "Cohorts",
                 "Providers", "Routes", "Pricing", "Templates", "FX", "Usage",
-                "Audit", "Email", "Accounts",
+                "Operations", "Audit", "Email", "OpenAI", "Accounts",
             ]
             # asset_url appends ?v=<digest>: judge by URL path, not suffix.
             static_by_path = {urlparse(u).path: st for u, st in _static()}
@@ -4599,7 +4623,9 @@ def test_browser_smoke_demo_copy_pages(
             )
             assert target not in _qr_page
             assert target not in content
-            assert 'href="/admin/operations"' not in content  # still no nav item
+            # 224-z: only the trailing-slash nav form may appear.
+            assert 'href="/admin/operations"' not in content
+            assert 'href="/admin/operations/"' in content
             # ephemeral desktop-layout screenshot (run-owned /tmp path;
             # never committed, not in app logs).
             shot_cat = Path(
@@ -5119,6 +5145,43 @@ def test_browser_smoke_demo_copy_pages(
             page.goto("/admin/cohorts")
             rows_after = page.locator("table[data-sortable] tbody tr").count()
             assert rows_after == rows_before
+
+            # --- 224-z: truthful ready entry + operations near miss in
+            # the real browser ---------------------------------------------
+            r = page.goto("/fakeadmin/ready")
+            assert r is not None and r.status == 200
+            _zr_page = page.content()
+            _zr_flat = " ".join(_zr_page.split())
+            assert (
+                '<a class="primary-link" href="/admin">Open the admin '
+                "dashboard (demo view)</a>" in _zr_flat
+            )
+            assert "frozen view of the source captured at sign-in" in _zr_flat
+            assert "have no effect" in _zr_flat
+            assert "not enabled yet" not in _zr_page
+            assert 'href="/fakeadmin/copy-preview"' in _zr_page
+            assert 'href="/fakeadmin/files-preview"' in _zr_page
+            # The gate-required trailing slash: no-slash is a fixed 404,
+            # slash is the admitted index (200 with the demo banner).
+            r = page.goto("/admin/operations")
+            assert r is not None and r.status == 404
+            r = page.goto("/admin/operations/")
+            assert r is not None and r.status == 200
+            assert "Demo preview:" in page.content()
+            # The OpenAI nav entry resolves to the admitted index.
+            r = page.goto("/admin/openai-assisted")
+            assert r is not None and r.status == 200
+            assert "Frozen demo display" in " ".join(page.content().split())
+            # The inert-action law was already proven in this session
+            # (cohort/SMTP/OpenAI form submits above: pre-body quiet
+            # 204, rows unchanged); the sign-out below is the separate
+            # control action.
+            shot_z = Path(
+                f"/tmp/slaif-224z-browser-ready-{os.getpid()}-"
+                f"{uuid.uuid4().hex[:10]}.png"
+            )
+            page.screenshot(path=str(shot_z))
+            print(f"DEMO_BROWSER_224Z_SCREENSHOT={shot_z}")
 
             # --- CSRF-verified sign-out back to the demo entry ------------
             page.click("button.signout")

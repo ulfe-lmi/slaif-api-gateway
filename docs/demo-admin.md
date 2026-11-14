@@ -1,4 +1,121 @@
-# Demo fake-admin accounts (objective 220 foundation)
+# SLAIF demo fake-admin — current state (objective 224 final audit, 224-z)
+
+> **Status:** implemented on objective 224 (PR #383); the standalone
+> demo service is **default OFF** and is separate from the normal
+> gateway process.
+> **Scope:** the read-only, identity-masked snapshot GUI behind the
+> fake-admin entry, its route-coverage law, and the operator boundary.
+
+This section is the CURRENT state. Every per-objective section below
+it (220 through 224-y) is a HISTORICAL stage record: its "what this
+stage is/is NOT" wording (including "not enabled yet" and
+"incomplete core preview") describes that stage's scope at the time,
+not the current state. The current state is:
+
+- The standalone demo web process (default OFF, `DEMO_WEB_ENABLED`)
+  serves the `/fakeadmin` entry (login → wait → ready → logout). A
+  successful login starts a FRESH per-session source snapshot; the
+  capture happens AFTER sign-in and the view is available only once
+  the worker has verified and anonymized it. Database and file
+  captures carry their own recorded capture/event times (two snapshot
+  times, not one instant).
+- The ready page's primary entry is the mounted admin dashboard demo
+  view (`/admin`), plus the optional bounded copy/files previews.
+- The mounted admin GUI is reachable ONLY through the central
+  server-side default-deny gate: admitted read GETs render from the
+  visitor's own request-local verified copy, sanitized captured files
+  or fixed packaged vocabulary; every other admin GET is default-
+  denied (fixed 404); every unsafe method on `/admin` is cut pre-body
+  to the uniform quiet 204 no-op (the single exception is the demo
+  sign-out `POST /admin/logout`).
+- Operational forms stay visually normal; in the demo their
+  submission is a server-enforced silent no-op (no copy/source write,
+  no email, no provider call, no audit mutation). Visible no-op hints
+  make that explicit without disabling the controls.
+- With zero active fake-admin accounts every `/fakeadmin` and
+  `/admin` path is a fixed 404 (no fake login surface).
+
+## Current-state route matrix
+
+Final-head router inventory: **103 mounted admin GET routes** (root's
+99-row checkpoint — 94 admin + 5 branding assets — plus four
+demo-adapter GETs: the `{key_id}` calibration-summary/configuration
+attachment aliases and the 224-l/224-m catalog artifact and jobs
+read pages). Every one of the 103 is gate-admitted or listed below as
+an intentional exclusion; the focused audit test pins the full
+set and the near misses.
+
+| Surface / family | Demo outcome | Provenance | Reason / limit |
+| --- | --- | --- | --- |
+| `/fakeadmin` entry (login/wait/ready/previews/logout) | live per-session control flow | restricted web control role | fresh snapshot per sign-in; stored session form is the SHA-256 hash only |
+| dashboard; keys/owners/institutions/cohorts/providers/routes/pricing/templates/FX/usage/audit/email-deliveries lists, canonical-UUID detail and edit-form GETs | admitted read-only | verified copy | request-local database-side read-only session; dynamic responses `private, no-store` |
+| reports, accounting-operations, accounts, key-batch, record-choices | admitted read-only | verified copy | exact path/query law; near misses 404 |
+| key read pages (calibration, clone, clone/receipts) | admitted read-only | verified copy | bounded optional query law |
+| key calibration summary JSON | admitted JSON attachment | verified copy | bounded start/end/multiplier selector law |
+| key configuration JSON | **fixed safe 503, no usable link** | intentionally unavailable | the 222 sanitizer strips key policy metadata; no verified sanitized projection exists yet; no source fallback |
+| route configuration, codex-profile artifacts | admitted read-only | verified copy / sanitized captured file | closed artifact vocabulary |
+| operations index, diagnostics, replay maintenance family | admitted read-only | verified copy | replay summary is HMAC-free; TTL is worker-captured or "unavailable"; no replay eligibility authority |
+| operations process configuration | admitted read-only page | sanitized captured file | worker-captured fixed allowlist document |
+| catalog refresh family (index/collect/review/export-baseline/proposals/jobs/runs/artifacts/apply-status) | admitted read-only + bounded artifact downloads | verified copy + sanitized captured catalog files | closed name/preset grammars; apply status is frozen historical state |
+| compatibility family (index/preset/key) | admitted read-only | fixed packaged vocabulary + copy-bound key page | shipped preset loader is the closed vocabulary |
+| SMTP test GETs | admitted forms; silent no-op submit | demo no-op | no live reviewed intent exists in the copy |
+| OpenAI-assisted index/pricing/routes | admitted read-only | verified copy (copy-backed model options) | no live profile directory load |
+| five branding assets | packaged fallback | fixed packaged vocabulary | query-free; no live file read |
+| `/admin/login` | redirects to the demo entry (303) | intentional exclusion | belongs to normal admin; never rendered in demo |
+| `/admin/static` | packaged assets | fixed packaged vocabulary | revisioned static passthrough |
+| everything else (unknown path/query, near miss, noncanonical ID, old/cross-session ref) | fixed 404 | default deny | fails closed before session/copy binding |
+| every unsafe method on `/admin` except demo sign-out | pre-body quiet 204 | gate cut | no handler invocation, no body parse, no side effect |
+
+## Operator runbook (current)
+
+1. **Default-OFF standalone service.** The demo web is a separate
+   process (standalone ASGI app, not `main.create_app`), disabled
+   unless `DEMO_WEB_ENABLED=true` with a fully validated
+   `DEMO_WEB_*` configuration (web-role control connection, strong
+   `DEMO_WEB_COOKIE_SECRET`, copy-reader `DEMO_WEB_COPY_*` binding).
+   It refuses to start on partial configuration. Run it on the
+   dedicated demo host; nothing in the web process triggers the
+   worker.
+2. **CLI-only fake-admin credentials.** Accounts exist only through
+   the 220 CLI demo-admin commands (create/enable/disable/reset/
+   delete, operator-supplied passwords). The web role can never
+   create or mutate accounts.
+3. **Process and role separation.** Demo web (restricted web role,
+   224-a column grants) + privileged snapshot worker
+   (`demo-snapshot-worker process-request` / `cleanup`, worker role)
+   + target-only display reader (224-d) run with separate restrictive
+   roles; the web process never holds worker privileges.
+4. **Custody.** Source database/files and target copies are private to
+   the operator; copy names/DSNs/credentials never reach any page,
+   response or log under our control.
+5. **Exposure boundary.** If exposed beyond a trusted network, put it
+   behind TLS/reverse-proxy termination; the demo app itself performs
+   no TLS.
+6. **Snapshot lifecycle.** After login the visitor waits until the
+   worker verifies and anonymizes; the session and copy have bounded
+   lifetimes — expiry or logout revokes the session, and worker
+   cleanup drops the bound target database and display files.
+7. **Restart/configuration.** The web process state is ephemeral; the
+   control database holds the request/session state machine. Restart
+   does not extend any TTL; configuration changes require a restart
+   of the demo process.
+8. **Stop / clean up.** Disable or delete the fake-admin accounts
+   (zero active ⇒ 404 everywhere), run worker cleanup for any
+   pending/verified requests, and remove the demo roles/databases
+   per the stage runbooks below.
+9. **Privacy limitations (explicitly accepted).** Identity is masked,
+   but the frozen view **retains usage patterns** of the source; the
+   key-configuration JSON export is **intentionally unavailable**
+   because key policy metadata is stripped at sanitization time.
+
+**Not a release claim.** Objective 225 (installed acceptance) remains
+pending on a separate PR after objective 224 merges. Nothing on this
+page is live company evidence, certification, or a release; no
+packaged Compose/demo-host automation exists.
+
+---
+
+## Demo fake-admin accounts (objective 220 foundation) — HISTORICAL stage record
 
 > **Status:** Foundation — DISABLED until later objectives complete
 > **Scope:** CLI-managed demo fake-admin control and isolated schema only
