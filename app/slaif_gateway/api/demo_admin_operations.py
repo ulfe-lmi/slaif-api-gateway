@@ -56,16 +56,35 @@ import json
 import math
 import re
 from datetime import UTC, datetime
+from types import SimpleNamespace
 from typing import Any
 
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, Response
 
-from sqlalchemy import text
+from sqlalchemy import select, text
 
 from slaif_gateway import __version__
 from slaif_gateway.api.admin import templates
+from slaif_gateway.api.admin_operations import (
+    _CLEANUP_BATCH_LIMIT,
+    _format_fact_map,
+    _is_incoming_alias,
+    _is_unsafe_lookup_value,
+    _withheld_record_fields,
+)
+from slaif_gateway.db.models import RequestDiagnostic
+from slaif_gateway.db.repositories.request_diagnostics import (
+    RequestDiagnosticsRepository,
+)
 from slaif_gateway.db.session import get_sessionmaker_from_app
+from slaif_gateway.schemas.request_diagnostics import (
+    DIAGNOSTIC_LOOKUP_BOUND,
+    DiagnosticDisambiguationCandidate,
+    DiagnosticLookupOutcome,
+    DiagnosticLookupResult,
+    DiagnosticsNamespace,
+)
 from slaif_gateway.services import demo_snapshot_files as dsf
 from slaif_gateway.services.configuration_inspection import (
     API_PROCESS_RESTART_SCOPE,
@@ -379,6 +398,252 @@ async def demo_operations_process_configuration(request: Request) -> Response:
             "revision_provenance": None,
             "demo_admin": True,
             "demo_captured_utc": captured_utc,
+        },
+        status_code=200,
+    )
+    response.headers["Cache-Control"] = "private, no-store"
+    return response
+
+# ---------------------------------------------------------------------------
+# 224-v: the demo copy-backed request-diagnostics read page
+# ---------------------------------------------------------------------------
+
+# The bounded recent list and the exact safe-ID lookup share ONE
+# request-local SELECT-only transaction on the verified copy. The
+# recent list is capped at this many newest rows; the lookup reuses
+# the normal service's bounded candidate law (one row past the bound)
+# with NO retention cutoff: the demo projection does not capture the
+# source deployment's retention settings, so the demo never applies
+# (or displays) a retention window.
+_DIAGNOSTICS_RECENT_LIMIT = 100
+_DIAGNOSTICS_NAMESPACE_VALUES = {
+    "any": DiagnosticsNamespace.ANY,
+    "gateway": DiagnosticsNamespace.GATEWAY,
+    "client": DiagnosticsNamespace.CLIENT,
+}
+# No retention cutoff: every copied row is inspectable. The floor is
+# far below any representable capture time.
+_DIAGNOSTICS_NO_CUTOFF = datetime(1, 1, 1, tzinfo=UTC)
+
+_SAFE_DIAGNOSTICS_UNAVAILABLE = (
+    "The diagnostics page is unavailable for this demo session."
+)
+
+
+def _diagnostics_not_found() -> Response:
+    return HTMLResponse(
+        "Not Found", status_code=404, headers={"Cache-Control": "private, no-store"}
+    )
+
+
+def _diagnostics_unavailable() -> Response:
+    return HTMLResponse(
+        _SAFE_DIAGNOSTICS_UNAVAILABLE,
+        status_code=503,
+        headers={"Cache-Control": "private, no-store"},
+    )
+
+
+def _demo_lookup_result(
+    rows: tuple, total: int, lookup: str, namespace: DiagnosticsNamespace
+) -> DiagnosticLookupResult:
+    """The normal service's exact typed outcome law, minus the live
+    retention cutoff (the copy is the bounded universe)."""
+    if not rows:
+        return DiagnosticLookupResult(
+            outcome=DiagnosticLookupOutcome.NOT_FOUND, namespace=namespace
+        )
+    if len(rows) == 1:
+        return DiagnosticLookupResult(
+            outcome=DiagnosticLookupOutcome.FOUND,
+            namespace=namespace,
+            record=rows[0],
+            match_count=total,
+        )
+    candidates = tuple(
+        DiagnosticDisambiguationCandidate(
+            gateway_request_id=row.gateway_request_id,
+            occurred_at=row.occurred_at,
+            matched_namespace="gateway"
+            if row.gateway_request_id == lookup
+            else "client",
+        )
+        for row in rows[:DIAGNOSTIC_LOOKUP_BOUND]
+    )
+    return DiagnosticLookupResult(
+        outcome=DiagnosticLookupOutcome.AMBIGUOUS,
+        namespace=namespace,
+        match_count=total,
+        candidates=candidates,
+        overflow=total > DIAGNOSTIC_LOOKUP_BOUND,
+    )
+
+
+@router.get("/diagnostics", response_class=HTMLResponse)
+async def demo_operations_diagnostics(request: Request) -> Response:
+    """224-v: the demo copy-backed request-diagnostics page (exact
+    path, gate-admitted with its bounded optional read-only selector
+    ``lookup=<safe ID>&namespace=<any|gateway|client>``).
+
+    The page reads ONLY content-free diagnostic rows from the
+    visitor's request-local verified copy, in ONE SELECT-only
+    transaction with the independent ``current_database()`` /
+    ``transaction_read_only`` recheck: a bounded newest-first recent
+    list plus (when the selector is present) the exact safe-ID
+    lookup with the normal typed outcome law. The gate already
+    enforced the raw query law, including the pre-copy known-
+    incoming-alias refusal; the adapter re-proves the value before
+    use (a value that cannot be re-proven renders the cleared
+    not-found, never the value). Retention/recording settings are
+    NOT displayed (they were not captured in the demo projection);
+    the data is labeled frozen at copy time. Corrupt or absent copy
+    data is the fixed safe 503 - never an ambient fallback. No raw
+    capture artifact, prompt, credential or source-DB access occurs.
+    """
+    demo = getattr(request.state, "demo_admin", None)
+    if demo is None:
+        return _diagnostics_not_found()
+    # The gate enforced the closed raw query law (at most one of each
+    # exact parameter); the adapter re-proves the values before use.
+    query = dict(request.query_params.multi_items())
+    namespace_raw = query.get("namespace", "any")
+    if namespace_raw not in _DIAGNOSTICS_NAMESPACE_VALUES:
+        return _diagnostics_not_found()
+    lookup_raw = query.get("lookup", "")
+    # Unsafe grammar or a known incoming alias: the value is withheld
+    # with the field CLEARED (the normal POST's exact not-found
+    # semantics); the value never reaches HTML, a redirect or logs.
+    lookup = ""
+    if lookup_raw and not _is_unsafe_lookup_value(request, lookup_raw):
+        lookup = lookup_raw
+    try:
+        session_factory = get_sessionmaker_from_app(request)
+    except Exception:
+        return _diagnostics_unavailable()
+    try:
+        async with session_factory() as session, session.begin():
+            # Independently re-verify, INSIDE this read-only
+            # transaction, that the engine is bound to this session's
+            # exact copy and the server holds it read-only.
+            current = await session.scalar(text("SELECT current_database()"))
+            read_only = await session.scalar(text("SHOW transaction_read_only"))
+            if current != demo.target_db or read_only != "on":
+                return _diagnostics_unavailable()
+            # Frozen copy summary: the copied rows are the bounded
+            # universe (NO retention cutoff - the source deployment's
+            # retention settings were not captured in the demo
+            # projection and are never displayed as if live).
+            count, oldest, newest = (
+                await session.execute(
+                    text(
+                        "SELECT COUNT(*), MIN(occurred_at), MAX(occurred_at) "
+                        "FROM request_diagnostics"
+                    )
+                )
+            ).one()
+            recent = (
+                (
+                    await session.execute(
+                        select(RequestDiagnostic)
+                        .order_by(
+                            RequestDiagnostic.occurred_at.desc(),
+                            RequestDiagnostic.id.desc(),
+                        )
+                        .limit(_DIAGNOSTICS_RECENT_LIMIT)
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            lookup_result: DiagnosticLookupResult | None = None
+            if lookup:
+                rows, total = await RequestDiagnosticsRepository(
+                    session
+                ).lookup_retained(
+                    lookup_id=lookup,
+                    namespace=_DIAGNOSTICS_NAMESPACE_VALUES[namespace_raw],
+                    not_before=_DIAGNOSTICS_NO_CUTOFF,
+                    limit=DIAGNOSTIC_LOOKUP_BOUND + 1,
+                )
+                lookup_result = _demo_lookup_result(
+                    rows, total, lookup, _DIAGNOSTICS_NAMESPACE_VALUES[namespace_raw]
+                )
+    except Exception:  # noqa: BLE001 - corrupt/absent copy data refuses
+        return _diagnostics_unavailable()
+
+    withheld: set[str] = set()
+    facts: dict[str, str] = {}
+    if lookup_result is not None and lookup_result.record is not None:
+        # The normal page's exact output-side alias withholding.
+        withheld = _withheld_record_fields(request, lookup_result.record)
+        record = lookup_result.record
+        facts = {
+            "positions": _format_fact_map(record.positions),
+            "counts": _format_fact_map(record.counts),
+            "limits": _format_fact_map(record.limits),
+        }
+    recent_rows = []
+    for row in recent:
+        recent_rows.append(
+            {
+                "record": row,
+                "withheld": _withheld_record_fields(request, row),
+            }
+        )
+    # Ambiguous candidates: withhold any candidate whose stored
+    # gateway ID is or embeds a known incoming authentication alias
+    # BEFORE it is rendered or linked (the found/recent projections
+    # are covered by _withheld_record_fields; the typed candidate
+    # tuples are not). A withheld candidate keeps its row (the count
+    # stays honest) but shows no ID and no resolve link.
+    demo_candidates: list[dict[str, object]] = []
+    if (
+        lookup_result is not None
+        and lookup_result.outcome is DiagnosticLookupOutcome.AMBIGUOUS
+    ):
+        for candidate in lookup_result.candidates:
+            alias = _is_incoming_alias(request, candidate.gateway_request_id)
+            demo_candidates.append(
+                {
+                    "gateway_display": None
+                    if alias
+                    else candidate.gateway_request_id,
+                    "matched_namespace": candidate.matched_namespace,
+                    "occurred_at": candidate.occurred_at,
+                    "resolve_href": None
+                    if alias
+                    else (
+                        "/admin/operations/diagnostics?lookup="
+                        f"{candidate.gateway_request_id}&namespace=gateway"
+                    ),
+                }
+            )
+    response = templates.TemplateResponse(
+        request,
+        "operations/diagnostics.html",
+        {
+            "admin": demo.session_context.admin_user,
+            "csrf_token": demo.csrf_token,
+            "demo_admin": True,
+            "demo_copy": SimpleNamespace(
+                copied_records=int(count),
+                oldest_occurred_at=oldest,
+                newest_occurred_at=newest,
+            ),
+            "status": None,
+            "human_retention": "",
+            "lookup_value": lookup,
+            "lookup_namespace": namespace_raw,
+            "lookup_result": lookup_result,
+            "withheld_fields": withheld,
+            "facts": facts,
+            "picker_options": [],
+            "recent_rows": recent_rows,
+            "recent_limit": _DIAGNOSTICS_RECENT_LIMIT,
+            "demo_candidates": demo_candidates,
+            "cleanup_result": None,
+            "cleanup_batch_limit": _CLEANUP_BATCH_LIMIT,
+            "error_message": "",
         },
         status_code=200,
     )

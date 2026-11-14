@@ -874,6 +874,9 @@ def _mount_demo_admin_routers(app: FastAPI) -> None:
     from slaif_gateway.api.demo_admin_operations import (
         router as demo_admin_operations_router,
     )
+    from slaif_gateway.api.demo_admin_replay import (
+        router as demo_admin_replay_router,
+    )
     from slaif_gateway.api.admin_operations import router as admin_operations_router
     from slaif_gateway.api.admin_record_choices import (
         router as admin_record_choices_router,
@@ -916,6 +919,9 @@ def _mount_demo_admin_routers(app: FastAPI) -> None:
     # normal compatibility router (224-u).
     app.include_router(demo_admin_compatibility_router)
     app.include_router(admin_compatibility_router)
+    # Demo-specific read-only replay views win over the normal
+    # replay-maintenance router (224-v).
+    app.include_router(demo_admin_replay_router)
     app.include_router(admin_replay_maintenance_router)
     app.include_router(admin_reports_router)
 

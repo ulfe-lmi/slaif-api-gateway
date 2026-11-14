@@ -70,6 +70,11 @@ from slaif_gateway.demo_web import (
     _COPY_TARGET_DB_RE,
 )
 from slaif_gateway.services.admin_session_service import AdminSessionContext
+from slaif_gateway.services.request_diagnostics import (
+    is_known_incoming_secret_alias,
+    is_safe_diagnostic_id,
+)
+from urllib.parse import unquote
 
 # --- the fixed 224-e/224-f/224-i admission law (closed sets, never
 # input-derived) ---
@@ -194,9 +199,7 @@ ADMITTED_CATALOG_EXPORT_PATH = "/admin/operations/catalog/export-baseline"
 ADMITTED_CATALOG_JOBS_PATH = "/admin/operations/catalog/jobs/"
 # 224-t: the two exact static demo operations read pages. The index
 # REQUIRES its trailing slash; process-configuration takes NONE.
-# Both define NO query parameters (any query stays 404); every other
-# operations shape (diagnostics, compatibility, replay-maintenance,
-# subpaths) stays default-denied for later suffixes.
+# Both define NO query parameters (any query stays 404).
 ADMITTED_OPERATIONS_INDEX_PATH = "/admin/operations/"
 ADMITTED_OPERATIONS_PROCESS_CONFIG_PATH = "/admin/operations/process-configuration"
 # 224-u: the five EXACT literal branding asset endpoints (the four
@@ -223,6 +226,29 @@ ADMITTED_BRANDING_PATHS = (
 ADMITTED_COMPATIBILITY_INDEX_PATH = "/admin/operations/compatibility/"
 ADMITTED_COMPATIBILITY_PRESET_PREFIX = "/admin/operations/compatibility/preset/"
 ADMITTED_COMPATIBILITY_KEY_PREFIX = "/admin/operations/compatibility/key/"
+# 224-v: the exact read-only Operations diagnostics + replay GET
+# family. The diagnostics page takes ZERO query parameters or its one
+# bounded read-only selector (see ``_diagnostics_query_admitted``); the
+# replay index REQUIRES its trailing slash, all-active is the exact
+# literal, and key/cohort take the canonical lowercase dashed UUID
+# only - every replay path is query-free. Every near miss, alternate
+# slash, unknown subpath and any replay query stays default-denied;
+# every unsafe method (including the normal inspect/preview/apply,
+# lookup, choices and cleanup POSTs) remains the unchanged pre-body
+# quiet 204 cut.
+ADMITTED_DIAGNOSTICS_PATH = "/admin/operations/diagnostics"
+ADMITTED_REPLAY_INDEX_PATH = "/admin/operations/replay-maintenance/"
+ADMITTED_REPLAY_ALL_ACTIVE_PATH = "/admin/operations/replay-maintenance/all-active"
+ADMITTED_REPLAY_KEY_PREFIX = "/admin/operations/replay-maintenance/key/"
+ADMITTED_REPLAY_COHORT_PREFIX = "/admin/operations/replay-maintenance/cohort/"
+# 224-v diagnostics selector bound: the whole raw query is checked
+# against this small ceiling BEFORE it is split or decoded, so an
+# oversized or malformed query is refused without allocation or echo.
+# The ceiling covers the worst-case LEGITIMATE query under percent
+# encoding: "lookup=" (7) + 128 safe-ID characters each encoded as a
+# 3-byte %%XX sequence (384) + "&" (1) + "namespace=" (10) + "client"
+# percent-encoded (18) = 420 raw bytes.
+_DIAGNOSTICS_QUERY_MAX_LEN = 420
 # 224-q: the three exact key read-page GET shapes (canonical
 # lowercase dashed UUID + exact suffix, no extra path components):
 # calibration, clone and clone/receipts. Malformed/uppercase/
@@ -384,6 +410,84 @@ def _key_read_page_query_admitted(path: str, query_string: bytes) -> bool:
     return len(value) <= _KEY_RECEIPTS_OPERATION_MAX_LEN
 
 
+def _diagnostics_query_admitted(
+    query_string: bytes,
+    scope: dict,
+    accepted_prefixes: tuple[str, ...] | None,
+) -> bool:
+    """The 224-v bounded read-only selector law for the demo
+    diagnostics page.
+
+    The page defines ZERO parameters or at most ONE of each of the
+    two exact read-only selectors ``lookup=<safe diagnostic ID>`` and
+    ``namespace=<any|gateway|client>``. Unknown, duplicated or empty
+    parameters, non-ASCII parameter names, unsafe IDs,
+    out-of-vocabulary namespaces and overlong values are refused with
+    a plain default-denied 404 BEFORE session resolution, routing or
+    any echo.
+
+    Order of the law: (1) the whole RAW query is checked against the
+    small byte ceiling BEFORE it is split; (2) each parameter value
+    is percent-decoded EXACTLY ONCE (a strict single pass - invalid
+    escapes stay literal and then fail the grammar, and a decoded
+    value is never decoded again); (3) the decoded value must match
+    the existing safe diagnostic ID grammar (lookup) or the exact
+    namespace vocabulary; (4) a decoded lookup that is or embeds a
+    KNOWN incoming authentication alias is refused HERE, before the
+    session is resolved and before the copy is bound - a credential-
+    shaped value can fit the safe-ID grammar. The boundary this code
+    proves: a refused value does not reach the copy session,
+    application-rendered HTML, an application-produced redirect, or
+    any application echo or log under this process's control. An
+    upstream proxy or access log that records the raw request line
+    before the ASGI gate is outside this code's reach and is not
+    claimed.
+    """
+    if not query_string:
+        return True
+    if not isinstance(query_string, (bytes, bytearray)):
+        return False
+    if len(query_string) > _DIAGNOSTICS_QUERY_MAX_LEN:
+        return False
+    if accepted_prefixes is None:
+        # The unavailable sentinel: the alias classifier cannot be
+        # proven safe, so every nonempty selector is refused (the
+        # parameter-free page still renders its copy-backed facts).
+        return False
+    seen: set[bytes] = set()
+    for pair in bytes(query_string).split(b"&"):
+        name, _, raw_value = pair.partition(b"=")
+        if name not in (b"lookup", b"namespace") or name in seen:
+            return False
+        seen.add(name)
+        if not raw_value:
+            return False
+        # Strict single percent-decode; the name itself is NEVER
+        # decoded (it must be the exact ASCII literal).
+        try:
+            value = unquote(raw_value.decode("ascii"))
+        except UnicodeDecodeError:
+            return False
+        if name == b"lookup":
+            if not is_safe_diagnostic_id(value):
+                return False
+            # Fail closed: the admission law only runs with the raw
+            # scope and the DEMO APP'S fixed neutral accepted-prefix
+            # tuple (never the ambient global settings), and any
+            # classifier error refuses the query.
+            try:
+                alias = is_known_incoming_secret_alias(
+                    value, scope=scope, accepted_prefixes=accepted_prefixes
+                )
+            except Exception:  # noqa: BLE001 - fail closed, no echo
+                return False
+            if alias:
+                return False
+        elif value not in ("any", "gateway", "client"):
+            return False
+    return True
+
+
 @lru_cache(maxsize=1)
 def _shipped_preset_names() -> frozenset[str]:
     """The package's finite shipped preset name vocabulary (224-u).
@@ -409,9 +513,16 @@ def _is_admitted_path(path: str) -> bool:
     return _is_admitted_path_with_query(path, b"")
 
 
-def _is_admitted_path_with_query(path: str, query_string: bytes) -> bool:
+def _is_admitted_path_with_query(
+    path: str,
+    query_string: bytes,
+    diagnostics_context: tuple[dict, tuple[str, ...] | None] | None = None,
+) -> bool:
     """The closed GET admission law; the 224-q key read pages also
-    carry the bounded query law (see ``_key_read_page_query_admitted``).
+    carry the bounded query law (see ``_key_read_page_query_admitted``),
+    and the 224-v diagnostics selector takes the raw scope plus the
+    demo app's fixed neutral accepted-prefix tuple for its pre-copy
+    alias refusal.
     """
     if path in ADMITTED_DASHBOARD_PATHS or path in ADMITTED_LIST_PATHS:
         return True
@@ -460,6 +571,41 @@ def _is_admitted_path_with_query(path: str, query_string: bytes) -> bool:
         return False
     if path.startswith(ADMITTED_COMPATIBILITY_KEY_PREFIX):
         rest = path[len(ADMITTED_COMPATIBILITY_KEY_PREFIX) :]
+        # exactly ONE remaining segment, canonical lowercase UUID
+        return (
+            rest
+            and "/" not in rest
+            and _CANONICAL_UUID_RE.fullmatch(rest) is not None
+            and not query_string
+        )
+    # 224-v: the exact read-only diagnostics GET with its bounded
+    # optional selector law (the replay family is query-free).
+    if path == ADMITTED_DIAGNOSTICS_PATH:
+        # The bounded selector law runs BEFORE session resolution:
+        # a known-incoming-alias lookup is refused with the fixed
+        # 404 without ever binding the copy. The context is
+        # mandatory for a nonempty query; fail closed without it.
+        if not query_string:
+            return True
+        if diagnostics_context is None:
+            return False
+        scope, accepted_prefixes = diagnostics_context
+        return _diagnostics_query_admitted(
+            query_string, scope, accepted_prefixes
+        )
+    if path in (ADMITTED_REPLAY_INDEX_PATH, ADMITTED_REPLAY_ALL_ACTIVE_PATH):
+        return not query_string
+    if path.startswith(ADMITTED_REPLAY_KEY_PREFIX):
+        rest = path[len(ADMITTED_REPLAY_KEY_PREFIX) :]
+        # exactly ONE remaining segment, canonical lowercase UUID
+        return (
+            rest
+            and "/" not in rest
+            and _CANONICAL_UUID_RE.fullmatch(rest) is not None
+            and not query_string
+        )
+    if path.startswith(ADMITTED_REPLAY_COHORT_PREFIX):
+        rest = path[len(ADMITTED_REPLAY_COHORT_PREFIX) :]
         # exactly ONE remaining segment, canonical lowercase UUID
         return (
             rest
@@ -603,6 +749,25 @@ class DemoAdminGate:
         self._cfg = app.state.demo_config
         self._facade = app.state.demo_facade
         self._fictional_context = _fictional_admin_context()
+        # 224-v: the diagnostics selector's alias refusal uses the
+        # DEMO APP'S fixed neutral settings (never the ambient global
+        # settings); the tuple is derived once and is fail-closed
+        # (an unusable value tuple still classifies credential
+        # shapes and incoming request credentials).
+        try:
+            _prefixes = app.state.settings.get_gateway_key_accepted_prefixes()
+            self._accepted_key_prefixes: tuple[str, ...] | None = (
+                tuple(_prefixes)
+                if isinstance(_prefixes, (list, tuple))
+                and all(isinstance(item, str) for item in _prefixes)
+                else None
+            )
+        except Exception:  # noqa: BLE001 - fail closed
+            self._accepted_key_prefixes = None
+        # ``None`` is the explicit unavailable sentinel: a derivation
+        # failure is NEVER conflated with a legitimately empty
+        # configured prefix set, and a nonempty diagnostics selector
+        # is denied (fixed 404) while it is unavailable.
 
     def __getattr__(self, name: str):
         return getattr(self._app, name)
@@ -673,7 +838,11 @@ class DemoAdminGate:
             # appear, bounded in raw length; everything else 404s
             # before session resolution or routing.
             if _is_admitted_path_with_query(
-                path, scope.get("query_string") or b""
+                path,
+                scope.get("query_string") or b"",
+                (scope, self._accepted_key_prefixes)
+                if path == ADMITTED_DIAGNOSTICS_PATH
+                else None,
             ):
                 projection = await self._resolve_session(scope)
                 if path in ADMITTED_BRANDING_PATHS:

@@ -6189,14 +6189,18 @@ def test_t_gate_admission_exact_paths():
                 "/admin/operations",            # missing required slash
                 "/admin/operations//",          # double slash
                 "/admin/operations/x",          # unknown first segment
-                "/admin/operations/diagnostics",
+                # 224-v: /admin/operations/diagnostics and
+                # /admin/operations/replay-maintenance/ are now
+                # ADMITTED (proven in the 224-v tests); only these
+                # deeper/alternate shapes stay denied here.
+                "/admin/operations/diagnostics/",
                 "/admin/operations/diagnostics/lookup",
                 # 224-u: /admin/operations/compatibility/ is now
                 # ADMITTED (proven in the 224-u tests); its near
                 # misses stay denied there.
                 "/admin/operations/compatibility",
                 "/admin/operations/compatibility//",
-                "/admin/operations/replay-maintenance/",
+                "/admin/operations/replay-maintenance",
                 "/admin/email-operations/smtp-test",
                 T_PC_URL + "/",                 # trailing slash
                 T_PC_URL + "x",                 # prefix sibling
@@ -6272,10 +6276,13 @@ def test_t_index_page_from_verified_copy(monkeypatch):
             # Admitted read pages are linked...
             assert 'href="/admin/operations/process-configuration"' in r.text
             assert 'href="/admin/operations/catalog/"' in r.text
+            # 224-v: diagnostics and replay maintenance are admitted
+            # and linked in the demo branch...
+            assert 'href="/admin/operations/diagnostics"' in r.text
+            assert 'href="/admin/operations/replay-maintenance/"' in r.text
             # ...and the not-yet-admitted pages are marked unavailable
             # WITHOUT a usable link.
             assert "unavailable in this demo" in r.text
-            assert 'href="/admin/operations/diagnostics"' not in r.text
             # 224-u: the compatibility page is now admitted and
             # linked (with the illustrative-operations note).
             assert 'href="/admin/operations/compatibility/"' in r.text
@@ -7453,5 +7460,853 @@ def test_u_compatibility_recheck_refusals_and_no_session(monkeypatch):
                 r = await client.get(p)
                 assert r.status_code == 303, p
                 assert r.headers["location"] == "/fakeadmin/login"
+
+    asyncio.run(run())
+
+
+# --- 224-v: copy-backed request diagnostics + replay maintenance reads ---
+
+from types import SimpleNamespace as _v_NS  # noqa: E402
+
+from slaif_gateway.api import demo_admin_operations as _v_dao  # noqa: E402
+from slaif_gateway.api import demo_admin_replay as _v_dar  # noqa: E402
+
+V_DIAG_URL = "/admin/operations/diagnostics"
+V_REPLAY_IDX_URL = "/admin/operations/replay-maintenance/"
+V_REPLAY_ALL_URL = "/admin/operations/replay-maintenance/all-active"
+_V_KEY_UUID = "a2222222-b333-4c44-8555-6666666666aa"
+_V_COHORT_UUID = "33333333-4444-4555-8666-777777777777"
+_V_ROUTE_UUID = "44444444-5555-4666-8777-888888888888"
+_V_SAFE_ID = "gw:abc-123"      # safe grammar (colon included)
+_V_ALIAS_ID = "sk-slaif-unit-v1"  # accepted-prefix credential shape
+
+
+class _VResult:
+    def __init__(self, rows) -> None:
+        self._rows = list(rows)
+
+    def first(self):
+        return self._rows[0] if self._rows else None
+
+    def all(self):
+        return list(self._rows)
+
+    def one(self):
+        assert len(self._rows) == 1
+        return self._rows[0]
+
+    def scalars(self):
+        return self
+
+
+def _v_raw_get(app):
+    async def _raw_get(query: bytes):
+        """One raw ASGI GET of the diagnostics path: ``query`` is the
+        EXACT ASGI query_string bytes (i.e. the bytes AFTER the
+        ``?``; the raw byte law, httpx would normalize)."""
+        scope = {
+            "type": "http",
+            "asgi": {"version": "3.0"},
+            "http_version": "1.1",
+            "method": "GET",
+            "scheme": "https",
+            "path": V_DIAG_URL,
+            "raw_path": V_DIAG_URL.encode("ascii"),
+            "query_string": query,
+            "headers": [
+                (b"host", b"demo.test"),
+                (b"cookie", b"slaif_demo_session=unit-token-1"),
+            ],
+            "client": ("127.0.0.1", 12345),
+            "server": ("demo.test", 443),
+            "app": app,
+            "state": {},
+        }
+        status = None
+        chunks: list[bytes] = []
+
+        async def _receive():
+            return {"type": "http.request", "body": b"", "more_body": False}
+
+        async def _send(message):
+            nonlocal status
+            if message["type"] == "http.response.start":
+                status = message["status"]
+            elif message["type"] == "http.response.body":
+                chunks.append(message.get("body") or b"")
+
+        await app(scope, _receive, _send)
+        return status, b"".join(chunks)
+
+    return _raw_get
+
+
+def _v_diag_record(gwid: str, *, client_id: str | None = "cl-abc123"):
+    from datetime import UTC as _V_UTC
+    from datetime import datetime as _V_dt
+
+    now = _V_dt(2026, 1, 5, tzinfo=_V_UTC)
+    return _v_NS(
+        id=uuid.uuid4(),
+        gateway_request_id=gwid,
+        client_request_id=client_id,
+        client_id_unavailable_reason=None,
+        method="POST",
+        endpoint_template="/v1/chat/completions",
+        occurred_at=now,
+        http_status=429,
+        stream_outcome="http_rejection",
+        source="quota",
+        reason_code="rate_limit",
+        error_code="rate_limit_exceeded",
+        error_param="requests",
+        positions={"line": 3},
+        counts={"count": 5},
+        limits={"max_input_tokens": 1000},
+        gateway_key_id=uuid.uuid4(),
+        route_id=uuid.uuid4(),
+        route_pattern="/v1/chat/completions",
+        deployment_revision="rev-1",
+        estimated_input_tokens=120,
+        output_allowance_tokens=None,
+        context_window_tokens=None,
+        replay_error_code=None,
+        recorded_at=now,
+    )
+
+
+class _VDiagFakeSession:
+    """One fake request-local copy session for the 224-v diagnostics
+    page: the recheck scalars, the COUNT/MIN/MAX SQL, and the ORM
+    recent select (identified by table name in the compiled clause)."""
+
+    def __init__(self, count_row, recent_rows, db=COPY_OK, ro="on") -> None:
+        self.count_row = count_row
+        self.recent_rows = recent_rows
+        self.db = db
+        self.ro = ro
+        self.executed: list[tuple[str, dict]] = []
+
+    def begin(self):
+        return self
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *a):
+        return False
+
+    async def scalar(self, clause):
+        text = str(clause)
+        if "current_database" in text:
+            return self.db
+        return self.ro
+
+    async def execute(self, clause, params=None):
+        text = str(clause)
+        self.executed.append((text, dict(params or {})))
+        if "COUNT(*)" in text and "request_diagnostics" in text:
+            return _VResult([self.count_row])
+        if "FROM request_diagnostics" in text:
+            return _VResult(self.recent_rows)
+        return _VResult([])
+
+
+def _v_patch_diag_lookup(monkeypatch, rows, total, calls) -> None:
+    class _VLookupRepo:
+        def __init__(self, _session) -> None:
+            pass
+
+        async def lookup_retained(
+            self, *, lookup_id, namespace, not_before, limit
+        ):
+            calls.append(
+                (lookup_id, namespace, not_before, limit)
+            )
+            return (tuple(rows), total)
+
+    monkeypatch.setattr(_v_dao, "RequestDiagnosticsRepository", _VLookupRepo)
+
+
+def _v_diag_app(fake, monkeypatch, session):
+    fake.worker_target_db = COPY_OK
+    _preflight_case(monkeypatch, COPY_OK, "on")
+    monkeypatch.setattr(
+        _v_dao, "get_sessionmaker_from_app", lambda _req: lambda: session
+    )
+    return _app(fake), fake
+
+
+# ---------------------------------------------------------------------------
+
+
+def test_v_gate_admission_exact_paths():
+    """224-v gate: the exact diagnostics + replay-maintenance GET
+    family is admitted (entry redirect, no session); every near miss,
+    alternate slash shape, non-canonical UUID and ANY query on the
+    replay family stays default-denied 404."""
+    async def run():
+        app = _app(FakeFacade())
+        async with _client(app) as client:
+            for p in (
+                V_DIAG_URL,
+                V_REPLAY_IDX_URL,
+                V_REPLAY_ALL_URL,
+                f"/admin/operations/replay-maintenance/key/{_V_KEY_UUID}",
+                f"/admin/operations/replay-maintenance/cohort/{_V_COHORT_UUID}",
+            ):
+                r = await client.get(p)
+                assert r.status_code == 303, p
+                assert r.headers["location"] == "/fakeadmin/login"
+            for p in (
+                V_DIAG_URL + "/",                  # trailing slash
+                V_DIAG_URL + "/lookup",            # deeper
+                "/admin/operations/diagnostic",    # misspelled
+                V_REPLAY_IDX_URL.rstrip("/"),      # missing slash
+                V_REPLAY_IDX_URL + "x",            # prefix sibling
+                V_REPLAY_ALL_URL + "/",            # trailing slash
+                "/admin/operations/replay-maintenance/key/",
+                f"/admin/operations/replay-maintenance/key/{_V_KEY_UUID}/",
+                f"/admin/operations/replay-maintenance/key/{_V_KEY_UUID}x",
+                "/admin/operations/replay-maintenance/key/not-a-uuid",
+                f"/admin/operations/replay-maintenance/key/{_V_KEY_UUID.upper()}",
+                f"/admin/operations/replay-maintenance/cohort/{_V_COHORT_UUID}/deep",
+                # the replay family is query-free
+                V_REPLAY_IDX_URL + "?x=1",
+                V_REPLAY_ALL_URL + "?x=1",
+                f"/admin/operations/replay-maintenance/key/{_V_KEY_UUID}?x=1",
+            ):
+                r = await client.get(p)
+                assert r.status_code == 404, p
+
+    asyncio.run(run())
+
+
+def test_v_gate_diagnostics_query_law(monkeypatch):
+    """224-v gate: the diagnostics selector's bounded raw query law,
+    through ASGI. Refused selectors (unknown/duplicate/empty/
+    malformed/over-raw-ceiling/known-alias) are the gate's fixed 404
+    BEFORE the copy session exists; admitted selectors reach the REAL
+    handler (the fake copy session renders the page)."""
+    async def run():
+        fake = FakeFacade()
+        fake.worker_target_db = COPY_OK
+        _preflight_case(monkeypatch, COPY_OK, "on")
+
+        def _v_boom(_req):
+            raise AssertionError("gate-refused query reached the handler")
+
+        monkeypatch.setattr(_v_dao, "get_sessionmaker_from_app", _v_boom)
+        app = _app(fake)
+        _raw_get = _v_raw_get(app)
+        async with _client(app) as client:
+            await _verified_session_client(fake, client)
+            for q in (
+                "?x=1",                               # unknown param
+                "?lookup=" + _V_SAFE_ID + "&x=1",     # extra param
+                "?namespace=any&namespace=gateway",   # duplicate
+                "?lookup=",                           # empty value
+                "?namespace=other",                   # out of vocabulary
+                "?lookup=bad+id",                     # unsafe grammar (+)
+                "?lookup=" + _V_ALIAS_ID,             # known alias
+            ):
+                r = await client.get(V_DIAG_URL + q)
+                assert r.status_code == 404, q
+            # raw-byte cases: an oversized WHOLE query (beyond the
+            # 420-byte ceiling, refused before any split/parse), an
+            # invalid percent escape (stays literal, fails grammar),
+            # and the alias in exact raw form (refused pre-copy).
+            # (ASGI ``query_string`` carries the bytes AFTER the ``?``;
+            # the helper takes the exact bytes.)
+            for raw in (
+                b"lookup=" + b"a" * 500,
+                b"lookup=%zz",
+                b"lookup=" + _V_ALIAS_ID.encode("ascii"),
+            ):
+                status, _body = await _raw_get(raw)
+                assert status == 404, raw[:40]
+            # Admitted selectors: the REAL handler renders. The
+            # percent-encoded colon decodes exactly once and is
+            # admitted; the re-proven value pre-fills the GET form.
+            session = _VDiagFakeSession((0, None, None), [])
+            calls: list = []
+            _v_patch_diag_lookup(monkeypatch, [], 0, calls)
+            monkeypatch.setattr(
+                _v_dao,
+                "get_sessionmaker_from_app",
+                lambda _req: lambda: session,
+            )
+            status, body = await _raw_get(
+                b"lookup=gw%3Aabc-123&namespace=gateway"
+            )
+            assert status == 200, body[:200]
+            text = body.decode()
+            assert "No retained record matches" in text
+            assert 'value="gw:abc-123"' in text
+            r = await client.get(V_DIAG_URL, params={"namespace": "client"})
+            assert r.status_code == 200
+            assert "No copied diagnostic records." in r.text
+            assert calls and calls[0][0] == _V_SAFE_ID
+
+    asyncio.run(run())
+
+
+def test_v_unsafe_methods_quiet_noop():
+    """224-v gate: every unsafe method on the five admitted paths is
+    the pre-body quiet 204 cut (body never parsed); without a session
+    the uniform 404."""
+    async def run():
+        app = _app(FakeFacade())
+        paths = (
+            V_DIAG_URL,
+            V_REPLAY_IDX_URL,
+            V_REPLAY_ALL_URL,
+            f"/admin/operations/replay-maintenance/key/{_V_KEY_UUID}",
+            f"/admin/operations/replay-maintenance/cohort/{_V_COHORT_UUID}",
+        )
+        async with _client(app) as client:
+            _session_cookie(client)
+            for method in ("POST", "PUT", "PATCH", "DELETE"):
+                for p in paths:
+                    r = await client.request(
+                        method,
+                        p,
+                        content=b"x" * 200_000,
+                        headers={"content-type": "text/garbage"},
+                    )
+                    assert r.status_code == 204, (method, p)
+                    assert r.content == b""
+        async with _client(app) as anon:
+            for p in paths:
+                r = await anon.post(
+                    p,
+                    content=b"y" * 200_000,
+                    headers={"content-type": "text/garbage"},
+                )
+                assert r.status_code == 404, p
+
+    asyncio.run(run())
+
+
+def test_v_diagnostics_positive_found(monkeypatch):
+    """224-v: the copy-backed diagnostics page renders the frozen
+    summary, the bounded recent list with exact safe-ID links, and the
+    FOUND lookup rendering - in ONE rechecked read transaction."""
+    async def run():
+        from datetime import UTC as _V_UTC
+        from datetime import datetime as _V_dt
+
+        rec1 = _v_diag_record(_V_SAFE_ID)
+        rec2 = _v_diag_record("gw-999", client_id=None)
+        session = _VDiagFakeSession(
+            (2, _V_dt(2026, 1, 4, tzinfo=_V_UTC), _V_dt(2026, 1, 5, tzinfo=_V_UTC)),
+            [rec1, rec2],
+        )
+        calls: list = []
+        _v_patch_diag_lookup(monkeypatch, [rec1], 1, calls)
+        fake = FakeFacade()
+        app, _ = _v_diag_app(fake, monkeypatch, session)
+        async with _client(app) as client:
+            await _verified_session_client(fake, client)
+            # no selector: the frozen summary + recent list only.
+            r = await client.get(V_DIAG_URL)
+            assert r.status_code == 200
+            assert r.headers["cache-control"] == "private, no-store"
+            assert "FROZEN copied content-free" in r.text
+            assert "not recorded in this demo snapshot" in r.text
+            assert "lookup=gw:abc-123&amp;namespace=any" in r.text
+            assert "gw-999" in r.text
+            assert "No retained record matches" not in r.text
+            # exact selector: the FOUND typed rendering.
+            r = await client.get(V_DIAG_URL, params={"lookup": _V_SAFE_ID})
+            assert r.status_code == 200
+            assert f"<code>{_V_SAFE_ID}</code>" in r.text
+            assert "rate_limit_exceeded" in r.text
+            assert "requests" in r.text
+            assert calls and calls[0][0] == _V_SAFE_ID
+            # ONE transaction: recheck scalars + count SQL + recent
+            # select per request (the lookup is repository-bound).
+            sqls = [t for t, _p in session.executed if "COUNT(*)" in t]
+            assert len(sqls) == 2
+
+    asyncio.run(run())
+
+
+def test_v_diagnostics_alias_candidate_withheld(monkeypatch):
+    """224-v: an AMBIGUOUS lookup withholds a candidate whose stored
+    gateway ID is a known incoming alias - the row stays (honest
+    count) but the ID and the resolve link never render."""
+    async def run():
+        rec_alias = _v_diag_record(_V_ALIAS_ID)
+        rec_plain = _v_diag_record("gw-plain-1")
+        session = _VDiagFakeSession((2, None, None), [rec_plain])
+        calls: list = []
+        _v_patch_diag_lookup(monkeypatch, [rec_alias, rec_plain], 2, calls)
+        fake = FakeFacade()
+        app, _ = _v_diag_app(fake, monkeypatch, session)
+        async with _client(app) as client:
+            await _verified_session_client(fake, client)
+            r = await client.get(V_DIAG_URL, params={"lookup": "gw-ambig"})
+            assert r.status_code == 200
+            assert _V_ALIAS_ID not in r.text
+            assert "gw-plain-1" in r.text
+            assert "Resolve in gateway" in r.text
+            assert "unavailable (known incoming value withheld)" in r.text
+            assert "2 retained row(s) match" in r.text
+
+    asyncio.run(run())
+
+
+def test_v_diagnostics_preflight_mismatch_503(monkeypatch):
+    """224-v: a present but wrong-bound (or writable) copy is the
+    fixed safe 503 - the count SQL is never issued."""
+    async def run():
+        for db, ro in (("some_other_db", "on"), (COPY_OK, "off")):
+            session = _VDiagFakeSession((1, None, None), [], db=db, ro=ro)
+            fake = FakeFacade()
+            app, _ = _v_diag_app(fake, monkeypatch, session)
+            async with _client(app) as client:
+                await _verified_session_client(fake, client)
+                r = await client.get(V_DIAG_URL)
+                assert r.status_code == 503, (db, ro)
+                assert COPY_OK not in r.text
+                sqls = [t for t, _p in session.executed if "COUNT(*)" in t]
+                assert sqls == []
+
+    asyncio.run(run())
+
+
+# ---------------------------------------------------------------------------
+# 224-v: replay maintenance fakes + tests
+# ---------------------------------------------------------------------------
+
+
+def _v_ttl_body(ttl: int) -> bytes:
+    """A valid worker-captured process-config display document carrying
+    the given TTL (the 224-t canonical body law)."""
+    return _t_canonical_body(CODEX_REPLAY_REFERENCE_TTL_SECONDS=ttl)
+
+
+class _VReplayFakeSession:
+    """One fake request-local copy session for the 224-v replay views:
+    the recheck scalars, the process-config TTL metadata + bounded
+    body statements (224-t capture law), the kind-count GROUP BY and
+    the bounded recent SELECT (rows carry ``_mapping``)."""
+
+    def __init__(
+        self,
+        ttl_meta,
+        ttl_body,
+        kind_rows,
+        recent_rows,
+        db=COPY_OK,
+        ro="on",
+    ) -> None:
+        self.ttl_meta = ttl_meta  # tuple or None (absent leaf)
+        self.ttl_body = ttl_body  # bytes or None
+        self.kind_rows = kind_rows
+        self.recent_rows = recent_rows
+        self.db = db
+        self.ro = ro
+        self.executed: list[tuple[str, dict]] = []
+
+    def begin(self):
+        return self
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *a):
+        return False
+
+    async def scalar(self, clause):
+        text = str(clause)
+        if "current_database" in text:
+            return self.db
+        return self.ro
+
+    async def execute(self, clause, params=None):
+        text = str(clause)
+        self.executed.append((text, dict(params or {})))
+        if "octet_length(body) AS actual_bytes" in text:
+            return _VResult(
+                [self.ttl_meta] if self.ttl_meta is not None else []
+            )
+        if text.lstrip().startswith("SELECT body"):
+            if self.ttl_body is None:
+                return _VResult([])
+            return _VResult([(self.ttl_body,)])
+        if "GROUP BY item_kind" in text:
+            return _VResult(list(self.kind_rows))
+        if "FROM codex_replay_references" in text:
+            return _VResult(list(self.recent_rows))
+        return _VResult([])
+
+
+def _v_mrow(mapping: dict):
+    class _Row:
+        def __init__(self, m: dict) -> None:
+            self._mapping = dict(m)
+
+    return _Row(mapping)
+
+
+def _v_patch_replay_repos(
+    monkeypatch,
+    *,
+    keys,
+    totals,
+    per_key,
+    groups,
+    groups_total,
+    key_by_id=None,
+    cohort_by_id=None,
+) -> None:
+    key_by_id = dict(key_by_id or {})
+    cohort_by_id = dict(cohort_by_id or {})
+
+    class _VKeysRepo:
+        def __init__(self, _session) -> None:
+            pass
+
+        async def get_gateway_key_by_id(self, key_id):
+            return key_by_id.get(key_id)
+
+    class _VCohortsRepo:
+        def __init__(self, _session) -> None:
+            pass
+
+        async def get_cohort_by_id(self, cohort_id):
+            return cohort_by_id.get(cohort_id)
+
+    class _VReplayRepo:
+        def __init__(self, _session) -> None:
+            pass
+
+        async def list_maintenance_key_states(
+            self, *, key_id, cohort_id, all_active, limit
+        ):
+            return list(keys)
+
+        async def inspect_reference_aggregates(
+            self, *, key_ids, created_from, created_until, now
+        ):
+            return totals
+
+        async def inspect_reference_per_key(
+            self, *, key_ids, created_from, created_until, now
+        ):
+            return list(per_key)
+
+        async def inspect_reference_route_groups(
+            self, *, key_ids, created_from, created_until, limit
+        ):
+            return (list(groups), groups_total)
+
+    monkeypatch.setattr(_v_dar, "GatewayKeysRepository", _VKeysRepo)
+    monkeypatch.setattr(_v_dar, "CohortsRepository", _VCohortsRepo)
+    monkeypatch.setattr(
+        _v_dar, "CodexReplayReferencesRepository", _VReplayRepo
+    )
+
+
+def _v_replay_app(fake, monkeypatch, session):
+    fake.worker_target_db = COPY_OK
+    _preflight_case(monkeypatch, COPY_OK, "on")
+    monkeypatch.setattr(
+        _v_dar, "get_sessionmaker_from_app", lambda _req: lambda: session
+    )
+    return _app(fake), fake
+
+
+def test_v_replay_index_positive_ttl(monkeypatch):
+    """224-v: the replay index renders the demo banner, the exact
+    scope links, and the worker-captured TTL (worker-observed label,
+    never the demo process's own settings)."""
+    async def run():
+        body = _v_ttl_body(3600)
+        session = _VReplayFakeSession(_t_meta_row(body), body, [], [])
+        _v_patch_replay_repos(
+            monkeypatch,
+            keys=[],
+            totals=_v_NS(
+                references=0,
+                active_references=0,
+                created_min=None,
+                created_max=None,
+                expiry_min=None,
+                expiry_max=None,
+            ),
+            per_key=[],
+            groups=[],
+            groups_total=0,
+        )
+        fake = FakeFacade()
+        app, _ = _v_replay_app(fake, monkeypatch, session)
+        async with _client(app) as client:
+            await _verified_session_client(fake, client)
+            r = await client.get(V_REPLAY_IDX_URL)
+            assert r.status_code == 200
+            assert r.headers["cache-control"] == "private, no-store"
+            assert "NO effect in this demo" in r.text
+            assert "HMAC maintenance eligibility is NOT shown" in r.text
+            assert (
+                'href="/admin/operations/replay-maintenance/all-active"'
+                in r.text
+            )
+            assert "3,600 seconds" in r.text
+            assert "worker-observed at copy" in r.text
+            # the demo process's own dummy default must never show.
+            assert "configured default (0" not in r.text
+            assert COPY_OK not in r.text
+
+    asyncio.run(run())
+
+
+def test_v_replay_scope_key_positive(monkeypatch):
+    """224-v: the one-key scope renders the copy-backed summary
+    (totals, per-key, groups, bounded safe recent rows, TTL) with the
+    visible no-op inspect/preview forms."""
+    async def run():
+        from datetime import UTC as _V_UTC
+        from datetime import datetime as _V_dt
+
+        key_id = uuid.UUID(_V_KEY_UUID)
+        route_id = uuid.UUID(_V_ROUTE_UUID)
+        cmin = _V_dt(2026, 1, 1, tzinfo=_V_UTC)
+        cmax = _V_dt(2026, 1, 3, tzinfo=_V_UTC)
+        emax = _V_dt(2026, 12, 31, tzinfo=_V_UTC)
+        body = _v_ttl_body(3600)
+        session = _VReplayFakeSession(
+            _t_meta_row(body),
+            body,
+            [("message", 3)],
+            [
+                _v_mrow(
+                    {
+                        "gateway_key_id": key_id,
+                        "item_kind": "message",
+                        "provider": "openai",
+                        "upstream_model": "gpt-demo",
+                        "tool_namespace": None,
+                        "tool_name": None,
+                        "created_at": cmax,
+                        "expires_at": emax,
+                    }
+                )
+            ],
+        )
+        _v_patch_replay_repos(
+            monkeypatch,
+            keys=[_v_NS(id=key_id, status="active")],
+            totals=_v_NS(
+                references=3,
+                active_references=2,
+                created_min=cmin,
+                created_max=cmax,
+                expiry_min=cmin,
+                expiry_max=emax,
+            ),
+            per_key=[(key_id, 3, 2, cmin, cmax, cmin, emax)],
+            groups=[(route_id, "gpt-demo", 3)],
+            groups_total=1,
+            key_by_id={key_id: _v_NS(id=key_id, status="active")},
+        )
+        fake = FakeFacade()
+        app, _ = _v_replay_app(fake, monkeypatch, session)
+        async with _client(app) as client:
+            await _verified_session_client(fake, client)
+            r = await client.get(
+                f"/admin/operations/replay-maintenance/key/{_V_KEY_UUID}"
+            )
+            assert r.status_code == 200
+            assert r.headers["cache-control"] == "private, no-store"
+            assert "NO effect in this demo" in r.text
+            # copy-backed totals (view-time split of copied expiries).
+            assert "3 (active 2, expired 1)" in r.text
+            assert "worker-observed at copy time" in r.text
+            assert "3,600 seconds" in r.text
+            # per-key + group safe links.
+            assert f'href="/admin/keys/{_V_KEY_UUID}"' in r.text
+            assert f'href="/admin/routes/{_V_ROUTE_UUID}"' in r.text
+            assert "gpt-demo" in r.text
+            # bounded recent rows: safe metadata only.
+            assert "openai" in r.text
+            assert "no HMAC digests" in r.text
+            # the visible no-op forms stay on the page.
+            assert 'action="/admin/operations/replay-maintenance/inspect"' in r.text
+            assert 'action="/admin/operations/replay-maintenance/preview"' in r.text
+            assert "quiet" in r.text
+            # the bounded recent SELECT was issued with its bound
+            # parameter (no unbounded transfer).
+            recent_sql = [
+                (t, p)
+                for t, p in session.executed
+                if "FROM codex_replay_references" in t and "LIMIT" in t
+            ]
+            assert len(recent_sql) == 1
+            assert recent_sql[0][1]["limit"] == 100
+            assert COPY_OK not in r.text
+
+    asyncio.run(run())
+
+
+def test_v_replay_scope_oversize_and_missing(monkeypatch):
+    """224-v: an oversize explicit scope refuses without truncating
+    (the bound is stated), and a key absent from the copy is 404."""
+    async def run():
+        body = _v_ttl_body(3600)
+        session = _VReplayFakeSession(_t_meta_row(body), body, [], [])
+        _v_patch_replay_repos(
+            monkeypatch,
+            keys=[_v_NS(id=uuid.uuid4(), status="active") for _ in range(1001)],
+            totals=None,
+            per_key=[],
+            groups=[],
+            groups_total=0,
+        )
+        fake = FakeFacade()
+        app, _ = _v_replay_app(fake, monkeypatch, session)
+        async with _client(app) as client:
+            await _verified_session_client(fake, client)
+            r = await client.get(V_REPLAY_ALL_URL)
+            assert r.status_code == 200
+            assert "Scope too large to display" in r.text
+            assert "1,001 copied keys exceed the 1,000-key bound" in r.text
+            # no reference rows were read for the refused scope.
+            ref_sql = [
+                t
+                for t, _p in session.executed
+                if "FROM codex_replay_references" in t
+            ]
+            assert ref_sql == []
+
+        # A canonical key that is NOT in the copy: fixed 404.
+        missing = uuid.uuid4()
+        session2 = _VReplayFakeSession(_t_meta_row(body), body, [], [])
+        _v_patch_replay_repos(
+            monkeypatch,
+            keys=[],
+            totals=_v_NS(
+                references=0,
+                active_references=0,
+                created_min=None,
+                created_max=None,
+                expiry_min=None,
+                expiry_max=None,
+            ),
+            per_key=[],
+            groups=[],
+            groups_total=0,
+        )
+        app2, fake2 = _v_replay_app(FakeFacade(), monkeypatch, session2)
+        async with _client(app2) as client2:
+            await _verified_session_client(fake2, client2)
+            r = await client2.get(
+                f"/admin/operations/replay-maintenance/key/{missing}"
+            )
+            assert r.status_code == 404
+
+    asyncio.run(run())
+
+
+def test_v_replay_alias_scope_refusal_400(monkeypatch):
+    """224-v: a scope ID equal to an incoming credential of THIS
+    request (here the Authorization bearer value) is refused 400 by
+    the handler - the fixed refusal, never the value."""
+    async def run():
+        body = _v_ttl_body(3600)
+        session = _VReplayFakeSession(_t_meta_row(body), body, [], [])
+        _v_patch_replay_repos(
+            monkeypatch,
+            keys=[],
+            totals=None,
+            per_key=[],
+            groups=[],
+            groups_total=0,
+        )
+        fake = FakeFacade()
+        app, _ = _v_replay_app(fake, monkeypatch, session)
+        async with _client(app) as client:
+            await _verified_session_client(fake, client)
+            r = await client.get(
+                f"/admin/operations/replay-maintenance/key/{_V_KEY_UUID}",
+                headers={"authorization": f"Bearer {_V_KEY_UUID}"},
+            )
+            assert r.status_code == 400
+            assert _V_KEY_UUID not in r.text
+            assert "known incoming authentication value" in r.text
+            assert COPY_OK not in r.text
+
+    asyncio.run(run())
+
+
+def test_v_replay_preflight_mismatch_503(monkeypatch):
+    """224-v: a present but wrong-bound (or writable) copy is the
+    fixed safe 503 on every replay GET - no summary SQL is issued."""
+    async def run():
+        for db, ro in (("some_other_db", "on"), (COPY_OK, "off")):
+            body = _v_ttl_body(3600)
+            session = _VReplayFakeSession(
+                _t_meta_row(body), body, [], [], db=db, ro=ro
+            )
+            _v_patch_replay_repos(
+                monkeypatch,
+                keys=[],
+                totals=None,
+                per_key=[],
+                groups=[],
+                groups_total=0,
+            )
+            fake = FakeFacade()
+            app, _ = _v_replay_app(fake, monkeypatch, session)
+            async with _client(app) as client:
+                await _verified_session_client(fake, client)
+                for p in (
+                    V_REPLAY_IDX_URL,
+                    f"/admin/operations/replay-maintenance/key/{_V_KEY_UUID}",
+                ):
+                    r = await client.get(p)
+                    assert r.status_code == 503, (db, ro, p)
+                    assert COPY_OK not in r.text
+            ref_sql = [
+                t
+                for t, _p in session.executed
+                if "FROM codex_replay_references" in t
+                or "demo_display.leaves" in t
+            ]
+            assert ref_sql == []
+
+    asyncio.run(run())
+
+
+def test_v_replay_ttl_unavailable_labeled(monkeypatch):
+    """224-v: an absent process-config leaf labels the TTL
+    unavailable - the page still renders and never shows the demo
+    process's own settings value."""
+    async def run():
+        session = _VReplayFakeSession(None, None, [], [])
+        _v_patch_replay_repos(
+            monkeypatch,
+            keys=[],
+            totals=_v_NS(
+                references=0,
+                active_references=0,
+                created_min=None,
+                created_max=None,
+                expiry_min=None,
+                expiry_max=None,
+            ),
+            per_key=[],
+            groups=[],
+            groups_total=0,
+        )
+        fake = FakeFacade()
+        app, _ = _v_replay_app(fake, monkeypatch, session)
+        async with _client(app) as client:
+            await _verified_session_client(fake, client)
+            r = await client.get(V_REPLAY_IDX_URL)
+            assert r.status_code == 200
+            assert "unavailable (not recorded in this demo snapshot)" in r.text
 
     asyncio.run(run())

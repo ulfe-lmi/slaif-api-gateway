@@ -3139,3 +3139,159 @@ only.
   configuration, release, deployment or merge is introduced.
 * Synthetic fixtures are not a real company installation; objective
   225's configured-file installed acceptance remains later.
+
+## Request diagnostics and replay maintenance reads (objective 224-v)
+
+The demo host admits two more exact GET families, after the same
+session/account/copy checks:
+
+* `GET /admin/operations/diagnostics` (exact path; an optional
+  bounded read-only selector `lookup=<safe diagnostic ID>` and/or
+  `namespace=<any|gateway|client>`);
+* `GET /admin/operations/replay-maintenance/` (index, REQUIRED
+  trailing slash);
+* `GET /admin/operations/replay-maintenance/all-active` (the
+  explicit every-active-key scope);
+* `GET /admin/operations/replay-maintenance/key/{uuid}`;
+* `GET /admin/operations/replay-maintenance/cohort/{uuid}`.
+
+The central demo gate admits ONLY these exact shapes (canonical
+lowercase dashed UUIDs, query-free replay family; the diagnostics
+page carries its bounded selector law) and keeps EVERY unsafe
+method - including the normal diagnostics lookup/cleanup POSTs and
+the replay inspect/preview/apply POSTs - the pre-body quiet 204
+cut. The operations index links both pages.
+
+### Diagnostics: selector law (gate, before the copy)
+
+The page defines ZERO parameters or at most ONE of each of the two
+exact read-only selectors. The law runs on the RAW query bytes
+before session resolution, routing or any echo:
+
+1. the whole raw query must fit the small byte ceiling (420 bytes,
+   the worst-case percent-encoding of a 128-character safe ID plus
+   the namespace pair) BEFORE it is split;
+2. parameter names must be the exact ASCII literals `lookup` /
+   `namespace` (names are never percent-decoded); unknown,
+   duplicated or empty parameters refuse;
+3. each value is percent-decoded EXACTLY ONCE (a strict single
+   pass: invalid escapes stay literal and then fail the grammar, a
+   decoded value is never decoded again);
+4. `lookup` must match the existing safe diagnostic ID grammar, and
+   a decoded lookup that is or embeds a KNOWN incoming
+   authentication alias is refused HERE, before the session is
+   resolved and the copy is bound - a credential-shaped value can
+   fit the safe-ID grammar. The classifier runs against the raw
+   scope with the DEMO APP'S fixed neutral accepted-prefix tuple
+   (never ambient global settings); an unavailable prefix set is
+   an explicit sentinel (a derivation failure is never conflated
+   with a legitimately empty configured set) that denies every
+   nonempty selector, and any classifier error refuses;
+5. `namespace` must be `any`, `gateway` or `client`.
+
+The boundary this code proves: a refused value does not reach the
+copy session, application-rendered HTML, an
+application-produced redirect, or any application echo or log
+under this process's control. An upstream proxy or access log
+that records the raw request line before the ASGI gate is outside
+this code's reach and is not claimed.
+
+### Diagnostics: read law (demo process, verified copy only)
+
+One request-local SELECT-only transaction on the gate-bound engine
+with the independent `current_database()` / `transaction_read_only`
+recheck. The page reads ONLY content-free diagnostic rows from the
+copy: a bounded newest-first recent list (100 rows) plus, when the
+selector is present, the exact safe-ID lookup reusing the normal
+service's bounded candidate law with NO retention cutoff - the
+source deployment's retention/recording settings were not captured
+in the demo projection and are never displayed (labeled "not
+recorded in this demo snapshot"). The adapter re-proves the
+selector before use (a value that cannot be re-proven renders the
+cleared not-found, never the value). Output-side alias withholding
+applies to the found/recent projections and to ambiguous
+candidates (a withheld candidate keeps its row - the count stays
+honest - but shows no ID and no resolve link). Corrupt or absent
+copy data is the fixed safe 503, never an ambient fallback. No raw
+capture artifact, prompt, credential or source-DB access occurs;
+every response is private no-store.
+
+### Replay maintenance: read law (demo process, verified copy only)
+
+The four GETs share one request-local SELECT-only transaction with
+the same recheck. The summary reuses ONLY the pure-read,
+copy-bound repository aggregate statements (selected-key states,
+reference aggregates, per-key aggregates, route/model groups) plus
+two small bounded SELECTs (kind counts; up to 100 newest SAFE
+metadata rows - no HMAC digests, no opaque tokens, no
+source_request_id, no usage-ledger IDs). The explicit
+every-active scope refuses the 1,000-key bound without truncating
+(a larger copied scope says exactly that and reads nothing more).
+The key/cohort scope must exist in the visitor's copy (fixed 404),
+and a scope ID equal to an incoming credential of THIS request is
+the fixed 400 refusal (the value never renders).
+
+The worker-captured `CODEX_REPLAY_REFERENCE_TTL_SECONDS` comes
+from the verified process-configuration display leaf (the 224-t
+capture law, 1 MiB bound, metadata-first, typed verifier); an
+absent or corrupt leaf is labeled "unavailable (not recorded in
+this demo snapshot)" - never the demo process's own settings and
+never a live deployment value. The demo process NEVER reads HMAC
+keys: no HMAC eligibility is shown, no preview/apply authority and
+no signed plan is implied, and the active/expired split is a plain
+comparison of the copied expiry timestamps against view time.
+
+### Visible no-op action controls (demo)
+
+Per the agreed behavior the fake admin sees EVERYTHING the real
+admin sees: the normal diagnostics cleanup form and the replay
+inspect/preview forms stay visible in demo with honest persistent
+no-op notes, and their submission is the gate's quiet pre-body
+204 - nothing is written, no plan is produced, no deletion,
+extension or audit record occurs, and no false success is
+rendered. Demo-only wording replaces the effect-promising help
+lines (deletion / plan / extension / audit) so no demo text
+promises a write; the normal-branch markup and text are
+unchanged. The demo adds the read-only GET lookup form
+(diagnostics) and the copy-backed summary sections (replay scope
+pages).
+
+### Evidence (224-v)
+
+* **Focused mocked units**: 12 new `test_v_` unit tests in
+  `tests/unit/test_demo_web.py` (gate exact-path/near-miss/
+  query-law/unsafe-204 law for both families, including the
+  percent-encoded colon selector, the invalid-escape refusal, the
+  420-byte raw ceiling and the pre-copy alias refusal proven with
+  a never-called sessionmaker; diagnostics positive FOUND render,
+  alias-candidate withholding, copy-mismatch 503 with no count
+  SQL; replay index worker-TTL render, key-scope copy-backed
+  summary with bound-parameter LIMIT proof, oversize refusal,
+  missing-key 404, alias-scope 400, TTL-unavailable labeling) -
+  plus the directly affected pre-existing unit sweep (demo web,
+  design/usability wrapper inventory 53→57, documentation
+  contract) green and Ruff clean.
+* **Byte-identity oracle**: the four modified templates
+  (operations index, diagnostics, replay index, replay scope)
+  render byte-identical under representative NORMAL contexts
+  against the activation-commit originals (10/10 contexts), so
+  the normal admin output is unchanged.
+* **Owned PostgreSQL, two simultaneous copies**: the owned
+  two-copy fixture (disposable source + two disposable target
+  copies) proves, with TEST-ONLY target-side rows inserted into
+  copy A only through the owned target-owner connection (honest
+  label: transport proof, NOT source capture; exact-ID cleanup
+  before the invariance phase), the copy-backed diagnostics
+  recent list + FOUND lookup per copy, cross-copy lookup
+  isolation, the key-scope copy-backed summary with the
+  worker-captured TTL and the cross-copy reference isolation,
+  the gate's pre-copy alias 404 over a real copy, and the
+  near-miss/query/unsafe-method boundaries.
+* **Real Chromium**: the owned browser fixture proves the
+  operations-index links, the diagnostics page render (banner,
+  bounded recent table, visible no-op cleanup note) and the
+  replay index/all-active renders (banner, scope links, HMAC-not-
+  shown note) in the real browser context.
+* No schema migration, role, grant, configuration, release,
+  deployment or merge is introduced; the fake admin remains a
+  sanitized display surface with no write authority.

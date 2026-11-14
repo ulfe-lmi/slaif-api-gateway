@@ -326,7 +326,12 @@ def test_table_wrappers_are_labeled_and_focusable() -> None:
     # 224-m: +1 for the demo catalog run detail captured-artifacts table
     # scroll region (labeled "Captured run artifacts", role="region" and
     # tabindex="0" in demo_catalog_run_detail.html).
-    assert wrappers == 53
+    # 224-v: +4 for the demo copy-backed scroll regions: the diagnostics
+    # "Recent copied diagnostic records" table, and the replay scope
+    # "Per-key copied reference aggregates", "Route and model reference
+    # groups" and "Newest copied reference metadata rows" tables (each
+    # role="region", tabindex="0", aria-labeled).
+    assert wrappers == 57
 
 
 def test_templates_css_and_js_reference_no_external_assets() -> None:

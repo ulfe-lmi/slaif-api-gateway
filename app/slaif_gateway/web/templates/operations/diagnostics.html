@@ -20,6 +20,17 @@
     </div>
   </header>
 
+  {%- if demo_admin %}
+  <div class="admin-flash" role="status">
+    <strong>Sanitized demo snapshot display:</strong> the records below are
+    the FROZEN copied content-free failure records of this session (your
+    private copy's rows only - no live store, no capture files, no source
+    database). The lookup is read-only; retention/recording settings of
+    the source deployment were not captured and are not shown. Cleanup and
+    every other operational action have no effect in this demo.
+  </div>
+  {%- endif %}
+
   {% if error_message %}
   <div class="admin-flash admin-flash-error" role="alert">{{ error_message }}</div>
   {% endif %}
@@ -36,6 +47,19 @@
 
   <section class="action-panel" aria-labelledby="diagnostics-status-heading">
     <h2 id="diagnostics-status-heading">Status</h2>
+    {%- if demo_admin %}
+    <dl>
+      <dt>Scope</dt><dd>This session's verified copy (frozen at copy time)</dd>
+      <dt>Copied records</dt><dd title="{{ demo_copy.copied_records }}">{{ demo_copy.copied_records | num }}</dd>
+      {% if demo_copy.oldest_occurred_at is not none %}
+      <dt>Oldest copied</dt><dd title="{{ demo_copy.oldest_occurred_at.isoformat() }}">{{ demo_copy.oldest_occurred_at | utc_date_display }} ({{ demo_copy.oldest_occurred_at.isoformat() }})</dd>
+      {% endif %}
+      {% if demo_copy.newest_occurred_at is not none %}
+      <dt>Newest copied</dt><dd title="{{ demo_copy.newest_occurred_at.isoformat() }}">{{ demo_copy.newest_occurred_at | utc_date_display }} ({{ demo_copy.newest_occurred_at.isoformat() }})</dd>
+      {% endif %}
+      <dt>Retention / recording settings</dt><dd>not recorded in this demo snapshot (the source deployment's settings were not captured)</dd>
+    </dl>
+    {%- else %}
     <dl>
       <dt>Recording</dt><dd>{{ "Enabled" if status.recording_enabled else "Disabled" }}</dd>
       <dt>Retention</dt><dd title="{{ status.retention_seconds }} seconds">{{ status.retention_seconds | num }} seconds ({{ human_retention }})</dd>
@@ -52,10 +76,37 @@
       {% endif %}
       {% endif %}
     </dl>
+    {%- endif %}
   </section>
 
   <section class="action-panel" aria-labelledby="diagnostics-lookup-heading">
     <h2 id="diagnostics-lookup-heading">Look up one retained record</h2>
+    {%- if demo_admin %}
+    <p class="muted">Read-only lookup over the copied records: enter one safe
+    diagnostic ID.</p>
+    <form class="create-form" method="get" action="/admin/operations/diagnostics">
+      <div class="form-grid">
+        <label>
+          Diagnostic request ID
+          <input type="text" id="demo-lookup-id" name="lookup" value="{{ lookup_value }}"
+                 maxlength="128" autocomplete="off" required
+                 aria-label="Diagnostic request ID"
+                 placeholder="gw-&#8230; or client ID">
+        </label>
+      </div>
+      <div class="form-grid">
+        <label>
+          Namespace
+          <select name="namespace" aria-label="Lookup namespace">
+          <option value="any" {% if lookup_namespace == "any" %}selected{% endif %}>Any (gateway + client)</option>
+          <option value="gateway" {% if lookup_namespace == "gateway" %}selected{% endif %}>Gateway</option>
+          <option value="client" {% if lookup_namespace == "client" %}selected{% endif %}>Client</option>
+          </select>
+        </label>
+      </div>
+      <button type="submit">Look up (read-only)</button>
+    </form>
+    {%- endif %}
     <form class="create-form" method="post" action="/admin/operations/diagnostics/lookup">
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
       {{ record_choice("lookup_id", "diagnostic_request_id", "Diagnostic request ID", options=picker_options, selected_id=lookup_value, nojs_value=lookup_value, allow_new=true, placeholder="Select or enter a gateway (gw-…) or client ID", help="One control for selection and entry: up to 100 retained IDs for the selected namespace (newest first); selecting one fills this field without submitting. Typing searches retained IDs beyond the initial list (max 200 characters per search) or enters a new ID (max 128 characters). Values that are not safe identifiers, or that are a known incoming authentication value, are refused and are not stored or redisplayed.", help_id="lookup-id-help") }}
@@ -121,6 +172,17 @@
             </tr>
           </thead>
           <tbody>
+            {%- if demo_admin %}
+            {% for c in demo_candidates %}
+            <tr>
+              <td class="row-ordinal">{{ loop.index }}</td>
+              <td>{% if c.gateway_display is none %}<span class="muted">unavailable (known incoming value withheld)</span>{% else %}<code>{{ c.gateway_display }}</code>{% endif %}</td>
+              <td>{{ c.matched_namespace }}</td>
+              <td title="{{ c.occurred_at.isoformat() }}">{{ c.occurred_at | utc_date_display }} ({{ c.occurred_at.isoformat() }})</td>
+              <td>{% if c.resolve_href %}<a class="button-link" href="{{ c.resolve_href }}">Resolve in gateway</a>{% else %}<span class="muted">withheld</span>{% endif %}</td>
+            </tr>
+            {% endfor %}
+            {%- else %}
             {% for candidate in lookup_result.candidates %}
             <tr>
               <td class="row-ordinal">{{ loop.index }}</td>
@@ -137,6 +199,7 @@
               </td>
             </tr>
             {% endfor %}
+            {%- endif %}
             {% if not lookup_result.candidates %}
             <tr data-no-sort class="empty-state"><td colspan="5">No candidates.</td></tr>
             {% endif %}
@@ -150,27 +213,88 @@
     {% endif %}
   </section>
 
+  {%- if demo_admin %}
+  <section class="action-panel" aria-labelledby="diagnostics-recent-heading">
+    <h2 id="diagnostics-recent-heading">Recent copied records</h2>
+    <p class="muted">The {{ recent_rows | length }} newest of the {{ demo_copy.copied_records | num }} copied record(s), bounded at {{ recent_limit | num }} per page load (frozen at copy time). Each link opens the exact safe-ID lookup for that gateway ID.</p>
+    <div class="table-wrap" role="region" tabindex="0" aria-label="Recent copied diagnostic records">
+      <table data-sortable>
+        <thead>
+          <tr>
+            <th data-ordinal aria-hidden="true">#</th>
+            <th scope="col">Gateway ID</th>
+            <th scope="col">Client request ID</th>
+            <th scope="col">Method / endpoint</th>
+            <th scope="col">Occurred (UTC)</th>
+            <th scope="col">Outcome</th>
+            <th scope="col">Reason / error</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in recent_rows %}
+          <tr>
+            <td class="row-ordinal">{{ loop.index }}</td>
+            <td>
+              {% if "gateway_request_id" in row.withheld %}<span class="muted">unavailable (known incoming value withheld)</span>
+              {% else %}<a href="/admin/operations/diagnostics?lookup={{ row.record.gateway_request_id }}&amp;namespace=any"><code>{{ row.record.gateway_request_id }}</code></a>{% endif %}
+            </td>
+            <td>{% if "client_request_id" in row.withheld %}unavailable{% elif row.record.client_request_id %}<code>{{ row.record.client_request_id }}</code>{% else %}&mdash;{% endif %}</td>
+            <td>{{ row.record.method }} {% if "endpoint_template" in row.withheld %}unavailable{% else %}{{ row.record.endpoint_template or "—" }}{% endif %}</td>
+            <td title="{{ row.record.occurred_at.isoformat() }}">{{ row.record.occurred_at | utc_date_display }} ({{ row.record.occurred_at.isoformat() }})</td>
+            <td{% if row.record.stream_outcome != "http_rejection" %} class="warning-text"{% endif %}>{{ row.record.stream_outcome }}{% if row.record.http_status is not none %} / {{ row.record.http_status }}{% endif %}</td>
+            <td>{% if "reason_code" in row.withheld %}unavailable{% else %}{{ row.record.reason_code or "—" }}{% endif %} / {% if "error_code" in row.withheld %}unavailable{% else %}{{ row.record.error_code or "—" }}{% endif %}</td>
+          </tr>
+          {% endfor %}
+          {% if not recent_rows %}
+          <tr data-no-sort class="empty-state"><td colspan="7">No copied diagnostic records.</td></tr>
+          {% endif %}
+        </tbody>
+      </table>
+    </div>
+  </section>
+  {%- endif %}
+
   <section class="action-panel" aria-labelledby="diagnostics-cleanup-heading">
     <h2 id="diagnostics-cleanup-heading">Clean up expired records</h2>
+    {%- if demo_admin %}
+    <p class="muted">In this demo the cleanup form below is a quiet
+    server-side no-op: submitting it writes nothing to this snapshot.
+    Nothing is deleted and no audit entry is written.</p>
+    {%- endif %}
     <details aria-labelledby="diagnostics-cleanup-summary">
-      <summary id="diagnostics-cleanup-summary">Configure a bounded cleanup run (destructive, audited)</summary>
+      <summary id="diagnostics-cleanup-summary">Configure a bounded cleanup run ({% if demo_admin %}in this demo, submission does nothing{% else %}destructive, audited{% endif %})</summary>
+      {%- if demo_admin %}
+      <p class="muted">In normal use this deletes at most {{ cleanup_batch_limit | num }} EXPIRED records (past the retention window) and writes one audit entry with your user ID, reason, and the deleted count — in one transaction; retained records are never touched. In this demo, submitting the form does nothing: no records are deleted and no audit entry is written.</p>
+      {%- endif %}
+      {%- if not demo_admin %}
       <p class="muted">Deletes at most {{ cleanup_batch_limit | num }} EXPIRED records (past the retention window) and writes one audit entry with your user ID, reason, and the deleted count — in one transaction. Retained records are never touched.</p>
+      {%- endif %}
     <form method="post" action="/admin/operations/diagnostics/cleanup" class="create-form">
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
       <div class="form-grid">
         <label>
-          Audit reason
+          {% if demo_admin %}Reason (in this demo, not recorded){% else %}Audit reason{% endif %}
           <input type="text" id="cleanup-reason" name="reason" maxlength="512"
                  autocomplete="off" aria-describedby="cleanup-reason-help">
         </label>
       </div>
+      {%- if demo_admin %}
+      <p class="field-help" id="cleanup-reason-help">In normal use this reason is recorded in the audit log together with your user ID and the deleted count (max 512 characters). In this demo, submission does nothing, so nothing is recorded.</p>
+      {%- endif %}
+      {%- if not demo_admin %}
       <p class="field-help" id="cleanup-reason-help">Recorded in the audit log together with your user ID and the deleted count (max 512 characters).</p>
+      {%- endif %}
       <div class="checkbox-row">
         <input type="checkbox" id="cleanup-confirm" name="confirm" value="1"
                aria-describedby="cleanup-confirm-help">
         <label for="cleanup-confirm">I confirm this cleanup of expired records</label>
       </div>
+      {%- if demo_admin %}
+      <p class="field-help" id="cleanup-confirm-help">In normal use the operation is bounded: at most {{ cleanup_batch_limit | num }} expired records per run and retained records are never deleted. In this demo, submission does nothing.</p>
+      {%- endif %}
+      {%- if not demo_admin %}
       <p class="field-help" id="cleanup-confirm-help">The operation is bounded: at most {{ cleanup_batch_limit | num }} expired records per run and retained records are never deleted. If the limit is reached, another run may be needed.</p>
+      {%- endif %}
       <button type="submit">Run cleanup</button>
     </form>
     </details>

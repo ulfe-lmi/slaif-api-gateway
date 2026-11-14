@@ -1879,9 +1879,13 @@ def test_e2e_admin_gate_two_sessions_distinct_copies(
                             'href="/admin/operations/process-configuration"'
                             in r.text
                         )
-                        # Not-yet-admitted pages are marked unavailable
-                        # WITHOUT a usable link.
-                        assert 'href="/admin/operations/diagnostics"' not in r.text
+                        # 224-v: diagnostics + replay maintenance are
+                        # now admitted and linked in the demo branch.
+                        assert 'href="/admin/operations/diagnostics"' in r.text
+                        assert (
+                            'href="/admin/operations/replay-maintenance/"'
+                            in r.text
+                        )
                         # 224-u: the compatibility page is now admitted
                         # and linked (with the illustrative note).
                         assert 'href="/admin/operations/compatibility/"' in r.text
@@ -1979,12 +1983,19 @@ def test_e2e_admin_gate_two_sessions_distinct_copies(
                         for p in (
                             "/admin/operations",
                             "/admin/operations//",
-                            "/admin/operations/diagnostics",
+                            # 224-v: the exact diagnostics + replay
+                            # paths are ADMITTED (proven in the 224-v
+                            # block); only these alternate shapes and
+                            # queries stay default-denied.
+                            "/admin/operations/diagnostics/",
+                            "/admin/operations/diagnostics/lookup",
+                            "/admin/operations/replay-maintenance",
+                            "/admin/operations/replay-maintenance/?x=1",
+                            "/admin/operations/replay-maintenance/key/",
                             # 224-u: /admin/operations/compatibility/
                             # is now ADMITTED (proven in the 224-u
                             # block); its near misses are proven there.
                             "/admin/operations/compatibility",
-                            "/admin/operations/replay-maintenance/",
                             "/admin/operations/process-configuration/",
                             "/admin/operations/process-configuration?x=1",
                             "/admin/operations/?x=1",
@@ -2242,6 +2253,12 @@ def test_e2e_admin_gate_two_sessions_distinct_copies(
                             # deeper catalog path are the SAME quiet cut.
                             "/admin/operations/catalog/",
                             "/admin/operations/catalog/proposals",
+                            # 224-v: the exact diagnostics + replay
+                            # GET family is the SAME quiet cut for
+                            # every unsafe method.
+                            "/admin/operations/diagnostics",
+                            "/admin/operations/replay-maintenance/",
+                            "/admin/operations/replay-maintenance/all-active",
                             "/admin/definitely-not-a-route",
                         ):
                             r = await client.post(
@@ -2251,6 +2268,194 @@ def test_e2e_admin_gate_two_sessions_distinct_copies(
                             )
                             assert r.status_code == 204, p
                             assert r.content == b""
+
+                    # --- 224-v: diagnostics + replay over the verified
+                    # copies (worker-built, SELECT-only) ---------------
+                    # TARGET-SIDE INSERTION (honest label): the test
+                    # inserts ONE content-free request_diagnostics row
+                    # and ONE codex_replay_references row into COPY A
+                    # only, through the owned target-owner connection.
+                    # This proves REAL route/gate/reader transport
+                    # through a real worker-built copy - NOT source
+                    # capture (no worker wrote these rows), and the
+                    # rows are deleted before the invariance phase.
+                    import uuid as _v_uuid
+
+                    _v_gwid = "gw-224v-pg-" + _v_uuid.uuid4().hex[:12]
+                    _v_diag_id = _v_uuid.uuid4()
+                    _v_ref_id = _v_uuid.uuid4()
+                    _v_item_hmac = _v_uuid.uuid4().hex * 2  # 64-hex
+                    _v_key = await _first_id(san_env, target_a, "gateway_keys")
+                    _v_usage = await _first_id(san_env, target_a, "usage_ledger")
+                    _v_route = await _first_id(san_env, target_a, "model_routes")
+
+                    def _v_target_conn():
+                        return asyncpg.connect(**_conn_kwargs(
+                            san_env.target["host"], san_env.target["port"],
+                            san_env.target["user"], san_env.target["password"],
+                            target_a,
+                        ))
+
+                    try:
+                        s = await _v_target_conn()
+                        await s.execute(
+                            "INSERT INTO request_diagnostics "
+                            "(id, gateway_request_id, client_request_id, "
+                            "client_id_unavailable_reason, method, "
+                            "endpoint_template, occurred_at, http_status, "
+                            "stream_outcome, source, reason_code, "
+                            "error_code, error_param, positions, counts, "
+                            "limits, gateway_key_id, route_id, "
+                            "route_pattern, deployment_revision, "
+                            "estimated_input_tokens, replay_error_code, "
+                            "recorded_at) "
+                            "VALUES ($1, $2, NULL, 'absent', 'POST', "
+                            "'/v1/chat/completions', now(), 429, "
+                            "'http_rejection', 'quota', 'rate_limit', "
+                            "'rate_limit_exceeded', 'requests', "
+                            "jsonb_build_object('line', 3)::jsonb, "
+                            "jsonb_build_object('count', 5)::jsonb, "
+                            "NULL, $3::uuid, $4::uuid, "
+                            "'/v1/chat/completions', 'rev-224v', 120, "
+                            "NULL, now())",
+                            _v_diag_id, _v_gwid, _v_key, _v_route,
+                        )
+                        await s.execute(
+                            "INSERT INTO codex_replay_references "
+                            "(id, gateway_key_id, usage_ledger_id, "
+                            "source_request_id, provider, route_id, "
+                            "upstream_model, item_kind, item_id_hmac, "
+                            "call_id_hmac, hmac_key_version, "
+                            "tool_namespace, tool_name, created_at, "
+                            "expires_at) "
+                            "VALUES ($1, $2::uuid, $3::uuid, "
+                            "'src-224v-pg', 'openai', $4::uuid, "
+                            "'gpt-224v-transport', 'reasoning', $5, "
+                            "NULL, 1, NULL, NULL, now(), now() + "
+                            "interval '1 hour')",
+                            _v_ref_id, _v_key, _v_usage, _v_route,
+                            _v_item_hmac,
+                        )
+                        await s.close()
+                        # Session A: the copied recent row renders in
+                        # the bounded newest-first list...
+                        r = await client_a.get(
+                            "/admin/operations/diagnostics"
+                        )
+                        assert r.status_code == 200
+                        assert (
+                            r.headers["cache-control"]
+                            == "private, no-store"
+                        )
+                        assert "FROZEN copied content-free" in r.text
+                        assert _v_gwid in r.text
+                        assert "rate_limit_exceeded" in r.text
+                        # ...and the exact safe-ID lookup renders the
+                        # FOUND typed facts (percent-encoded colon
+                        # form through httpx).
+                        r = await client_a.get(
+                            "/admin/operations/diagnostics",
+                            params={
+                                "lookup": _v_gwid,
+                                "namespace": "gateway",
+                            },
+                        )
+                        assert r.status_code == 200
+                        assert f"<code>{_v_gwid}</code>" in r.text
+                        assert "rate_limit_exceeded" in r.text
+                        assert target_a not in r.text
+                        # Session B: the SAME lookup against its OWN
+                        # copy is NOT_FOUND (copy isolation; no
+                        # cross-copy read).
+                        r = await client_b.get(
+                            "/admin/operations/diagnostics",
+                            params={
+                                "lookup": _v_gwid,
+                                "namespace": "gateway",
+                            },
+                        )
+                        assert r.status_code == 200
+                        assert "No retained record matches" in r.text
+                        # Session A: the one-key scope shows the
+                        # copied reference (view-time active split of
+                        # the copied expiries, worker-captured TTL).
+                        r = await client_a.get(
+                            f"/admin/operations/replay-maintenance/"
+                            f"key/{_v_key}"
+                        )
+                        assert r.status_code == 200
+                        assert (
+                            r.headers["cache-control"]
+                            == "private, no-store"
+                        )
+                        # (the fixture also seeds one function_call
+                        # reference per copy, so the exact active count
+                        # is asserted only through the unique 224-v
+                        # upstream model string.)
+                        assert "gpt-224v-transport" in r.text
+                        assert "worker-observed at copy time" in r.text
+                        assert "31,536,000 seconds" in r.text
+                        assert target_a not in r.text
+                        # The explicit every-active scope renders for
+                        # both sessions (no implicit default exists).
+                        r = await client_a.get(
+                            "/admin/operations/replay-maintenance/"
+                            "all-active"
+                        )
+                        assert r.status_code == 200
+                        assert "Copied retained references" in r.text
+                        assert "gpt-224v-transport" in r.text
+                        # Session B: its own every-active scope shows
+                        # no 224-v reference (copy isolation; copy B's
+                        # key IDs are independently remapped, so the
+                        # cross-copy proof uses the explicit scope, not
+                        # a copy-A key ID).
+                        r = await client_b.get(
+                            "/admin/operations/replay-maintenance/"
+                            "all-active"
+                        )
+                        assert r.status_code == 200
+                        assert "gpt-224v-transport" not in r.text
+                        # Gate boundary over the real copy: a
+                        # credential-shaped lookup is the gate's
+                        # fixed 404 before any copy read.
+                        r = await client_a.get(
+                            "/admin/operations/diagnostics",
+                            params={"lookup": "sk-slaif-224v-pg"},
+                        )
+                        assert r.status_code == 404
+                        assert "sk-slaif-224v-pg" not in r.text
+                        # Exact cleanup: the two inserted rows only.
+                        s = await _v_target_conn()
+                        await s.execute(
+                            "DELETE FROM codex_replay_references "
+                            "WHERE id = $1",
+                            _v_ref_id,
+                        )
+                        await s.execute(
+                            "DELETE FROM request_diagnostics "
+                            "WHERE id = $1",
+                            _v_diag_id,
+                        )
+                        await s.close()
+                    except BaseException:
+                        # Exact cleanup on failure too (the
+                        # invariance phase must see untouched copies).
+                        try:
+                            s = await _v_target_conn()
+                            await s.execute(
+                                "DELETE FROM codex_replay_references "
+                                "WHERE id = $1",
+                                _v_ref_id,
+                            )
+                            await s.execute(
+                                "DELETE FROM request_diagnostics "
+                                "WHERE id = $1",
+                                _v_diag_id,
+                            )
+                            await s.close()
+                        finally:
+                            raise
 
                     # --- CSRF-verified demo sign-out (session A) ---------
                     csrf_a = _demo_csrf_token(cfg.cookie_secret, token_a)
@@ -3004,7 +3209,11 @@ def test_browser_smoke_demo_copy_pages(
             assert "FROZEN copied data" in content
             assert "unavailable in this demo" in content
             assert 'href="/admin/operations/process-configuration"' in content
-            assert 'href="/admin/operations/diagnostics"' not in content
+            # 224-v: the admitted pages are linked in the demo branch.
+            assert 'href="/admin/operations/diagnostics"' in content
+            assert (
+                'href="/admin/operations/replay-maintenance/"' in content
+            )
             assert target not in content
             r = page.goto("/admin/operations/process-configuration")
             assert r is not None and r.status == 200
@@ -3046,6 +3255,55 @@ def test_browser_smoke_demo_copy_pages(
             )
             page.screenshot(path=str(shot_t))
             print(f"DEMO_BROWSER_224T_SCREENSHOT={shot_t}")
+
+            # --- 224-v: diagnostics + replay in the real browser ----
+            # Read-only pages over the verified copy: the demo banner,
+            # the bounded recent table (which carries the fixture's
+            # seeded canary diagnostic row) and the visible no-op
+            # cleanup form.
+            r = page.goto("/admin/operations/diagnostics")
+            assert r is not None and r.status == 200
+            assert r.headers["cache-control"] == "private, no-store"
+            content = page.content()
+            assert "FROZEN copied content-free" in content
+            assert "Recent copied diagnostic records" in content
+            # the fixture's seeded diagnostic row renders in the
+            # bounded recent list under its sanitizer-remapped
+            # demo-prefixed gateway ID (copy-backed transport in the
+            # real browser; the remap proves no source value leaks).
+            assert "rate_limited / rate_limit_exceeded" in content
+            assert 'lookup=demo' in content
+            assert "canary-diagreq-" not in content
+            assert "quiet" in content  # visible no-op cleanup note
+            r = page.goto("/admin/operations/replay-maintenance/")
+            assert r is not None and r.status == 200
+            assert r.headers["cache-control"] == "private, no-store"
+            content = page.content()
+            assert "NO effect in this demo" in content
+            assert (
+                'href="/admin/operations/replay-maintenance/all-active"'
+                in content
+            )
+            assert "HMAC maintenance eligibility is NOT shown" in content
+            r = page.goto(
+                "/admin/operations/replay-maintenance/all-active"
+            )
+            assert r is not None and r.status == 200
+            content = page.content()
+            assert "Copied retained references" in content
+            assert "quiet" in content  # visible no-op inspect/preview notes
+            # The worker-captured TTL from copy A's per-login
+            # process-configuration leaf renders (never the demo
+            # process's dummy configured default).
+            assert "31,536,000 seconds" in content
+            assert target not in content
+            assert "postgresql" not in content.lower()
+            shot_v = Path(
+                f"/tmp/slaif-224v-browser-replay-{os.getpid()}-"
+                f"{uuid.uuid4().hex[:10]}.png"
+            )
+            page.screenshot(path=str(shot_v))
+            print(f"DEMO_BROWSER_224V_SCREENSHOT={shot_v}")
 
             # --- 224-u: neutral branding slots + read-only
             # compatibility views in the real browser -------------

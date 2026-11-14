@@ -340,7 +340,7 @@ def _branding_context(request: Request) -> dict[str, object]:
     # fallback before login) - the live operator branding directory
     # is never resolved here. Normal requests never carry the
     # state, so normal rendering is byte-identical.
-    if getattr(request.state, "demo_admin", None) is not None:
+    if getattr(getattr(request, "state", None), "demo_admin", None) is not None:
         from slaif_gateway.web.branding import (
             STYLE_CSS,
             asset_url,
