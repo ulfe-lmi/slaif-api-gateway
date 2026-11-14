@@ -1383,26 +1383,44 @@ def test_kr_rejects_malformed_receipts() -> None:
     assert out["target_cohort_id"] is None
 
 
-def test_kr_validity_strings_valid_timestamp_or_fail_closed() -> None:
-    # The law accepts any well-formed ISO-8601 timestamp the supported
-    # clone flow can emit: datetime.isoformat() output (source_valid_
-    # until) plus operator-supplied ISO-8601 text preserved verbatim in
-    # absolute mode (offset/Z, naive, or space-separated).
+def test_kr_validity_strings_producer_law_or_fail_closed() -> None:
+    # 224-s: the per-field law mirrors the ACTUAL producer acceptance
+    # set. Absolute-mode validity_from/validity_until are the
+    # operator's plan text preserved verbatim (any
+    # datetime.fromisoformat-parseable ISO-8601 value, including a bare
+    # ISO date, which the product's own _aware_fromiso interprets as
+    # midnight UTC); source_valid_until is always the flow's
+    # datetime.isoformat() output, so a bare date can never appear
+    # there.
     for good in (
+        "2026-09-01",  # bare date (CLI/service flow persists it raw)
+        "20260901",  # bare date, compact basic form
         "2026-09-01T08:00:00+00:00",
         "2026-09-01T08:00:00.123456+00:00",
         "2026-09-01T08:00:00+02:00",
         "2026-09-01T08:00:00Z",
-        "2026-09-01 08:00:00+00:00",  # space separator (flow-legal)
-        "2026-09-01T08:00:00",  # naive (absolute mode preserves it)
+        "2026-09-01 08:00:00+00:00",  # space separator
+        "2026-09-01T08:00:00",  # naive
         "2026-09-01T08:00",  # minute precision
-        "20260901T080000+00:00",  # compact ISO-8601 basic form
+        "20260901T080000+00:00",  # compact datetime
     ):
-        assert dsan._kr_is_valid_timestamp(good) is True
-    # REJECTED: bare dates (a date is not a timestamp), padded values,
-    # arbitrary free text, blank and wrong types.
+        assert dsan._kr_is_receipt_timestamp(good, allow_bare_date=True) is True
+    # source_valid_until: everything the plan text accepts EXCEPT bare
+    # dates (dashed or compact) - its producer is datetime.isoformat().
+    for good in (
+        "2026-09-01",
+        "20260901",
+        "2026-09-01T08:00:00+00:00",
+        "20260901T080000+00:00",
+    ):
+        is_bare = bool(
+            dsan._KR_BARE_DATE_RE.fullmatch(good)
+            or dsan._KR_BARE_DATE_COMPACT_RE.fullmatch(good)
+        )
+        assert dsan._kr_is_receipt_timestamp(good, allow_bare_date=False) is (not is_bare)
+    # REJECTED by every field: arbitrary free text, padded, blank and
+    # wrong types.
     for bad in (
-        "2026-09-01",  # date-only
         "not a timestamp",
         "operator note: extended on request",
         "2026-09-01T08:00:00+00:00 extra",
@@ -1411,41 +1429,51 @@ def test_kr_validity_strings_valid_timestamp_or_fail_closed() -> None:
         "",
         123,
     ):
-        assert dsan._kr_is_valid_timestamp(bad) is False
-    # A non-null malformed validity value FAILS THE COPY CLOSED (never
-    # silently rewritten); the error carries only the member name.
+        assert dsan._kr_is_receipt_timestamp(bad, allow_bare_date=True) is False
+        assert dsan._kr_is_receipt_timestamp(bad, allow_bare_date=False) is False
+    # A bare date in the field its producer can never write FAILS THE
+    # COPY CLOSED, with the member name only...
     r = _kr_valid_receipt()
-    r["validity_from"] = "operator note: extended on request"
+    r["source_valid_until"] = "2026-09-01"
     with pytest.raises(ds.DemoSnapshotError) as excinfo:
         dsan._project_clone_receipt(r, _KR_SEED)
+    assert "source_valid_until" in str(excinfo.value)
+    # ...as does malformed text in a bare-date-tolerant field (never
+    # silently rewritten; no raw value in the error).
+    r2 = _kr_valid_receipt()
+    r2["validity_from"] = "operator note: extended on request"
+    with pytest.raises(ds.DemoSnapshotError) as excinfo:
+        dsan._project_clone_receipt(r2, _KR_SEED)
     assert "validity_from" in str(excinfo.value)
     assert "operator note" not in str(excinfo.value)
-    r2 = _kr_valid_receipt()
-    r2["source_valid_until"] = "2026-09-01"  # date-only
-    with pytest.raises(ds.DemoSnapshotError):
-        dsan._project_clone_receipt(r2, _KR_SEED)
-    # Valid timestamps (including naive, which absolute mode stores
-    # verbatim) are preserved; None stays None.
-    out = dsan._project_clone_receipt(_kr_valid_receipt(), _KR_SEED)
+    # Bare dates in the absolute-mode plan text are preserved VERBATIM
+    # (not normalized, not rewritten); full spellings stay intact; None
+    # stays None.
+    bare = _kr_valid_receipt()
+    bare["validity_from"] = "2026-06-01"
+    bare["validity_until"] = "2026-09-01"
+    out = dsan._project_clone_receipt(bare, _KR_SEED)
+    assert out["validity_from"] == "2026-06-01"
+    assert out["validity_until"] == "2026-09-01"
     assert out["source_valid_until"] == "2026-09-01T08:00:00+00:00"
-    assert out["validity_from"] == "2026-06-01T08:00:00+00:00"
-    assert out["validity_until"] == "2026-09-01T08:00:00+00:00"
-    naive = _kr_valid_receipt()
-    naive["validity_until"] = "2026-09-01T08:00:00"  # naive: preserved
-    out_n = dsan._project_clone_receipt(naive, _KR_SEED)
-    assert out_n["validity_until"] == "2026-09-01T08:00:00"
-    # The independent structural law rejects a stored non-canonical value
-    # the projection could never have emitted...
-    stored = {"clone_receipt": json.loads(json.dumps(out))}
-    stored["clone_receipt"]["validity_from"] = "operator note: extended on request"
-    assert dsan._is_projected_receipt_metadata(json.dumps(stored)) is False
-    stored2 = {"clone_receipt": json.loads(json.dumps(out))}
-    stored2["clone_receipt"]["source_valid_until"] = "2026-09-01"
-    assert dsan._is_projected_receipt_metadata(json.dumps(stored2)) is False
-    # ...and accepts None / valid timestamps (what the projection emits).
+    out_full = dsan._project_clone_receipt(_kr_valid_receipt(), _KR_SEED)
+    assert out_full["validity_from"] == "2026-06-01T08:00:00+00:00"
+    assert out_full["validity_until"] == "2026-09-01T08:00:00+00:00"
+    assert out_full["source_valid_until"] == "2026-09-01T08:00:00+00:00"
+    # The independent structural law accepts exactly what the
+    # projection can emit (bare dates only in the plan-text fields)...
+    wrapped = {"clone_receipt": json.loads(json.dumps(out))}
+    assert dsan._is_projected_receipt_metadata(json.dumps(wrapped)) is True
     ok = {"clone_receipt": json.loads(json.dumps(out))}
     ok["clone_receipt"]["validity_from"] = None
     assert dsan._is_projected_receipt_metadata(json.dumps(ok)) is True
+    # ...and rejects values a producer can never write.
+    stored = {"clone_receipt": json.loads(json.dumps(out))}
+    stored["clone_receipt"]["source_valid_until"] = "2026-09-01"
+    assert dsan._is_projected_receipt_metadata(json.dumps(stored)) is False
+    stored2 = {"clone_receipt": json.loads(json.dumps(out))}
+    stored2["clone_receipt"]["validity_from"] = "operator note: extended on request"
+    assert dsan._is_projected_receipt_metadata(json.dumps(stored2)) is False
 
 
 def test_kr_verifier_structural_and_tamper_law() -> None:
@@ -1586,6 +1614,55 @@ def test_u_column_digest_multiset_law() -> None:
     )
     # Per-copy (seed-dependent).
     assert dsan._u_column_digest(b"copy-b", table, column, expected) != dsan._u_column_digest(
+        seed, table, column, expected
+    )
+
+
+def test_s_column_digest_multiset_law() -> None:
+    # 224-s: the S (string-ID) per-copy value law. Two catalog applies
+    # by the SAME operator (repeated raw values in operator_actor /
+    # db_actor) + one by another: the expected multiset carries the
+    # same remapped value TWICE.
+    seed = b"copy-a"
+    table = "catalog_refresh_applications"
+    column = "operator_actor"
+    actor_a = "src-actor-canary-a"
+    actor_b = "src-actor-canary-b"
+    raw = [actor_a, actor_a, actor_b]
+    expected = [dsan.remap_str_id(seed, v) for v in raw]
+    assert expected[0] == expected[1] != expected[2]
+    # Pre-state projection (raw -> expected) and verifier pass (stored
+    # values hashed AS-IS, here stored == expected) must agree,
+    # order-insensitively.
+    assert dsan._s_column_digest(seed, table, column, expected) == dsan._s_column_digest(
+        seed, table, column, list(reversed(expected))
+    )
+    # An un-remapped raw pass-through must NOT match: the demo pattern
+    # alone cannot distinguish a coincidental match, the keyed
+    # aggregate can.
+    assert dsan._s_column_digest(seed, table, column, raw) != dsan._s_column_digest(
+        seed, table, column, expected
+    )
+    # Multiset-sensitive: dropping one of the two repeated duplicates
+    # changes it (a dropped apply row is detected).
+    assert dsan._s_column_digest(seed, table, column, expected[1:]) != dsan._s_column_digest(
+        seed, table, column, expected
+    )
+    swapped = list(expected)
+    swapped[1] = dsan.remap_str_id(seed, actor_b)
+    assert dsan._s_column_digest(seed, table, column, swapped) != dsan._s_column_digest(
+        seed, table, column, expected
+    )
+    # The same column name in a DIFFERENT table has a separate key
+    # space, and the S key space is separate from the U one.
+    assert dsan._s_column_digest(seed, "catalog_refresh_runs", column, expected) != dsan._s_column_digest(
+        seed, table, column, expected
+    )
+    assert dsan._s_column_digest(seed, table, column, expected) != dsan._u_column_digest(
+        seed, table, column, expected
+    )
+    # Per-copy (seed-dependent).
+    assert dsan._s_column_digest(b"copy-b", table, column, expected) != dsan._s_column_digest(
         seed, table, column, expected
     )
 
@@ -2079,6 +2156,32 @@ def test_column_violations_h_shape_only_no_global_uniqueness() -> None:
     asyncio.run(
         dsan._column_violations(
             conn, "codex_replay_references", "item_id_hmac", dsan.H, _identity_data()
+        )
+    )
+    assert len(conn.calls) == 1  # exactly the shape count, nothing else
+
+
+def test_column_violations_s_shape_only_repeats_allowed() -> None:
+    # 224-s: the S branch reports ONLY shape violations. The remapped
+    # value matches demo[0-9a-f]{60} (shape alone cannot prove
+    # remapping; the keyed pre-state multiset digest does), and S
+    # columns such as catalog_refresh_applications.operator_actor /
+    # db_actor repeat naturally across applies: the same remapped value
+    # may legitimately recur, so NO distinct-count query may be issued.
+    async def run(bad_shape: int) -> int:
+        conn = _FakeConn(fetchval_results=[bad_shape])
+        return await dsan._column_violations(
+            conn, "catalog_refresh_applications", "operator_actor", dsan.S,
+            _identity_data(),
+        )
+
+    assert asyncio.run(run(2)) == 2
+    assert asyncio.run(run(0)) == 0
+    conn = _FakeConn(fetchval_results=[0])
+    asyncio.run(
+        dsan._column_violations(
+            conn, "catalog_refresh_applications", "operator_actor",
+            dsan.S, _identity_data(),
         )
     )
     assert len(conn.calls) == 1  # exactly the shape count, nothing else

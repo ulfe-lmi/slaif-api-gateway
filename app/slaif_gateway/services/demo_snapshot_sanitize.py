@@ -262,6 +262,33 @@ def _u_column_digest(seed: bytes, table: str, column: str, values: list[str]) ->
     return h.hexdigest()
 
 
+def _s_column_digest(seed: bytes, table: str, column: str, values: list[str]) -> str:
+    """Keyed multiset digest over the given string values, taken AS-IS.
+
+    224-s mirror of ``_u_column_digest`` for the S (string-ID) columns:
+    the key additionally includes the TABLE because S column names such
+    as ``name`` or ``request_id`` repeat across tables and must never
+    share key space. Neither side remaps internally: prestate first maps
+    each raw value through remap_str_id to the EXPECTED stored values
+    and passes those; the verifier passes the STORED values directly.
+    Both sides therefore digest the same post-rewrite value space, and
+    equality proves the stored multiset is exactly the expected per-copy
+    remap multiset (an un-remapped raw value or any other change breaks
+    equality). Repeated raw values (for example the same operator_actor
+    and db_actor across two catalog applies) must appear the same number
+    of times under the SAME per-copy remapped value. Limit (shared with
+    the H/U laws): this is a per-column multiset proof, not a
+    row-placement proof.
+    """
+    h = hashlib.sha256(
+        seed + b"|s|" + table.encode("utf-8") + b"|" + column.encode("utf-8")
+    )
+    for value in sorted(values):
+        h.update(value.encode("ascii"))
+        h.update(b"|")
+    return h.hexdigest()
+
+
 def _declared_unique_single_columns(
     constraints: list[tuple[str, str, str, str, str]],
 ) -> dict[str, frozenset[str]]:
@@ -2686,6 +2713,30 @@ async def _capture_prestate(
             u_expected.setdefault(table, {})[column] = _u_column_digest(
                 seed, table, column, expected
             )
+    # 224-s expected per-column remap multiset digest for EVERY S column
+    # (bounded: each column is under the per-table row cap already
+    # enforced above). Raw strings -> expected stored values via the
+    # existing remap_str_id, THEN digest as-is: the verifier recomputes
+    # the digest over the STORED values and requires equality. This is
+    # the per-copy value law a blanket distinctness check cannot
+    # express: repeated raw values (e.g. the same operator_actor /
+    # db_actor across two catalog applies) must appear under the SAME
+    # per-copy remapped value, while a raw (un-remapped) pass-through, a
+    # dropped duplicate or a substitution breaks equality.
+    s_expected: dict[str, dict[str, str]] = {}
+    for table in sorted(tables):
+        _ensure_before_deadline(deadline)
+        for column, action in TABLE_POLICY[table].items():
+            if action != S:
+                continue
+            rows = await conn.fetch(
+                f"SELECT {_q(column)} AS v FROM public.{_q(table)} "
+                f"WHERE {_q(column)} IS NOT NULL"
+            )
+            expected = [remap_str_id(seed, str(r["v"])) for r in rows]
+            s_expected.setdefault(table, {})[column] = _s_column_digest(
+                seed, table, column, expected
+            )
     # 224-r expected per-row clone-receipt projection (bounded: only the
     # gateway_keys rows whose raw metadata is non-empty are scanned, each
     # under the per-table row cap already enforced above). For a row with a
@@ -2718,6 +2769,7 @@ async def _capture_prestate(
         "entity_ids": entity_ids,
         "h_expected": h_expected,
         "u_expected": u_expected,
+        "s_expected": s_expected,
         "kr_expected": kr_expected,
     }
 
@@ -2862,14 +2914,21 @@ _KR_HEX64_FIELDS = {
 }
 # Stable business-public identifier (per-copy string remap, like public_key_id).
 _KR_STR_FIELDS = ("source_public_key_id",)
-# Valid ISO-8601 timestamp / window members. The supported clone flow
-# writes source_valid_until via datetime.isoformat() and preserves
-# operator-supplied ISO-8601 text verbatim in absolute mode, so the law
-# accepts any well-formed ISO-8601 timestamp (offset/Z, naive, or
-# space-separated) and rejects free text, bare dates, blank, padded or
-# wrong-typed non-null values, which fail the copy closed - never
-# silently rewritten.
+# Bounded validity timestamp / window members, mirrored PER FIELD from
+# the actual producer's acceptance set: the supported clone flow writes
+# ``source_valid_until`` with ``datetime.isoformat()`` (always a full
+# aware timestamp), while absolute-mode ``validity_from``/
+# ``validity_until`` are the operator's plan text preserved verbatim
+# (the plan schema ``_iso_string`` accepts any
+# ``datetime.fromisoformat``-parseable string, including a bare ISO
+# date, and ``attach_clone_receipt`` persists the plan string).
+# Free text, blank, padded and wrong-typed non-null values fail the
+# copy closed - never silently rewritten.
 _KR_OPTIONAL_STR_FIELDS = ("source_valid_until", "validity_from", "validity_until")
+# Only the absolute-mode plan-text members: the CLI/service clone flow
+# may persist a bare ISO date verbatim (the GUI form normalizes to a
+# full timestamp via ``_parse_admin_datetime`` + ``isoformat()``).
+_KR_BARE_DATE_FIELDS = frozenset({"validity_from", "validity_until"})
 _KR_BOOL_FIELDS = ("requires_fenced_confirmation",)
 _KR_INT_FIELDS = ("validity_duration_seconds",)
 _KR_ENUM_FIELD = "validity_mode"
@@ -2892,29 +2951,34 @@ _KR_ALL_FIELDS = frozenset(
 _KR_STR_MAX_LEN = 256
 
 
-# Bare date-only strings: a date is not a timestamp, and the clone
-# flow never emits one in a validity window member.
+# Bare date-only strings (dashed and compact ISO-8601 basic forms).
 _KR_BARE_DATE_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
+_KR_BARE_DATE_COMPACT_RE = re.compile(r"\d{8}")
 
 
-def _kr_is_valid_timestamp(value: object) -> bool:
+def _kr_is_receipt_timestamp(value: object, *, allow_bare_date: bool) -> bool:
     """Bounded predicate for one optional validity timestamp member.
 
-    The supported clone flow writes ``source_valid_until`` with
-    ``datetime.isoformat()`` on UTC-normalized datetimes, and in
-    absolute mode preserves operator-supplied ISO-8601 text verbatim,
-    so the law accepts any well-formed ISO-8601 timestamp the flow can
-    emit (offset- or Z-bearing, naive, or space-separated) and rejects
-    everything else: non-strings, blank or padded values, bare dates,
-    and arbitrary free text.
+    Mirrors the actual producer's acceptance set for that member:
+    non-blank, unpadded and ``datetime.fromisoformat``-parseable. The
+    flow writes ``source_valid_until`` with ``datetime.isoformat()`` on
+    a UTC-normalized datetime (never a bare date), while absolute-mode
+    ``validity_from``/``validity_until`` are the operator's plan text
+    preserved verbatim - which may be a bare ISO date (interpreted as
+    midnight UTC by the product's own ``_aware_fromiso``) as well as
+    offset/Z, naive, space-separated, minute-precision or compact
+    spellings. Accepted values are preserved verbatim and are NOT
+    asserted to be timezone-aware or normalized.
     """
     if not isinstance(value, str) or not value or value != value.strip():
-        return False
-    if _KR_BARE_DATE_RE.fullmatch(value):
         return False
     try:
         datetime.fromisoformat(value)
     except ValueError:
+        return False
+    if not allow_bare_date and (
+        _KR_BARE_DATE_RE.fullmatch(value) or _KR_BARE_DATE_COMPACT_RE.fullmatch(value)
+    ):
         return False
     return True
 
@@ -2922,15 +2986,19 @@ def _kr_is_valid_timestamp(value: object) -> bool:
 def _kr_validity_member(value: object, name: str) -> str | None:
     """Project one optional validity timestamp member (fail closed).
 
-    ``None`` stays ``None``. A non-null member must be a valid
-    ISO-8601 timestamp (never a bare date or free text). Date-only,
-    blank, padded or arbitrary-text values fail the copy closed - the
-    error carries only the member name, never the raw value - because a
-    malformed recognized receipt is not projectable.
+    ``None`` stays ``None``. A non-null member must be in that
+    member's producer acceptance set (see
+    ``_kr_is_receipt_timestamp``): a well-formed ISO-8601 value, with a
+    bare date allowed only for the absolute-mode plan-text members.
+    Malformed values fail the copy closed - the error carries only the
+    member name, never the raw value - because a malformed recognized
+    receipt is not projectable.
     """
     if value is None:
         return None
-    if not _kr_is_valid_timestamp(value):
+    if not _kr_is_receipt_timestamp(
+        value, allow_bare_date=name in _KR_BARE_DATE_FIELDS
+    ):
         raise _kr_malformed(name)
     return value
 
@@ -2968,11 +3036,14 @@ def _project_clone_receipt(receipt: object, seed: bytes) -> dict[str, object]:
     per-copy bijection, the public key id via the string remap, the two
     fingerprints via the column-salted 64-hex remap); display status and
     the bounded nonsecret validity members are preserved verbatim ONLY
-    when they are valid ISO-8601 timestamps (never a bare date or free
-    text). Any deviation - a missing/unknown member, an unexpected type,
-    a wrong status or validity mode, or a malformed non-null validity
-    value - fails closed (raises) so a partial or tampered receipt is
-    never projected into the copy.
+    when they are in that member's producer acceptance set: well-formed
+    ISO-8601 values, with a bare ISO date allowed only for the
+    absolute-mode ``validity_from``/``validity_until`` plan text (never
+    for ``source_valid_until``), and never free text. Any deviation - a
+    missing/unknown member, an unexpected type, a wrong status or
+    validity mode, or a malformed non-null validity value - fails closed
+    (raises) so a partial or tampered receipt is never projected into
+    the copy.
     """
     if not isinstance(receipt, dict):
         raise _kr_malformed("clone_receipt")
@@ -3111,9 +3182,12 @@ def _is_projected_receipt_metadata(value: object) -> bool:
     for name in _KR_OPTIONAL_STR_FIELDS:
         v = receipt[name]
         # Stored value must be exactly what the projection can emit:
-        # None or one valid ISO-8601 timestamp string (the same law the
-        # projector enforces, re-proven independently).
-        if v is not None and not _kr_is_valid_timestamp(v):
+        # None or one value in that member's producer acceptance set
+        # (the same per-field law the projector enforces, re-proven
+        # independently).
+        if v is not None and not _kr_is_receipt_timestamp(
+            v, allow_bare_date=name in _KR_BARE_DATE_FIELDS
+        ):
             return False
     for name in _KR_BOOL_FIELDS:
         if not isinstance(receipt[name], bool):
@@ -3348,22 +3422,23 @@ async def _column_violations(
         value = str(data[action.split(":", 1)[1]])
         return int(await conn.fetchval(f"SELECT count(*) FROM {tbl} WHERE {col} <> $1", value))
     if action == S:
-        nonnull = int(
-            await conn.fetchval(f"SELECT count(*) FROM {tbl} WHERE {col} IS NOT NULL")
-        )
-        if not nonnull:
-            return 0
-        bad_shape = int(
+        # 224-s: shape only. Every stored value must match the remapped
+        # demo[0-9a-f]{60} pattern (a raw value that happens to match is
+        # still caught by the keyed pre-state multiset digest in
+        # _run_verifier). The old blanket distinctness law was a false
+        # positive: S columns such as
+        # catalog_refresh_applications.operator_actor / db_actor repeat
+        # naturally across applies, so the SAME remapped value may
+        # legitimately recur. Distinctness is re-checked in _run_verifier
+        # ONLY where the reviewed schema declares a single-column
+        # UNIQUE/PK on the column.
+        return int(
             await conn.fetchval(
                 f"SELECT count(*) FROM {tbl} "
                 f"WHERE {col} IS NOT NULL AND {col} !~ $1",
                 _S_PATTERN,
             )
         )
-        distinct = int(
-            await conn.fetchval(f"SELECT count(DISTINCT {col}) FROM {tbl}")
-        )
-        return bad_shape + (1 if distinct != nonnull else 0)
     if action == H:
         # Shape only. The raw value already matches the same 64-hex
         # pattern, so shape cannot prove remapping, and the schema's
@@ -3707,6 +3782,47 @@ async def _run_verifier(
                     raise ds.DemoSnapshotError(
                         verify_failed,
                         "Demo copy U column violates a declared uniqueness constraint.",
+                    )
+
+    # 224-s exact per-copy S remap law: recompute the keyed multiset
+    # digest from the STORED values and require equality with the
+    # pre-state expectation derived from the raw values before the
+    # rewrite. Repeated raw values (e.g. the same operator_actor /
+    # db_actor across two catalog applies) must appear under the SAME
+    # per-copy remapped value; a raw (un-remapped) value or any other
+    # substitution breaks equality. Uniqueness is re-checked ONLY where
+    # the reviewed schema declares a single-column UNIQUE/PK on that
+    # column - the old blanket distinctness law was a false positive for
+    # naturally repeating text fields.
+    s_expected = pre["s_expected"]  # type: ignore[assignment]
+    for table in sorted(s_expected):
+        for column in sorted(s_expected[table]):
+            _ensure_before_deadline(deadline)
+            rows = await conn.fetch(
+                f"SELECT {_q(column)} AS v FROM public.{_q(table)} "
+                f"WHERE {_q(column)} IS NOT NULL"
+            )
+            if (
+                _s_column_digest(
+                    seed, table, column, [str(r["v"]) for r in rows]
+                )
+                != s_expected[table][column]
+            ):
+                raise ds.DemoSnapshotError(
+                    verify_failed,
+                    "Demo copy S-remapped values do not match the expected per-copy remap.",
+                )
+            if column in declared_unique.get(table, frozenset()):
+                dup = int(
+                    await conn.fetchval(
+                        f"SELECT count(*) - count(DISTINCT {_q(column)}) "
+                        f"FROM public.{_q(table)} WHERE {_q(column)} IS NOT NULL"
+                    )
+                )
+                if dup:
+                    raise ds.DemoSnapshotError(
+                        verify_failed,
+                        "Demo copy S column violates a declared uniqueness constraint.",
                     )
 
     # 224-r exact per-row clone-receipt law: recompute the keyed digest of

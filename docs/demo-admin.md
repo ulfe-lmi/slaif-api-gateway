@@ -2750,21 +2750,25 @@ route, job or normal-admin change.
   per-copy bijection, the source public key ID through the string
   remap, and both fingerprints through the column-salted 64-hex remap.
   The bounded nonsecret validity members and the display status are
-  preserved, but the optional timestamp members (`source_valid_until`,
-  `validity_from`, `validity_until`) must be valid ISO-8601 timestamp
-  strings: the clone flow writes `source_valid_until` with
-  `datetime.isoformat()` and in absolute mode preserves
-  operator-supplied ISO-8601 text verbatim, so the law accepts any
-  well-formed ISO-8601 timestamp (offset- or Z-bearing, naive, or
-  space-separated) that parses with `datetime.fromisoformat`. Bare
-  date-only, blank, padded or arbitrary free-text values are NOT
-  rewritten or discarded - they fail the whole copy closed (nothing is
-  published; the error carries only the member name, never the raw
-  value). A malformed, unknown or
-  secret-bearing receipt fails the whole copy closed likewise. The
-  receipt vocabulary and validity modes are imported from the product's
-  own 208 schema constants, so the demo law cannot drift from the
-  supported clone flow's shape.
+  preserved, but each optional timestamp member (`source_valid_until`,
+  `validity_from`, `validity_until`) is checked PER FIELD against its
+  actual producer's acceptance set (224-s repair): `source_valid_until`
+  is always the flow's `datetime.isoformat()` output, so it must be a
+  full ISO-8601 timestamp (a bare date can never appear there);
+  absolute-mode `validity_from`/`validity_until` are the operator's
+  plan text preserved verbatim (the plan schema accepts any
+  `datetime.fromisoformat`-parseable ISO-8601 value, and the
+  CLI/service clone path persists it raw - a bare ISO date included,
+  which the product's own `_aware_fromiso` interprets as midnight UTC;
+  the GUI form instead normalizes to a full timestamp), so those two
+  members accept any well-formed ISO-8601 value, bare date included.
+  Blank, padded and arbitrary free-text values are NOT rewritten or
+  discarded - they fail the whole copy closed (nothing is published;
+  the error carries only the member name, never the raw value). A
+  malformed, unknown or secret-bearing receipt fails the whole copy
+  closed likewise. The receipt vocabulary and validity modes are
+  imported from the product's own 208 schema constants, so the demo law
+  cannot drift from the supported clone flow's shape.
 * **Independent post-commit verifier.** On a separate read-only
   connection after commit, the verifier re-proves the per-row
   receipt law: the SET of stored non-empty receipts exactly equals the
@@ -2788,6 +2792,20 @@ route, job or normal-admin change.
   re-check ONLY where the reviewed schema declares a single-column
   UNIQUE or PRIMARY KEY on that column (a composite UNIQUE proves no
   per-column distinctness and is not enforced).
+* **S-column verifier repair (224-s demonstrated defect).** The old
+  blanket S-distinctness law assumed every remapped string-ID value is
+  unique, which wrongly refused `catalog_refresh_applications.
+  operator_actor` / `db_actor` - nonunique text fields that naturally
+  repeat across applies. It is replaced by the same reviewed pattern
+  as the U law: a per-column keyed multiset digest over EVERY S column
+  (pre-state projects the raw values through the existing
+  `remap_str_id` to the expected per-copy remaps; the independent
+  post-commit verifier recomputes over the stored values and requires
+  equality), so repeated raw values keep the SAME per-copy remapped
+  value while a raw pass-through, a dropped duplicate or a substitution
+  fails publication; distinctness is re-checked ONLY where the reviewed
+  schema declares a single-column UNIQUE or PRIMARY KEY on that column.
+  The structural check for S columns is shape-only.
 * **Demo-only chooser (224-r).** On the 224-q receipts page in demo
   mode, a bounded, SELECT-only chooser lists at most the 100 newest
   copied operations whose receipt references this source (a capped
@@ -2817,17 +2835,25 @@ exposed - only per-copy remapped values.
   sibling members dropped; deterministic and seed-dependent; unknown,
   missing, wrong-typed, invalid-UUID, invalid-fingerprint, wrong-mode
   and wrong-status members fail closed; optional UUID nulls stay
-  null); the validity-timestamp law (valid ISO-8601 timestamps -
-  offset/Z, naive, space-separated - preserved verbatim; bare date-only,
-  padded, free-text, blank or wrong-type non-null values FAIL THE COPY
-  CLOSED with a member-name-only error, and the independent structural
-  check rejects a stored value the projection could never emit); the
-  U-column
-  keyed multiset law
+  null); the per-field validity law (224-s: absolute-mode
+  `validity_from`/`validity_until` accept any well-formed ISO-8601
+  value the plan schema can write - full timestamps preserved verbatim
+  AND a bare ISO date, which the CLI/service flow persists raw;
+  `source_valid_until` accepts only a full timestamp, so a bare date
+  there FAILS THE COPY CLOSED; padded/free-text/blank/wrong-type
+  non-null values always fail closed with a member-name-only error, and
+  the independent structural check rejects a stored value the
+  projection could never emit); the GUI-form normalization law (a bare
+  date submitted through the guided form is re-emitted as a full aware
+  timestamp before the plan is built); the U-column keyed multiset law
   (repeated FK values keep the same remapped value twice; an
   un-remapped raw pass-through, a dropped duplicate or a substitution
   breaks the digest; same column name in a different table has a
-  separate key space; per-copy seed dependence); the declared-unique
+  separate key space; per-copy seed dependence); the S-column keyed
+  multiset law (224-s: repeated raw actor values keep the same
+  remapped value twice; raw pass-through / dropped duplicate /
+  substitution break the digest; S key space is separate from U's);
+  the declared-unique
   parser (single-column PK/UNIQUE declared, composite UNIQUE
   excluded, non-unique constraints ignored); the demo chooser law
   against REAL SQLAlchemy 2.0 Row objects (the asyncpg/SQLAlchemy
