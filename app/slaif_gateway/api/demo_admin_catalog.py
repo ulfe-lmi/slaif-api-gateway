@@ -480,17 +480,35 @@ async def demo_catalog_index(request: Request) -> Response:
 
 
 def _safe_not_found() -> Response:
-    """One fixed safe 404: no name, kind, hash or error value echoed."""
+    """One fixed safe 404: no name, kind, hash or error value echoed.
+
+    Carries nosniff with every other demo refusal (the gate
+    normalizes the single cache header on every dynamic /admin
+    response)."""
     return HTMLResponse(
-        "Not Found", status_code=404, headers={"Cache-Control": "private, no-store"}
+        "Not Found",
+        status_code=404,
+        headers={
+            "Cache-Control": "private, no-store",
+            "X-Content-Type-Options": "nosniff",
+        },
     )
 
 
 def _safe_unavailable(message: str) -> Response:
     """One fixed safe 503 for any invalid metadata, bound, digest/size
-    mismatch or driver failure (no DSN, hash, path or traceback)."""
+    mismatch or driver failure (no DSN, hash, path or traceback).
+
+    Carries nosniff with every other demo refusal (the gate
+    normalizes the single cache header on every dynamic /admin
+    response)."""
     return HTMLResponse(
-        message, status_code=503, headers={"Cache-Control": "private, no-store"}
+        message,
+        status_code=503,
+        headers={
+            "Cache-Control": "private, no-store",
+            "X-Content-Type-Options": "nosniff",
+        },
     )
 
 
@@ -1643,6 +1661,360 @@ async def demo_catalog_jobs(request: Request) -> Response:
             "demo_job_bound": _MAX_JOB_GROUPS,
             "demo_selected": selected,
             "demo_job_detail": job_detail,
+        },
+        status_code=200,
+    )
+    response.headers["Cache-Control"] = "private, no-store"
+    return response
+
+# --- 224-x: demo-only direct catalog artifact/package reads + apply-status ---
+
+
+def _attachment_response(body: bytes, filename: str) -> Response:
+    """The forced sanitized-display attachment (the 224-l wire law):
+    octet-stream, attachment disposition, nosniff, CSP none and
+    private no-store (the gate normalizes every admitted dynamic
+    response to exactly this one cache header)."""
+    return Response(
+        content=body,
+        status_code=200,
+        headers={
+            "Content-Type": "application/octet-stream",
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "X-Content-Type-Options": "nosniff",
+            "Content-Security-Policy": "default-src 'none'",
+            "Cache-Control": "private, no-store",
+        },
+    )
+
+
+async def _copy_leaf_body(
+    session: Any,
+    logical_name: str,
+    expected_kind: str,
+) -> tuple[bytes | None, str]:
+    """ONE bounded read of a closed worker-published display leaf
+    (224-x).
+
+    Runs on the CALLER's already-rechecked transaction. Metadata
+    FIRST with the database-computed ``octet_length(body)`` (a
+    corrupt row that claims a small byte_count while storing an
+    oversized body is refused here, before ANY body bytes transfer),
+    the EXACT closed kind, the existing 32 MiB per-file cap and the
+    canonical SHA256; then the shared 224-l bounded body fetch
+    re-asserts every condition as BOUND parameters and re-verifies
+    the exact length + SHA256 of the fetched bytes. Returns
+    ``(body, "ok")``, ``(None, "missing")`` or ``(None, "corrupt")``.
+    No SQL identifier interpolation, no pathname, no source access.
+    """
+    meta = (
+        await session.execute(
+            text(
+                "SELECT kind, byte_count, sha256, "
+                "octet_length(body) AS actual_bytes "
+                "FROM demo_display.leaves "
+                "WHERE logical_name = :name"
+            ),
+            {"name": logical_name},
+        )
+    ).first()
+    if meta is None:
+        return None, "missing"
+    kind, byte_count, stored_sha, actual_bytes = meta
+    if (
+        not isinstance(kind, str)
+        or kind != expected_kind
+        or isinstance(byte_count, bool)
+        or not isinstance(byte_count, int)
+        or not 0 <= byte_count <= _MAX_ARTIFACT_BYTES
+        or not isinstance(stored_sha, str)
+        or _SHA256_HEX.fullmatch(stored_sha) is None
+        or isinstance(actual_bytes, bool)
+        or not isinstance(actual_bytes, int)
+        or not 0 <= actual_bytes <= _MAX_ARTIFACT_BYTES
+        or actual_bytes != byte_count
+    ):
+        return None, "corrupt"
+    body = await _fetch_bounded_body(
+        session, logical_name, kind, byte_count, stored_sha
+    )
+    if body is None:
+        return None, "corrupt"
+    return body, "ok"
+
+
+@router.get("/runs/{run_id}/artifact/{name}")
+async def demo_catalog_run_artifact(
+    request: Request, run_id: str, name: str
+) -> Response:
+    """224-x: download ONE captured run content file (closed name).
+
+    Exact canonical shape only (gate-admitted, query-free): the seven
+    worker-published run content files (the normal run-artifact
+    route's closed set, intersected with the already-published
+    sanitized leaf law). The read uses the gate's SAME request-local
+    copy engine in one SELECT-only/read-only transaction with the
+    independent ``current_database()`` / ``transaction_read_only``
+    recheck, then the shared 224-x metadata-first bounded read for
+    the exact ``catalog/runs/{run_id}/{name}`` leaf with its exact
+    worker-published kind. Missing leaf -> fixed 404; corrupt row,
+    bound violation, digest/size mismatch or driver failure -> the
+    fixed safe 503 (never the bytes, never a partial artifact, never
+    a source value). No source custody, seal key, live catalog root
+    or filesystem/network read.
+    """
+    demo = getattr(request.state, "demo_admin", None)
+    if demo is None or _RUN_ID.fullmatch(run_id) is None:
+        return _run_detail_not_found()
+    expected_kind = dict(_RUN_DETAIL_FILES).get(name)
+    if expected_kind is None:
+        return _run_detail_not_found()
+    logical_name = f"catalog/runs/{run_id}/{name}"
+    try:
+        session_factory = get_sessionmaker_from_app(request)
+    except Exception:
+        return _run_detail_unavailable()
+    try:
+        async with session_factory() as session, session.begin():
+            current = await session.scalar(text("SELECT current_database()"))
+            read_only = await session.scalar(text("SHOW transaction_read_only"))
+            if current != demo.target_db or read_only != "on":
+                return _run_detail_unavailable()
+            body, state = await _copy_leaf_body(
+                session, logical_name, expected_kind
+            )
+    except Exception:
+        # Driver, connection or statement failure: one fixed safe
+        # refusal. Cancellation is a BaseException and is not
+        # swallowed.
+        return _run_detail_unavailable()
+    if state == "missing":
+        return _run_detail_not_found()
+    if body is None:
+        return _run_detail_unavailable()
+    return _attachment_response(body, name)
+
+
+@router.get("/jobs/{job_id}/artifact/{name}")
+async def demo_catalog_job_artifact(
+    request: Request, job_id: str, name: str
+) -> Response:
+    """224-x: download ONE captured job artifact (closed name).
+
+    Exact canonical shape only (gate-admitted, query-free). The
+    closed name set is the INTERSECTION of the normal job-artifact
+    route's finite vocabulary and the published sanitized leaf law:
+    one closed remapped upload name (``bundle`` / ``baseline`` /
+    ``baseline-export`` plus a 32-hex keyed suffix, leaf
+    ``catalog/uploads/{job_id}/{name}`` with the exact upload kind)
+    or one of the six proposal files (leaf
+    ``catalog/proposals/{job_id}/{name}`` with its exact worker-
+    published kind). The read law is the same as the run-artifact
+    GET (gate-bound engine, in-transaction recheck, metadata-first
+    bounded read, forced sanitized attachment). Missing leaf ->
+    fixed 404; anything corrupt -> the fixed safe 503.
+    """
+    demo = getattr(request.state, "demo_admin", None)
+    if demo is None or _JOB_ID.fullmatch(job_id) is None:
+        return _jobs_not_found()
+    # Longest fixed prefix FIRST: ``baseline-export-<32hex>`` must
+    # never be misread as ``baseline-<export-...>``.
+    _upload_kind: str | None = None
+    for _prefix in ("baseline-export", "baseline", "bundle"):
+        if name.startswith(f"{_prefix}-"):
+            _upload_kind = _prefix
+            break
+    if _upload_kind is not None:
+        _suffix = name[len(_upload_kind) + 1 :]
+        if (
+            len(_suffix) != 32
+            or not all(c in "0123456789abcdef" for c in _suffix)
+        ):
+            return _jobs_not_found()
+        expected_kind = dsf._UPLOAD_KINDS.get(_upload_kind)
+        logical_name = f"catalog/uploads/{job_id}/{name}"
+    else:
+        expected_kind = dsf._PROPOSAL_KINDS.get(name)
+        logical_name = f"catalog/proposals/{job_id}/{name}"
+    if expected_kind is None:
+        return _jobs_not_found()
+    try:
+        session_factory = get_sessionmaker_from_app(request)
+    except Exception:
+        return _jobs_unavailable()
+    try:
+        async with session_factory() as session, session.begin():
+            current = await session.scalar(text("SELECT current_database()"))
+            read_only = await session.scalar(text("SHOW transaction_read_only"))
+            if current != demo.target_db or read_only != "on":
+                return _jobs_unavailable()
+            body, state = await _copy_leaf_body(
+                session, logical_name, expected_kind
+            )
+    except Exception:
+        return _jobs_unavailable()
+    if state == "missing":
+        return _jobs_not_found()
+    if body is None:
+        return _jobs_unavailable()
+    return _attachment_response(body, name)
+
+
+@router.get("/jobs/{job_id}/package/{preset}/{name}")
+async def demo_catalog_job_package_artifact(
+    request: Request, job_id: str, preset: str, name: str
+) -> Response:
+    """224-x: download ONE captured generated package file (closed
+    preset + closed file set).
+
+    Exact canonical shape only (gate-admitted, query-free): the
+    preset must be an EXACT member of the fixed product preset
+    order and the name one of the five closed package files (the
+    normal package route's finite vocabulary, intersected with the
+    published sanitized leaf law; leaf
+    ``catalog/proposals/{job_id}/packages/{preset}/{name}`` with the
+    exact worker-published kind). Same read law as the other 224-x
+    artifact GETs; missing leaf -> fixed 404, anything corrupt ->
+    the fixed safe 503.
+    """
+    demo = getattr(request.state, "demo_admin", None)
+    if demo is None or _JOB_ID.fullmatch(job_id) is None:
+        return _jobs_not_found()
+    if preset not in OPENROUTER_PACKAGE_ORDER:
+        return _jobs_not_found()
+    expected_kind = dsf._PACKAGE_KINDS.get(name)
+    if expected_kind is None:
+        return _jobs_not_found()
+    logical_name = (
+        f"catalog/proposals/{job_id}/packages/{preset}/{name}"
+    )
+    try:
+        session_factory = get_sessionmaker_from_app(request)
+    except Exception:
+        return _jobs_unavailable()
+    try:
+        async with session_factory() as session, session.begin():
+            current = await session.scalar(text("SELECT current_database()"))
+            read_only = await session.scalar(text("SHOW transaction_read_only"))
+            if current != demo.target_db or read_only != "on":
+                return _jobs_unavailable()
+            body, state = await _copy_leaf_body(
+                session, logical_name, expected_kind
+            )
+    except Exception:
+        return _jobs_unavailable()
+    if state == "missing":
+        return _jobs_not_found()
+    if body is None:
+        return _jobs_unavailable()
+    return _attachment_response(body, name)
+
+
+@router.get("/runs/{run_id}/apply-status", response_class=HTMLResponse)
+async def demo_catalog_apply_status(
+    request: Request, run_id: str
+) -> Response:
+    """224-x: frozen historical apply status for one captured run.
+
+    Exact canonical shape only (gate-admitted, query-free). ONE
+    SELECT-only/read-only transaction on the gate's SAME
+    request-local copy engine with the independent
+    ``current_database()`` / ``transaction_read_only`` recheck first
+    verifies, with the SAME closed seven-file metadata-only
+    inventory as the 224-m run detail, that the run exists in THIS
+    copy (missing run -> fixed 404; a partial or kind-mismatched
+    run -> the fixed safe 503).
+
+    The page then shows the FIXED explicit "status unavailable for
+    this run in this copy" state with ZERO records. Reported
+    limitation: the worker remaps captured run identifiers for the
+    display leaves (the ``demo-run-`` keyed-HMAC slug) while the
+    sanitizer remaps the copied
+    ``catalog_refresh_applications.run_id`` values by an INDEPENDENT
+    per-copy string remap; the web process holds neither the
+    original run id nor the per-copy seed, so NO verified mapping
+    exists between a copied application record and this display run
+    id. Presenting copied rows as this run's status would mislead,
+    so the copied applications table is NOT read or listed on this
+    page at all. The unavailable state is a historical display
+    limitation of the sanitized copy - it is NOT a statement that
+    the run was never applied. Missing/unrecognized run or a
+    corrupt/partial row set is a fixed safe refusal; visible
+    operational controls are clearly labeled quiet no-ops and cannot
+    reach source DML.
+    """
+    demo = getattr(request.state, "demo_admin", None)
+    if demo is None or _RUN_ID.fullmatch(run_id) is None:
+        return _run_detail_not_found()
+    expected = {
+        f"catalog/runs/{run_id}/{filename}": kind
+        for filename, kind in _RUN_DETAIL_FILES
+    }
+    try:
+        session_factory = get_sessionmaker_from_app(request)
+    except Exception:
+        return _run_detail_unavailable()
+    try:
+        async with session_factory() as session, session.begin():
+            current = await session.scalar(text("SELECT current_database()"))
+            read_only = await session.scalar(text("SHOW transaction_read_only"))
+            if current != demo.target_db or read_only != "on":
+                return _run_detail_unavailable()
+            # The run must exist in THIS copy (the SAME closed
+            # seven-file inventory as the 224-m run detail, metadata
+            # only - no body transfer).
+            params: dict[str, object] = {}
+            placeholders: list[str] = []
+            for index, full_name in enumerate(expected):
+                params[f"n{index}"] = full_name
+                placeholders.append(f":n{index}")
+            rows = (
+                await session.execute(
+                    text(
+                        "SELECT logical_name, kind "
+                        "FROM demo_display.leaves "
+                        f"WHERE logical_name IN ({', '.join(placeholders)})"
+                    ),
+                    params,
+                )
+            ).all()
+            present = {
+                str(r[0]): str(r[1]) for r in rows
+                if isinstance(r[0], str) and isinstance(r[1], str)
+            }
+            if not present:
+                return _run_detail_not_found()
+            if set(present) != set(expected) or any(
+                present[k] != v for k, v in expected.items()
+            ):
+                # A partial or kind-mismatched run is an incomplete
+                # row set: one fixed safe 503, never a half page.
+                return _run_detail_unavailable()
+    except Exception:
+        # Driver, connection or statement failure: one fixed safe
+        # refusal. Cancellation is a BaseException and is not
+        # swallowed.
+        return _run_detail_unavailable()
+
+    # No copied application record is read or rendered: without a
+    # verified run-id mapping (see the docstring) the page can only
+    # state the fixed explicit unavailable condition.
+    response = templates.TemplateResponse(
+        request,
+        "catalog_refresh/apply_result.html",
+        {
+            "admin": demo.session_context.admin_user,
+            "csrf_token": demo.csrf_token,
+            "detail": {"run_id": run_id},
+            "apply_status_value": "",
+            "apply_run_id": "",
+            "apply_bundle_sha256": None,
+            "apply_effective_at": None,
+            "apply_counts": None,
+            "apply_records": None,
+            "apply_unconfirmed": True,
+            "demo_admin": True,
+            "demo_apply_run_id": run_id,
         },
         status_code=200,
     )

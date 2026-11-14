@@ -280,13 +280,16 @@
       </p>
       <p class="muted">
         Captured artifacts actually present for this job (sanitized
-        display copies; each link forces a file download through the
-        exact 224-l route).
+        display copies; each link forces a file download).
       </p>
       <ul>
         {% for a in demo_selected.artifacts %}
         <li>
-          <a href="/admin/operations/catalog/artifact?name={{ a.name | urlencode }}">{{ a.display }}</a>
+          {% if a.display.startswith("packages/") %}
+          <a href="/admin/operations/catalog/jobs/{{ demo_selected.job_id }}/package/{{ a.display[9:] }}">{{ a.display }}</a>
+          {% else %}
+          <a href="/admin/operations/catalog/jobs/{{ demo_selected.job_id }}/artifact/{{ a.display }}">{{ a.display }}</a>
+          {% endif %}
           <span class="muted">({{ a.kind }}, {{ a.byte_count | num }} bytes, captured {{ a.captured_utc }})</span>
         </li>
         {% endfor %}

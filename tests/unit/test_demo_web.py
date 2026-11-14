@@ -3850,12 +3850,16 @@ def test_run_detail_positive_page(monkeypatch):
             # The neutralized-details note.
             assert "neutralized in this sanitized display copy" in text
             # All seven captured artifacts, each linked to the exact
-            # 224-l forced-download selector (literal closed charset).
+            # 224-x direct run-artifact download (closed name), and
+            # the frozen historical apply-status page.
             for filename, _kind in dac._RUN_DETAIL_FILES:
                 assert (
-                    f'href="/admin/operations/catalog/artifact'
-                    f'?name=catalog/runs/{RD_RUN_ID}/{filename}"'
+                    f'href="/admin/operations/catalog/runs/{RD_RUN_ID}'
+                    f'/artifact/{filename}"'
                 ) in r.text
+            assert (
+                f'href="/admin/operations/catalog/runs/{RD_RUN_ID}/apply-status"'
+            ) in r.text
             assert "2025-06-15 15:06:40 UTC" in text
             # No DSN fragment, copy name or credential escapes.
             assert COPY_OK not in r.text
@@ -4258,14 +4262,14 @@ def test_proposals_positive_page_default_and_selected(monkeypatch):
             assert "most-recently-captured" in _norm(r.text)
             assert "100" in _norm(r.text)  # the stated bound
             # Both captured artifacts of A, each through the exact
-            # 224-l forced-download route (full remapped logical name).
+            # 224-x direct job-artifact / package download.
             for href in (
-                f"?name=catalog/proposals/{PN_JOB_A}/routes-proposal.tsv",
-                f"?name=catalog/proposals/{PN_JOB_A}/packages/openrouter-chat-text/pricing-proposal.tsv",
+                f"/admin/operations/catalog/jobs/{PN_JOB_A}"
+                f"/artifact/routes-proposal.tsv",
+                f"/admin/operations/catalog/jobs/{PN_JOB_A}"
+                f"/package/openrouter-chat-text/pricing-proposal.tsv",
             ):
-                assert (
-                    f'href="/admin/operations/catalog/artifact{href}"' in r.text
-                ), href
+                assert f'href="{href}"' in r.text, href
             # The typed job-record status, labeled historical.
             assert "historical at capture time" in _norm(r.text)
             assert ">ready<" in r.text
@@ -4291,10 +4295,10 @@ def test_proposals_positive_page_default_and_selected(monkeypatch):
             assert f'value="{PN_JOB_B}" selected' in r.text
             assert "status unavailable in this snapshot" in _norm(r.text)
             assert (
-                f'href="/admin/operations/catalog/artifact'
-                f"?name=catalog/proposals/{PN_JOB_B}/warnings.json" in r.text
+                f'href="/admin/operations/catalog/jobs/{PN_JOB_B}'
+                f'/artifact/warnings.json"' in r.text
             )
-            assert f"?name=catalog/proposals/{PN_JOB_A}/" not in r.text
+            assert f"/admin/operations/catalog/jobs/{PN_JOB_A}/" not in r.text
 
     asyncio.run(run())
 
@@ -5476,14 +5480,14 @@ def test_p_jobs_positive_page(monkeypatch):
             assert "none (fixed in this sanitized shape)" in r.text
             assert "free text never displayed" not in r.text  # neutralized
             # The VERIFIED references are linked to the exact 224-m
-            # run-detail page and the 224-l forced download (never the
-            # original custody).
+            # run-detail page and the 224-x direct job-artifact
+            # download (never the original custody).
             assert (
                 f'href="/admin/operations/catalog/runs/{P_RUN}/"' in r.text
             )
             assert (
-                f'href="/admin/operations/catalog/artifact'
-                f'?name=catalog/uploads/{P_JOB_A}/{P_UPLOAD}"'
+                f'href="/admin/operations/catalog/jobs/{P_JOB_A}'
+                f'/artifact/{P_UPLOAD}"'
             ) in r.text
             # No original ID, no copy name.
             assert P_ORIGINAL_JOB_A not in r.text
@@ -8804,7 +8808,15 @@ def _w_profile_rows():
     ]
 
 
-def test_w_key_config_positive_attachment(monkeypatch):
+def test_w_key_config_fixed_503_no_json_no_copy_read(monkeypatch):
+    # 224-x: the 222/224-r sanitizer maps gateway_keys.metadata to KR,
+    # DISCARDING the ordinary policy metadata (allowed providers,
+    # Responses, throttling, streaming-burn and external-tool
+    # policies). Rendering the normal version-1 document on the
+    # stripped copy plus the demo process's neutral settings would
+    # fabricate defaults or wrong operator ceilings, so the exact GET
+    # performs NO copy read and answers the fixed safe 503 with NO
+    # JSON (no source fallback, no raw metadata, no guessed defaults).
     async def run():
         key = _w_trusted_key()
         session = _WKeyFakeSession(key, [], COPY_OK, "on")
@@ -8812,67 +8824,65 @@ def test_w_key_config_positive_attachment(monkeypatch):
         async with _client(app) as client:
             await _verified_session_client(fake, client)
             r = await client.get(W_CONFIG_URL)
-            assert r.status_code == 200
-            assert r.headers["content-type"] == "application/json"
-            assert r.headers["content-disposition"] == (
-                'attachment; filename="slaif-key-configuration-pk-w-1.json"'
-            )
-            assert "no-store" in r.headers["cache-control"]
-            assert r.headers["x-content-type-options"] == "nosniff"
-            doc = _w_json.loads(r.content)
-            assert doc["allowed_models"] == []
-            assert doc["allow_all_models"] is False
-        # the key was read ONLY through the copy session's get().
-        assert session.get_calls == ["GatewayKey"]
+            assert r.status_code == 503
+            assert dkey._SAFE_UNAVAILABLE in r.text
+            assert "json" not in r.headers.get("content-type", "").lower()
+            # the attachment refusal wire law on the 503 too: exactly
+            # one private no-store (gate-normalized) plus nosniff.
+            assert r.headers.get("cache-control") == "private, no-store"
+            assert r.headers.get("x-content-type-options") == "nosniff"
+        # NO copy read of any kind - not even key existence.
+        assert session.get_calls == []
         assert session.executed == []
 
     asyncio.run(run())
 
 
-def test_w_key_config_missing_key_404(monkeypatch):
+def test_w_key_config_shape_refusals_404(monkeypatch):
+    # 224-x: noncanonical UUIDs, path variants and ANY query stay the
+    # default-denied 404; the canonical shape reaches the fixed safe
+    # 503 without any copy read (unknown or known key alike).
     async def run():
-        session = _WKeyFakeSession(None, [], COPY_OK, "on")
+        session = _WKeyFakeSession(_w_trusted_key(), [], COPY_OK, "on")
         app, fake = _w_key_app(monkeypatch, session)
         async with _client(app) as client:
             await _verified_session_client(fake, client)
-            r = await client.get(W_CONFIG_URL)
+            for p in (
+                "/admin/keys/not-a-uuid/configuration.json",
+                W_CONFIG_URL + "/",
+                W_CONFIG_URL + "x",
+                "/admin/keys/01234567-89ab-4cde-8f01-23456789abcd/configuration.json/extra",
+            ):
+                r = await client.get(p)
+                assert r.status_code == 404, p
+            r = await client.get(W_CONFIG_URL, params={"x": "1"})
             assert r.status_code == 404
-            assert r.content == b"Not Found"
+            r = await client.get(W_CONFIG_URL)
+            assert r.status_code == 503
+        assert session.get_calls == []
+        assert session.executed == []
 
     asyncio.run(run())
 
 
-def test_w_key_config_alias_whole_refusal_no_echo(monkeypatch):
-    # A copied allowed model that equals an incoming cookie credential:
-    # the WHOLE attachment is refused, no partial substitution, no echo.
+def test_w_key_config_503_no_incoming_alias_echo(monkeypatch):
+    # 224-x: with no JSON rendered at all there is no output to leak;
+    # the fixed 503 must not echo the incoming credential either, and
+    # the refused request never touches the copy.
     canary = "w-canary-model-token-123"
 
     async def run():
-        key = _w_trusted_key(allowed_models=[canary])
-        session = _WKeyFakeSession(key, [], COPY_OK, "on")
+        session = _WKeyFakeSession(_w_trusted_key(), [], COPY_OK, "on")
         app, fake = _w_key_app(monkeypatch, session)
         async with _client(app) as client:
             await _verified_session_client(fake, client)
             client.cookies.set("w-canary-cookie", canary)
             r = await client.get(W_CONFIG_URL)
-            assert r.status_code == 400
+            assert r.status_code == 503
             assert canary not in r.text
-            assert dkey._SAFE_REFUSAL in r.text
-
-    asyncio.run(run())
-
-
-def test_w_key_config_oversized_refused_not_truncated(monkeypatch):
-    async def run():
-        monkeypatch.setattr(dkey, "_MAX_ATTACHMENT_BYTES", 10)
-        key = _w_trusted_key()
-        session = _WKeyFakeSession(key, [], COPY_OK, "on")
-        app, fake = _w_key_app(monkeypatch, session)
-        async with _client(app) as client:
-            await _verified_session_client(fake, client)
-            r = await client.get(W_CONFIG_URL)
-            assert r.status_code == 400
-            assert dkey._SAFE_OVERSIZED in r.text
+            assert dkey._SAFE_UNAVAILABLE in r.text
+        assert session.get_calls == []
+        assert session.executed == []
 
     asyncio.run(run())
 
@@ -9463,3 +9473,646 @@ def test_w_codex_artifacts_render_failure_404(monkeypatch):
             assert "Traceback" not in r.text
 
     asyncio.run(run())
+
+
+# --- 224-x: calibration default multiplier + rebuilt bounded query law ----------
+
+
+def test_x_calib_query_free_default_multiplier_3(monkeypatch):
+    # A query-free GET must use the normal selector's DEFAULT
+    # multiplier 3 (not an empty string/400): byte-identical to an
+    # explicit multiplier=3 over the same frozen copied rows.
+    async def run():
+        key = _w_trusted_key()
+        session = _WKeyFakeSession(key, _w_profile_rows(), COPY_OK, "on")
+        app, fake = _w_key_app(monkeypatch, session)
+        async with _client(app) as client:
+            await _verified_session_client(fake, client)
+            r1 = await client.get(W_CALIB_URL)
+            r2 = await client.get(W_CALIB_URL, params={"multiplier": "3"})
+            assert r1.status_code == 200
+            assert r2.status_code == 200
+            assert r1.content == r2.content
+            # an explicit EMPTY multiplier is still refused (the gate
+            # law answers before the handler's defense in depth).
+            r3 = await client.get(W_CALIB_URL, params={"multiplier": ""})
+            assert r3.status_code == 404
+
+    asyncio.run(run())
+
+
+def test_x_gate_calibration_query_law_rebuilt():
+    # The 224-x rebuilt raw-law: literal ASCII parameter names (never
+    # decoded), exactly one literal ``=`` per pair, bounded single-pass
+    # value decode, and the pre-copy known-incoming-alias refusal for
+    # nonempty values.
+    async def run():
+        app = _app(FakeFacade())
+        async with _client(app) as client:
+            # Positive: the ACTUAL encoded link shape (Jinja urlencode
+            # percent-encodes the datetime colons); decoded exactly
+            # once before the grammar.
+            for raw in (
+                "start_at=2026-01-02T03%3A04%3A05Z",
+                "end_at=2026-01-03T23%3A59%3A59%2B02%3A00&multiplier=10",
+            ):
+                r = await client.get(W_CALIB_URL + "?" + raw)
+                assert r.status_code == 303, raw
+            # Negative: encoded names, encoded delimiters and encoded
+            # equals can never change a parameter boundary; duplicates
+            # and second literal equals are refused.
+            for raw in (
+                "st%61rt_at=2026-01-02",          # encoded NAME letter
+                "start_at=2026-01-02%26x=1",      # encoded & plus a 2nd =
+                "start_at=%3D2026-01-02",         # encoded = in the value
+                "start_at=2026-01-02%26",         # trailing encoded & (grammar)
+                "start_at=2026-01-02=x",          # second literal =
+                "multiplier=3&multiplier=3",      # duplicate parameter
+            ):
+                r = await client.get(W_CALIB_URL + "?" + raw)
+                assert r.status_code == 404, raw
+            # A credential shaped like a LEGITIMATE value: the pure
+            # pre-copy alias classifier refuses it (date-shaped and
+            # numeric-shaped cookie values).
+            client.cookies.set("x-date-like", "2026-01-02")
+            r = await client.get(W_CALIB_URL + "?start_at=2026-01-02")
+            assert r.status_code == 404
+            client.cookies.clear()
+            client.cookies.set("x-num-like", "3")
+            r = await client.get(W_CALIB_URL + "?multiplier=3")
+            assert r.status_code == 404
+            client.cookies.clear()
+            # same values without the credential are admitted again.
+            r = await client.get(W_CALIB_URL + "?multiplier=3")
+            assert r.status_code == 303
+
+    asyncio.run(run())
+
+
+# --- 224-x: route completion packaged defaults + alias withholding --------------
+
+
+def test_x_route_completion_absent_shows_packaged_defaults(monkeypatch):
+    # An absent completion leaf offers the FINITE PACKAGED defaults
+    # (the package-only bundled profile data the normal form offers
+    # when the operator directory is absent) - never an empty picker
+    # labeled "package defaults".
+    session = _WRouteFakeSession(_w_route_obj(), [], [], [], COPY_OK, "on")
+    app, fake = _w_route_app(monkeypatch, session)
+
+    async def run():
+        async with _client(app) as client:
+            await _verified_session_client(fake, client)
+            r = await client.get(W_ROUTE_CFG_URL)
+            assert r.status_code == 200
+            import re as _re
+
+            norm = _re.sub(r"\s+", " ", r.text)
+            assert "recorded no operator completion profiles" in norm
+            assert "package defaults" in norm
+            assert "not copied source state" in norm
+            # the finite packaged defaults are the ACTUAL choices...
+            assert "facial-scoring-v1" in r.text
+            assert "zap-it-v1" in r.text
+
+    asyncio.run(run())
+    # the absent leaf: the metadata query ran, the body query never
+    # did, and no operator-directory file was read.
+    leaf_queries = [t for t, _ in session.executed if "demo_display.leaves" in t]
+    assert len(leaf_queries) == 1
+
+
+def test_x_route_completion_alias_withheld(monkeypatch):
+    # A captured completion choice ID (and the copied selected ID)
+    # equal to a known incoming authentication alias is withheld:
+    # no option, no preselection, no echo.
+    canary = "demo-profile-" + "e" * 24
+    body = _w_completion_leaf_body([canary, _W_PROFILE_A])
+    route = _w_route_obj(
+        capabilities={"completion_service": {"version": 1, "profile": canary}}
+    )
+    session = _WRouteFakeSession(
+        route, [], [_w_completion_meta(body)], [body], COPY_OK, "on"
+    )
+    app, fake = _w_route_app(monkeypatch, session)
+
+    async def run():
+        async with _client(app) as client:
+            await _verified_session_client(fake, client)
+            client.cookies.set("x-canary", canary)
+            r = await client.get(W_ROUTE_CFG_URL)
+            assert r.status_code == 200
+            assert canary not in r.text
+            assert _W_PROFILE_A in r.text
+
+    asyncio.run(run())
+
+
+# --- 224-x: direct catalog artifact/package reads + apply-status ---------------
+
+X_UPLOAD_NAME = "bundle-" + "ab" * 16
+X_PRESET = "openrouter-chat-text"
+X_PKG_NAME = "package-manifest.json"
+X_APPLY_BOUND = 100  # the handler's copied apply-record bound
+
+
+class _XFakeSession:
+    """One fake request-local copy session for the 224-x catalog
+    reads: recheck scalars plus recorded parameterized statements -
+    the metadata-first leaf query (with the DB-computed
+    ``octet_length``), the bounded body query, the seven-file run
+    inventory, and the bounded copied apply-record SELECT."""
+
+    def __init__(self, leaf_meta, body_rows, inventory_rows, app_rows, db, ro):
+        self.leaf_meta = leaf_meta
+        self.body_rows = body_rows
+        self.inventory_rows = inventory_rows
+        self.app_rows = app_rows
+        self.db = db
+        self.ro = ro
+        self.executed: list[tuple[str, dict]] = []
+
+    def begin(self):
+        return self
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *a):
+        return False
+
+    async def scalar(self, clause):
+        text = str(clause)
+        if "current_database" in text:
+            return self.db
+        return self.ro
+
+    async def execute(self, stmt, params=None):
+        text = str(stmt)
+        params = dict(params or {})
+        self.executed.append((text, params))
+        if text.lstrip().startswith("SELECT body"):
+            rows = [(b,) for b in self.body_rows]
+        elif "catalog_refresh_applications" in text:
+            rows = list(self.app_rows)
+        elif "FROM demo_display.leaves" in text and "octet_length" in text:
+            rows = list(self.leaf_meta)
+        elif "FROM demo_display.leaves" in text:
+            rows = list(self.inventory_rows)
+        else:
+            rows = []
+        return _ArtifactResult(rows)
+
+
+def _x_catalog_app(monkeypatch, session):
+    fake = FakeFacade()
+    fake.worker_target_db = COPY_OK
+    _preflight_case(monkeypatch, COPY_OK, "on")
+    _patch_sessionmaker(monkeypatch, session)
+    return _app(fake), fake
+
+
+def _x_run_artifact_url(name: str = "validation.json") -> str:
+    return f"/admin/operations/catalog/runs/{RD_RUN_ID}/artifact/{name}"
+
+
+def _x_run_leaf(name: str = "validation.json"):
+    kind = dict(dac._RUN_DETAIL_FILES)[name]
+    body = _rd_validation_body() if name == "validation.json" else b"{}"
+    return f"catalog/runs/{RD_RUN_ID}/{name}", kind, body
+
+
+def test_x_catalog_gate_admission_exact_shapes():
+    async def run():
+        app = _app(FakeFacade())
+        async with _client(app) as client:
+            # The four exact canonical shapes are ADMITTED (no
+            # session -> the entry redirect, same law as the index)...
+            for p in (
+                _x_run_artifact_url("validation.json"),
+                _x_run_artifact_url("REVIEW.html"),
+                f"/admin/operations/catalog/runs/{RD_RUN_ID}/apply-status",
+                f"/admin/operations/catalog/jobs/{CAT_JOB_ID}/artifact/{X_UPLOAD_NAME}",
+                f"/admin/operations/catalog/jobs/{CAT_JOB_ID}/artifact/warnings.json",
+                f"/admin/operations/catalog/jobs/{CAT_JOB_ID}/package/{X_PRESET}/{X_PKG_NAME}",
+            ):
+                r = await client.get(p)
+                assert r.status_code == 303, p
+                assert r.headers["location"] == "/fakeadmin/login"
+            # ...ANY query is refused on every shape...
+            for p in (
+                _x_run_artifact_url("validation.json"),
+                f"/admin/operations/catalog/runs/{RD_RUN_ID}/apply-status",
+                f"/admin/operations/catalog/jobs/{CAT_JOB_ID}/artifact/warnings.json",
+                f"/admin/operations/catalog/jobs/{CAT_JOB_ID}/package/{X_PRESET}/{X_PKG_NAME}",
+            ):
+                r = await client.get(p + "?name=x")
+                assert r.status_code == 404, p
+            # ...and every near-miss / noncanonical / source-shaped /
+            # traversal value stays default-denied 404.
+            for p in (
+                _x_run_artifact_url("validation.json") + "/",
+                _x_run_artifact_url("REVIEW.HTML"),
+                _x_run_artifact_url("extra.json"),
+                f"/admin/operations/catalog/runs/{RD_RUN_ID}/artifact/../validation.json",
+                f"/admin/operations/catalog/runs/{RD_ORIGINAL_RUN_ID}/artifact/validation.json",
+                f"/admin/operations/catalog/runs/{RD_RUN_ID}/apply-status/",
+                f"/admin/operations/catalog/runs/{RD_RUN_ID}/apply-status/extra",
+                f"/admin/operations/catalog/jobs/{CAT_JOB_ID.upper()}/artifact/warnings.json",
+                f"/admin/operations/catalog/jobs/{'f4' * 15}/artifact/warnings.json",
+                f"/admin/operations/catalog/jobs/{CAT_JOB_ID}/artifact/bundle-" + "zz" * 16,
+                f"/admin/operations/catalog/jobs/{CAT_JOB_ID}/artifact/bundle-{'ab' * 15}",
+                f"/admin/operations/catalog/jobs/{CAT_JOB_ID}/artifact/notes.json",
+                f"/admin/operations/catalog/jobs/{CAT_JOB_ID}/artifact/bundle",
+                f"/admin/operations/catalog/jobs/{CAT_JOB_ID}/package/openai-chat-text/{X_PKG_NAME}",
+                f"/admin/operations/catalog/jobs/{CAT_JOB_ID}/package/{X_PRESET.upper()}/{X_PKG_NAME}",
+                f"/admin/operations/catalog/jobs/{CAT_JOB_ID}/package/{X_PRESET}/notes.txt",
+                f"/admin/operations/catalog/jobs/{CAT_JOB_ID}/package/{X_PRESET}",
+                f"/admin/operations/catalog/jobs/{CAT_JOB_ID}/package/{X_PRESET}/{X_PKG_NAME}/",
+            ):
+                r = await client.get(p)
+                assert r.status_code == 404, p
+
+    asyncio.run(run())
+
+
+def test_x_catalog_unsafe_methods_quiet_noop_body_not_parsed():
+    async def run():
+        app = _app(FakeFacade())
+        async with _client(app) as client:
+            _session_cookie(client)
+            for p in (
+                _x_run_artifact_url("validation.json"),
+                f"/admin/operations/catalog/runs/{RD_RUN_ID}/apply-status",
+                f"/admin/operations/catalog/jobs/{CAT_JOB_ID}/artifact/warnings.json",
+                f"/admin/operations/catalog/jobs/{CAT_JOB_ID}/package/{X_PRESET}/{X_PKG_NAME}",
+            ):
+                for method in ("POST", "PUT", "PATCH", "DELETE"):
+                    r = await client.request(
+                        method,
+                        p,
+                        content=b"x" * 200_000,
+                        headers={"content-type": "text/garbage"},
+                    )
+                    assert r.status_code == 204, (method, p)
+                    assert r.content == b""
+        async with _client(app) as anon:
+            r = await anon.post(
+                f"/admin/operations/catalog/runs/{RD_RUN_ID}/apply-status",
+                content=b"y" * 200_000,
+            )
+            assert r.status_code == 404
+
+    asyncio.run(run())
+
+
+def test_x_run_artifact_positive_exact_bytes_headers(monkeypatch):
+    logical, kind, body = _x_run_leaf()
+    session = _XFakeSession([_meta_row(kind=kind, body=body)], [body], [], [], COPY_OK, "on")
+    app, fake = _x_catalog_app(monkeypatch, session)
+
+    async def run():
+        async with _client(app) as client:
+            await _verified_session_client(fake, client)
+            r = await client.get(_x_run_artifact_url("validation.json"))
+            assert r.status_code == 200
+            assert r.content == body
+            assert r.headers["content-type"] == "application/octet-stream"
+            assert r.headers["content-disposition"] == 'attachment; filename="validation.json"'
+            assert r.headers["x-content-type-options"] == "nosniff"
+            assert r.headers["content-security-policy"] == "default-src 'none'"
+            assert r.headers.get("cache-control") == "private, no-store"
+
+    asyncio.run(run())
+    # metadata FIRST with the DB-computed actual length, then the
+    # bounded body query re-asserting every condition as bound
+    # parameters (no identifier interpolation).
+    meta_text, meta_params = session.executed[0]
+    assert "octet_length(body)" in meta_text
+    assert meta_params == {"name": logical}
+    body_text, body_params = session.executed[1]
+    assert body_text.lstrip().startswith("SELECT body")
+    assert body_params["name"] == logical
+    assert body_params["cap"] == dac._MAX_ARTIFACT_BYTES
+    assert body_params["size"] == len(body)
+    assert body_params["digest"] == hashlib.sha256(body).hexdigest()
+    assert body_params["kind"] == kind
+
+
+def test_x_run_artifact_missing_leaf_404(monkeypatch):
+    session = _XFakeSession([], [], [], [], COPY_OK, "on")
+    app, fake = _x_catalog_app(monkeypatch, session)
+
+    async def run():
+        async with _client(app) as client:
+            await _verified_session_client(fake, client)
+            r = await client.get(_x_run_artifact_url("validation.json"))
+            assert r.status_code == 404
+            assert r.content == b"Not Found"
+            # the fixed refusal wire law: nosniff + the
+            # gate-normalized single cache header.
+            assert r.headers.get("x-content-type-options") == "nosniff"
+            assert r.headers.get("cache-control") == "private, no-store"
+
+    asyncio.run(run())
+    # the metadata query ran; the body query never did.
+    assert len(session.executed) == 1
+
+
+def test_x_run_artifact_corrupt_503_before_body(monkeypatch):
+    logical, kind, body = _x_run_leaf()
+    cases = [
+        _meta_row(kind="wrong_kind", body=body),
+        _meta_row(kind=kind, body=body, sha="Z" * 64),
+        _meta_row(kind=kind, body=body, size=len(body) + 1),
+        # a corrupt row claiming a small byte_count while storing a
+        # longer body: the DB-computed actual length refuses it
+        # BEFORE any body bytes transfer.
+        _meta_row(kind=kind, body=body, actual=len(body) + 1),
+        _meta_row(kind=kind, body=body, actual=len(body) - 1),
+        _meta_row(kind=kind, body=body, size=-1),
+        (None, None, None, None),
+    ]
+
+    async def run():
+        for bad in cases:
+            session = _XFakeSession([bad], [body], [], [], COPY_OK, "on")
+            app, fake = _x_catalog_app(monkeypatch, session)
+            async with _client(app) as client:
+                await _verified_session_client(fake, client)
+                r = await client.get(_x_run_artifact_url("validation.json"))
+                assert r.status_code == 503, bad
+                assert r.content != body
+                assert dac._SAFE_RUN_DETAIL_UNAVAILABLE in r.text
+                # the fixed refusal wire law (nosniff + single
+                # gate-normalized cache header) on every 503.
+                assert r.headers.get("x-content-type-options") == "nosniff", bad
+                assert r.headers.get("cache-control") == "private, no-store", bad
+            # the metadata refusal happens BEFORE the body query.
+            assert len(session.executed) == 1, bad
+
+    asyncio.run(run())
+
+
+def test_x_run_artifact_body_digest_mismatch_503(monkeypatch):
+    # Metadata is consistent, but the bounded body query re-verifies
+    # the exact length + SHA256 of the FETCHED bytes: a row whose
+    # stored body no longer matches is a fixed safe 503.
+    logical, kind, body = _x_run_leaf()
+    meta = _meta_row(kind=kind, body=body)
+    session = _XFakeSession([meta], [body + b"x"], [], [], COPY_OK, "on")
+    app, fake = _x_catalog_app(monkeypatch, session)
+
+    async def run():
+        async with _client(app) as client:
+            await _verified_session_client(fake, client)
+            r = await client.get(_x_run_artifact_url("validation.json"))
+            assert r.status_code == 503
+            assert r.content != body + b"x"
+            assert r.headers.get("x-content-type-options") == "nosniff"
+            assert r.headers.get("cache-control") == "private, no-store"
+
+    asyncio.run(run())
+    assert len(session.executed) == 2
+
+
+def test_x_job_artifact_upload_and_proposal_positive(monkeypatch):
+    # ALL THREE closed upload kinds (the longest-prefix
+    # ``baseline-export-`` must resolve to its own kind, never to
+    # ``baseline-``), plus one proposal artifact.
+    cases = [
+        (
+            X_UPLOAD_NAME,
+            dac.dsf._UPLOAD_KINDS["bundle"],
+            f"catalog/uploads/{CAT_JOB_ID}/{X_UPLOAD_NAME}",
+            b"upload-bytes",
+        ),
+        (
+            "baseline-" + "cd" * 16,
+            dac.dsf._UPLOAD_KINDS["baseline"],
+            "catalog/uploads/" + CAT_JOB_ID + "/baseline-" + "cd" * 16,
+            b"baseline-bytes",
+        ),
+        (
+            "baseline-export-" + "ef" * 16,
+            dac.dsf._UPLOAD_KINDS["baseline-export"],
+            "catalog/uploads/" + CAT_JOB_ID + "/baseline-export-" + "ef" * 16,
+            b"baseline-export-bytes",
+        ),
+        (
+            "warnings.json",
+            dac.dsf._PROPOSAL_KINDS["warnings.json"],
+            f"catalog/proposals/{CAT_JOB_ID}/warnings.json",
+            b'{"warnings": []}',
+        ),
+    ]
+
+    async def run():
+        for name, kind, logical, body in cases:
+            session = _XFakeSession(
+                [_meta_row(kind=kind, body=body)], [body], [], [], COPY_OK, "on"
+            )
+            app, fake = _x_catalog_app(monkeypatch, session)
+            async with _client(app) as client:
+                await _verified_session_client(fake, client)
+                r = await client.get(
+                    f"/admin/operations/catalog/jobs/{CAT_JOB_ID}/artifact/{name}"
+                )
+                assert r.status_code == 200, name
+                assert r.content == body
+                assert r.headers["content-type"] == "application/octet-stream"
+                assert r.headers["content-disposition"] == f'attachment; filename="{name}"'
+            assert session.executed[0][1] == {"name": logical}, name
+
+    asyncio.run(run())
+
+
+def test_x_job_artifact_missing_leaf_404(monkeypatch):
+    session = _XFakeSession([], [], [], [], COPY_OK, "on")
+    app, fake = _x_catalog_app(monkeypatch, session)
+
+    async def run():
+        async with _client(app) as client:
+            await _verified_session_client(fake, client)
+            for name in (X_UPLOAD_NAME, "warnings.json"):
+                r = await client.get(
+                    f"/admin/operations/catalog/jobs/{CAT_JOB_ID}/artifact/{name}"
+                )
+                assert r.status_code == 404, name
+                # the fixed refusal wire law on every 404.
+                assert r.headers.get("x-content-type-options") == "nosniff", name
+                assert r.headers.get("cache-control") == "private, no-store", name
+
+    asyncio.run(run())
+
+
+def test_x_job_package_positive(monkeypatch):
+    body = b'{"package": "test"}'
+    kind = dac.dsf._PACKAGE_KINDS[X_PKG_NAME]
+    logical = f"catalog/proposals/{CAT_JOB_ID}/packages/{X_PRESET}/{X_PKG_NAME}"
+    session = _XFakeSession([_meta_row(kind=kind, body=body)], [body], [], [], COPY_OK, "on")
+    app, fake = _x_catalog_app(monkeypatch, session)
+
+    async def run():
+        async with _client(app) as client:
+            await _verified_session_client(fake, client)
+            r = await client.get(
+                f"/admin/operations/catalog/jobs/{CAT_JOB_ID}/package/{X_PRESET}/{X_PKG_NAME}"
+            )
+            assert r.status_code == 200
+            assert r.content == body
+            assert r.headers["content-disposition"] == f'attachment; filename="{X_PKG_NAME}"'
+            assert r.headers["x-content-type-options"] == "nosniff"
+
+    asyncio.run(run())
+    assert session.executed[0][1] == {"name": logical}
+
+
+def test_x_apply_status_missing_run_404(monkeypatch):
+    # No seven-file run inventory in THIS copy -> fixed 404, and the
+    # copied apply-record table is never read.
+    session = _XFakeSession([], [], [], [_x_apply_row()], COPY_OK, "on")
+    app, fake = _x_catalog_app(monkeypatch, session)
+
+    async def run():
+        async with _client(app) as client:
+            await _verified_session_client(fake, client)
+            r = await client.get(f"/admin/operations/catalog/runs/{RD_RUN_ID}/apply-status")
+            assert r.status_code == 404
+            assert r.headers.get("x-content-type-options") == "nosniff"
+            assert r.headers.get("cache-control") == "private, no-store"
+
+    asyncio.run(run())
+    assert all("catalog_refresh_applications" not in t for t, _ in session.executed)
+
+
+def _x_inventory(run_id: str = RD_RUN_ID):
+    """The closed seven-file run inventory as (logical_name, kind)."""
+    return [(full, kind) for full, kind, *_ in _rd_inventory(run_id)]
+
+
+def _x_apply_row(**over):
+    row = dict(
+        run_id="demo" + "a1" * 30,
+        bundle_sha256="demo" + "b2" * 30,
+        plan_sha256="demo" + "c3" * 30,
+        receipt_hmac_sha256="demo" + "d4" * 30,
+        mode="refresh",
+        operator_actor="demo-operator",
+        db_actor="demo-db",
+        admin_user_id="demo-admin-1",
+        reason="neutralized",
+        effective_at=datetime(2025, 6, 15, 15, 6, 40, tzinfo=timezone.utc),
+        created_providers=1,
+        created_routes=2,
+        created_pricing=3,
+        created_fx=4,
+        superseded_pricing=5,
+        superseded_fx=6,
+        outcome="committed",
+        created_at=datetime(2025, 6, 15, 15, 7, 0, tzinfo=timezone.utc),
+    )
+    row.update(over)
+    return (
+        row["run_id"], row["bundle_sha256"], row["plan_sha256"],
+        row["receipt_hmac_sha256"], row["mode"], row["operator_actor"],
+        row["db_actor"], row["admin_user_id"], row["reason"],
+        row["effective_at"], row["created_providers"],
+        row["created_routes"], row["created_pricing"],
+        row["created_fx"], row["superseded_pricing"],
+        row["superseded_fx"], row["outcome"], row["created_at"],
+    )
+
+
+def test_x_apply_status_partial_run_503(monkeypatch):
+    # Six of the seven files (and a kind-mismatched set) are an
+    # incomplete row set: one fixed safe 503, never a half page.
+    async def run():
+        for inv in (_x_inventory()[:-1],
+                    [(n, "wrong_kind") for n, _k in _x_inventory()]):
+            session = _XFakeSession([], [], inv, [_x_apply_row()], COPY_OK, "on")
+            app, fake = _x_catalog_app(monkeypatch, session)
+            async with _client(app) as client:
+                await _verified_session_client(fake, client)
+                r = await client.get(f"/admin/operations/catalog/runs/{RD_RUN_ID}/apply-status")
+                assert r.status_code == 503, inv[0]
+                assert dac._SAFE_RUN_DETAIL_UNAVAILABLE in r.text
+                assert r.headers.get("x-content-type-options") == "nosniff", inv[0]
+                assert r.headers.get("cache-control") == "private, no-store", inv[0]
+
+    asyncio.run(run())
+
+
+def test_x_apply_status_run_present_unavailable(monkeypatch):
+    # The run exists in THIS copy (closed seven-file inventory) ->
+    # the FIXED explicit "status unavailable for this run in this
+    # copy" page with ZERO records; the copied applications table
+    # is NOT read at all (no verified run-id mapping exists).
+    session = _XFakeSession([], [], _x_inventory(), [_x_apply_row()], COPY_OK, "on")
+    app, fake = _x_catalog_app(monkeypatch, session)
+
+    async def run():
+        async with _client(app) as client:
+            await _verified_session_client(fake, client)
+            r = await client.get(f"/admin/operations/catalog/runs/{RD_RUN_ID}/apply-status")
+            assert r.status_code == 200
+            assert r.headers.get("cache-control") == "private, no-store"
+            import re as _re
+
+            norm = _re.sub(r"\s+", " ", r.text)
+            assert "Status at snapshot time" in norm
+            assert "NOT live authoritative source status" in norm
+            assert "Apply status is unavailable for this run in this copy." in norm
+            assert "no copied record can be verified as this run's status" in norm
+            assert "not a statement that the run was never applied" in norm
+            # zero records: no record header, no copied value.
+            assert "Record 1" not in r.text
+            assert "demo-operator" not in r.text
+            # the visible operational control is a labeled no-op...
+            assert "Check status (demo no-op" in r.text
+            # ...and its form is a GET re-read (no write method).
+            assert (
+                f'method="get" action="/admin/operations/catalog/runs/'
+                f'{RD_RUN_ID}/apply-status"' in r.text
+            )
+            assert COPY_OK not in r.text
+
+    asyncio.run(run())
+    # The copied applications table is never read at all.
+    assert all("catalog_refresh_applications" not in t for t, _ in session.executed)
+
+
+def test_x_apply_status_rows_never_rendered(monkeypatch):
+    # Even with application rows present in the copy - valid,
+    # tampered, and an alias-canary row among 101+ rows - NO
+    # verified run-id mapping exists, so none is rendered as this
+    # run's status and no row value (including the incoming
+    # credential alias) is ever echoed.
+    canary = "demo" + "e5" * 30
+    rows = (
+        [_x_apply_row()] * X_APPLY_BOUND
+        + [_x_apply_row(operator_actor=canary)]
+        + [_x_apply_row(mode="delete"), _x_apply_row(outcome="rolled_back")]
+    )
+    session = _XFakeSession([], [], _x_inventory(), rows, COPY_OK, "on")
+    app, fake = _x_catalog_app(monkeypatch, session)
+
+    async def run():
+        async with _client(app) as client:
+            await _verified_session_client(fake, client)
+            client.cookies.set("x-canary", canary)
+            r = await client.get(f"/admin/operations/catalog/runs/{RD_RUN_ID}/apply-status")
+            assert r.status_code == 200
+            import re as _re
+
+            norm = _re.sub(r"\s+", " ", r.text)
+            assert "Apply status is unavailable for this run in this copy." in norm
+            assert "Record 1" not in r.text
+            assert "demo-operator" not in r.text
+            assert "1 / 2 / 3 / 4" not in norm
+            assert canary not in r.text
+            assert "rolled_back" not in r.text
+
+    asyncio.run(run())
+    # No copied application row was ever read.
+    assert all("catalog_refresh_applications" not in t for t, _ in session.executed)

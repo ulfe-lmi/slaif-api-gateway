@@ -22,6 +22,36 @@
     </div>
   </header>
 
+  {%- if demo_admin %}
+  <div class="admin-flash" role="status">
+    <strong>Status at snapshot time:</strong> this page is a frozen
+    HISTORICAL display bound to the captured run
+    <code>{{ demo_apply_run_id }}</code>. It is NOT live
+    authoritative source status, no rollback or finality is inferred
+    beyond the captured facts, and this copy carries no apply
+    authority: the visible control below is a labeled demo no-op
+    that re-reads this same frozen page and changes nothing.
+  </div>
+  <div class="dash-groups">
+    <div class="dash-group">
+      <h2>Apply status (status at snapshot time)</h2>
+      <p>Apply status is unavailable for this run in this copy.</p>
+      <p class="muted" role="note">
+        The captured application records' run identifiers are
+        remapped independently in the sanitized copy, so no copied
+        record can be verified as this run's status; zero records
+        are displayed and the copied table is not read or listed
+        here. This is a historical display limitation of the
+        sanitized copy, not a statement that the run was never
+        applied.
+      </p>
+      <form method="get" action="/admin/operations/catalog/runs/{{ demo_apply_run_id }}/apply-status" class="inline-form">
+        <button type="submit">Check status (demo no-op: re-reads this same frozen snapshot page; nothing changes)</button>
+      </form>
+    </div>
+  </div>
+  {%- else %}
+
   <div class="admin-flash" role="status" aria-live="polite">
     <strong>Status:</strong> {{ apply_status_value }}
   </div>
@@ -85,5 +115,6 @@
       </form>
     </div>
   </div>
+  {%- endif %}
 </section>
 {% endblock %}

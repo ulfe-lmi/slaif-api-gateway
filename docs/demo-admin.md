@@ -3297,7 +3297,7 @@ pages).
 * No schema migration, role, grant, configuration, release,
   deployment or merge is introduced; the fake admin remains a
   sanitized display surface with no write authority.
-## Read-only SMTP test, key JSON attachments, and route configuration reads (objective 224-w)
+## Read-only SMTP test, key calibration JSON attachment, and route configuration reads (objective 224-w)
 
 The demo surface gains four further exact read-only families, all
 over the visitor's verified per-login SELECT-only copy. As before,
@@ -3372,34 +3372,50 @@ labeled quiet no-ops; the apply-recovery page is a fixed no-send
 notice. There is no live one-use token, no test send, no
 broker/mail access, and no false success.
 
-### Key JSON attachments (copied key state only)
+### Key JSON attachments (calibration only; configuration safely unavailable)
 
-Both attachments are produced by the proven read-only normal
-rendering services bound to the request-local copy session and the
-demo app's fixed neutral settings (no ambient `get_settings()`
-read). The key must exist in THIS copy (fixed 404 otherwise).
+* `calibration/summary.json`: produced by the SAME proven read-only
+  normal rendering service and the SAME strict input validation as
+  the normal download, bound to the request-local copy session and
+  recalculated over the FROZEN copied usage rows (copied-data
+  recalculation, never live current usage). The key must exist in
+  THIS copy (fixed 404 otherwise); non-trusted-calibration keys
+  get the fixed safe 400 refusal.
+* `configuration.json`: SAFELY UNAVAILABLE - a fixed safe 503 with
+  NO JSON body and NO copy read. The 222/224-r sanitizer projects
+  `gateway_keys.metadata` by the clone-receipt-only KR law,
+  discarding the ordinary policy members
+  (`allowed_providers`, `responses_policy`, `rate_limit_policy`,
+  `lazy_throttling_policy`, `live_burn`, `external_tool_policy`)
+  that the normal `render_key_configuration_document` export
+  reads, and the demo process only carries fixed neutral settings,
+  so its operator ceilings are never the source deployment's.
+  Rendering the version-1 document from the stripped copy plus
+  neutral settings would FABRICATE default policy for real keys;
+  until a separately verified policy projection exists (bounded
+  follow-on sanitizer work, a human choice pending), this exact GET
+  emits no configuration export at all - no source fallback, no
+  raw metadata passthrough, no default guessing. The key-detail
+  page keeps the action visible and labels it unavailable in this
+  demo.
 
-* `configuration.json`: the SAME allowlisted strict version-1
-  policy document the normal export renders for the exact copied
-  key (identity in the attachment filename; the body is a pure
-  policy projection - no key material, provider credential, raw
-  metadata, replay token, source ID or copy locator).
-* `calibration/summary.json`: the SAME service and the SAME strict
-  input validation as the normal download, recalculated over the
-  FROZEN copied usage rows (copied-data recalculation, never live
-  current usage); non-trusted-calibration keys get the fixed safe
-  400 refusal.
+All refusals (404/400/503) are fixed HTML pages. A SUCCESSFUL
+calibration download is application/json with the attachment
+disposition, and the gate then normalizes every dynamic /admin
+response's cache policy to exactly one
+`Cache-Control: private, no-store` (a pre-existing header is
+replaced, never duplicated) plus nosniff.
 
-Whole-output refusal: when ANY nested string of the serialized
-artifact equals or embeds a known incoming authentication alias
-(the same pure request-aware classifier as the normal calibration
-export), the WHOLE output is refused with a fixed safe error - no
-partial secret substitution, no echo of the refused value. The
-path key id itself as an incoming alias is refused BEFORE any copy
-binding. A finite 1 MiB output ceiling refuses oversize output
-explicitly (never truncated). Both attachments are
-application/json with the attachment disposition and private
-no-store/no-cache plus nosniff headers.
+Whole-output refusal (calibration only): when ANY nested string of
+the serialized artifact equals or embeds a known incoming
+authentication alias (the same pure request-aware classifier as
+the normal calibration export), the WHOLE output is refused with a
+fixed safe error - no partial secret substitution, no echo of the
+refused value. The path key id itself as an incoming alias is
+refused BEFORE any copy binding on BOTH attachments (fixed safe
+400, before configuration would otherwise reach the fixed safe
+503). A finite 1 MiB output ceiling refuses oversize calibration
+output explicitly (never truncated).
 
 ### Route configuration form (copy-backed choices only)
 
@@ -3414,8 +3430,11 @@ every condition as bound parameters, exact length + SHA256, and the
 typed verifier law. There is NO live
 `COMPLETION_SERVICE_PROFILE_DIR` or filesystem fallback in the demo
 process: an absent leaf means the source deployment recorded no
-operator completion profiles, and the page labels the package
-defaults instead; a corrupt configured leaf is the fixed safe 503.
+operator completion profiles, and the picker then shows the finite
+packaged completion-profile defaults (the bundled profile data the
+normal form offers when the operator directory is absent), clearly
+labeled as package defaults - not copied source state; a corrupt
+configured leaf is the fixed safe 503.
 The existing form, field hints and visible action controls are
 kept with a persistent frozen/no-op cue. No provider network or
 source file read occurs.
@@ -3443,8 +3462,10 @@ byte-identical for the normal admin.
 * **Focused mocked units**: the new `test_w_` unit suite in
   `tests/unit/test_demo_web.py` (gate exact-path/near-miss/
   query-law/percent-decode/unsafe-204 law; SMTP not-recorded
-  render, preflight-mismatch 503 and no-demo-state 404; key
-  attachment positive/missing/alias/oversized/preflight cases
+  render, preflight-mismatch 503 and no-demo-state 404;
+  configuration 503-no-JSON/no-copy-read, configuration
+  shape-refusal 404s and the fixed 503 no-alias-echo case;
+  calibration positive/missing/alias/oversized/preflight cases
   including the path-identity refusal proven with a never-called
   copy session; route-configuration copy-backed positive,
   unconfigured-leaf labeling and corrupt-leaf 503; codex artifact
@@ -3467,13 +3488,15 @@ byte-identical for the normal admin.
   capture or worker publication; exact-id cleanup before the
   invariance phase), the SMTP "not recorded" pages for both
   sessions, the calibration summary over frozen copied usage for
-  the test-only trusted-calibration key, the allowlisted
-  configuration document with the copied policy fields and copied
-  identity filename, the purpose-gate 400, the semantic-input 400,
-  the gate query-law 404s, the path-identity and whole-output
-  alias refusals with no echo, the per-copy configuration
-  isolation (copy B 404s copy A's inserted key and renders its own
-  key from its own copy), the route-configuration copy-backed
+  the test-only trusted-calibration key, the fixed safe 503 with
+  NO JSON for configuration (both copies' copied key metadata
+  proven clone-receipt-only, with the source-policy-divergence
+  seed proving the copied metadata omitted the nondefault source
+  policy), the purpose-gate 400, the semantic-input 400, the gate
+  query-law 404s, the path-identity and whole-output alias
+  refusals with no echo, the configuration 503 for BOTH sessions
+  (copy A's inserted key and copy B's own key - no configuration
+  JSON exists in either copy), the route-configuration copy-backed
   form over the REAL worker-built completion-choices leaf (the
   copied route's DB value linked to its copy's leaf, per-copy leaf
   reads, and the corrupt-leaf 503 with exact digest restore), and
@@ -3481,13 +3504,198 @@ byte-identical for the normal admin.
   route (the eligible inert bytes are proven by the unit suite).
 * **Real Chromium**: the owned browser fixture proves the SMTP
   form render and the REAL submit landing on the quiet 204 no-op
-  (nothing sent), the apply-recovery no-send notice, a REAL
-  authenticated-context download of the copied key's
-  configuration document (attachment bytes, safety headers,
-  copied identity filename), the standard-key calibration 400 in
-  the browser, the route-detail page without any codex artifact
+  (nothing sent), the apply-recovery no-send notice, the key
+  detail page labeling the frozen-configuration action unavailable
+  in this demo with NO configuration.json link, the standard-key
+  calibration 400 in the browser, the route-detail page without
+  any codex artifact
   link, the exact artifact-path 404, and the route-configuration
   render with the persistent no-op cue.
 * No schema migration, role, grant, configuration, release,
   deployment or merge is introduced; the fake admin remains a
   sanitized display surface with no write authority.
+
+## Catalog final reads: direct artifact downloads and frozen apply-status (objective 224-x)
+
+The demo catalog surface gains its remaining four read-only exact
+GET families, all over the visitor's verified per-login SELECT-only
+copy and all query-free:
+
+* `/admin/operations/catalog/runs/{run-id}/artifact/{file}` (the
+  run-id is exactly `demo-run-` plus 24 lowercase hex) - one of
+  the closed seven worker-published run content files
+  (`catalog-refresh.json`, `catalog-baseline.json`,
+  `routes-proposal.tsv`, `pricing-proposal.tsv`,
+  `fx-proposal.json`, `validation.json`, `REVIEW.html`), each
+  intersected with the already-published sanitized leaf law for
+  that exact file's worker-published kind.
+* `/admin/operations/catalog/runs/{run-id}/apply-status` (same
+  exact run-id shape) - the frozen historical apply status for one
+  captured run.
+* `/admin/operations/catalog/jobs/{32hex}/artifact/{file}` - one of
+  the closed job upload names (`bundle-` / `baseline-` /
+  `baseline-export-` plus 32 hex) and the six sanitized proposal
+  artifact names (`source-manifest.json`,
+  `provider-catalog-normalized.json`, `routes-proposal.tsv`,
+  `pricing-proposal.tsv`, `provider-catalog-report.md`,
+  `warnings.json`).
+* `/admin/operations/catalog/jobs/{32hex}/package/{preset}/{file}`
+  - the finite five presets crossed with the five closed package
+  file names (`routes-proposal.tsv`, `pricing-proposal.tsv`,
+  `package-report.md`, `model-review.md`,
+  `package-manifest.json`).
+
+The run detail page links the seven run files to these DIRECT
+downloads (never the `?name=` selector); the catalog index keeps
+the 224-l `?name=` selector. No query, subpath, alternate-slash or
+non-canonical-ID variant is admitted (fixed 404); every unsafe
+method on the admitted paths is the pre-body quiet 204.
+
+### Metadata-first bounded reads
+
+Each download runs in ONE SELECT-only/read-only transaction on the
+gate's SAME request-local copy engine with the independent in-
+transaction `current_database()` / `transaction_read_only` recheck
+(mismatch is the fixed safe 503). The FIRST query is metadata-only:
+a parameterized lookup of the exact validated logical name with a
+DB-computed `octet_length(body)` - no body transfer. It requires
+`byte_count` and the actual length to be nonnegative integers no
+greater than 32 MiB and equal, plus the exact closed kind. The
+SECOND query fetches the body only under `kind` / `byte_count` /
+`sha256` and `octet_length(body) <= :cap` re-asserted as BOUND
+parameters, and the fetched bytes are re-checked in memory for
+length and SHA256 before release. A missing leaf is the fixed 404;
+any corruption, bound violation, digest/size mismatch or driver
+failure is the fixed safe 503 - never the bytes, never a partial
+artifact, never a source value. No filesystem, network, original-
+custody or seal-key access occurs.
+
+### Wire law
+
+A SUCCESSFUL download carries `application/octet-stream`, a forced
+`Content-Disposition: attachment` with the safe closed base name,
+`X-Content-Type-Options: nosniff`,
+`Content-Security-Policy: default-src 'none'`, and exactly one
+`Cache-Control: private, no-store` (the gate normalizes every
+dynamic /admin response to that single header). 404/503 are
+fixed HTML refusals carrying `X-Content-Type-Options: nosniff`
+plus that same gate-normalized single
+`Cache-Control: private, no-store` header (no name, kind, hash,
+DSN or error value echoed). Copy isolation holds: a session sees
+only its own copy's leaves, so a name that exists only in another
+copy is a fixed 404.
+
+### Frozen apply-status page (fixed explicit unavailability)
+
+The apply-status page first verifies, in ONE
+SELECT-only/read-only transaction with the in-transaction
+`current_database()` / `transaction_read_only` recheck, that the
+run exists in THIS copy via the SAME closed seven-file
+metadata-only inventory (missing run is a fixed 404; a partial or
+kind-mismatched run is the fixed safe 503). It then renders the
+FIXED explicit "Apply status is unavailable for this run in this
+copy." state with ZERO records.
+
+Reported limitation: the worker remaps captured run identifiers
+for the display leaves (the `demo-run-` keyed-HMAC slug) while the
+sanitizer remaps the copied `catalog_refresh_applications.run_id`
+values by an INDEPENDENT per-copy string remap; the web process
+holds neither the original run id nor the per-copy seed, so NO
+verified mapping exists between a copied application record and
+the display run id. Presenting copied rows as this run's status
+would mislead, so the copied applications table is NOT read or
+listed on this page at all. The unavailable state is a historical
+display limitation of the sanitized copy - it is NOT a statement
+that the run was never applied. The page keeps the "status at
+snapshot time" / "NOT live authoritative source status" framing,
+and visible operational controls are labeled quiet no-ops.
+
+### Key configuration export remains safely unavailable
+
+The 224-w `configuration.json` fixed safe 503 stands. The owned
+fixture now additionally seeds a NONDEFAULT source policy into the
+first source key's `gateway_keys.metadata` (restored by a
+test-local finalizer) and proves BOTH copies' metadata for that
+key is clone-receipt-only - a direct source-policy-divergence
+proof that a faithful version-1 configuration export cannot be
+reconstructed from the sanitized copy. A bounded sanitizer policy
+projection remains pending human choice.
+
+### Evidence (224-x)
+
+* **Focused mocked units**: the 17 new `test_x_` unit tests in
+  `tests/unit/test_demo_web.py` (calibration default multiplier 3
+  and the rebuilt raw-byte gate query law - literal ASCII
+  parameter names, one percent-decode per bounded value,
+  encoded-name/delimiter/equals refusals, and date-shaped /
+  numeric incoming-alias refusals; route-picker packaged defaults
+  and alias withholding; catalog gate exact shapes with the
+  32-hex "original" id admitted (same canonical shape) and the
+  true near-misses 404; unsafe-method 204s; run-artifact positive
+  with exact bytes + wire law + the metadata-first DB-computed
+  `octet_length` + bound-parameter body re-assert; missing 404;
+  seven corruption cases refused BEFORE any body query; body
+  digest-mismatch 503, each refusal asserting the exact refusal
+  wire law (nosniff plus the gate-normalized single
+  `Cache-Control: private, no-store`); job artifact positives for
+  ALL THREE closed upload kinds (the longest-prefix
+  `baseline-export-`) plus proposal, and package positives;
+  apply-status missing-run 404 and partial-run 503, the
+  run-present fixed-unavailable page, and the rows-never-rendered
+  no-misattribution negative (101+ copied rows, including a
+  tampered row and an incoming-alias canary, are never read or
+  echoed)) - all green with Ruff clean; plus the repaired 224-w
+  admin key-actions template suite (21/21; the hosted w-head
+  failure `test_q_detail_demo_shows_admitted_read_links`
+  reproduced locally and repaired).
+* **Byte-identity oracle**: the 224-x-modified templates
+  (apply_result, proposals, smtp_test, configuration_form,
+  keys/detail link block, run detail, catalog jobs) render
+  byte-identical under representative NORMAL contexts against the
+  activation-commit originals; the demo branches render expected
+  content in separate demo smoke renders.
+* **Owned PostgreSQL, two simultaneous copies**: one test-only
+  complete run (seven leaves - six honest `b"{}"` placeholders
+  plus one REAL 223 `_san_validation_json` body), one test-only
+  job (upload, proposal warnings, package manifest) and one
+  test-only `catalog_refresh_applications` row are inserted
+  through the owned target-owner connection AFTER the
+  earlier empty-state assertions (honest label: transport/binding
+  proof, NOT 222 source capture or worker publication; exact-name
+  / exact-id cleanup in a finally). Proven: run-artifact /
+  job-artifact / package exact bytes + wire law over the session
+  clients; copy-B isolation 404; stored-SHA corruption 503 with
+  digest restore; the seven near-miss 404s; the apply-status
+  fixed-unavailable page with zero records BEFORE and AFTER
+  inserting the ONE test-only application row (the row's values
+  are never rendered - no misattribution without a verified
+  run-id mapping), copy-B 404 for the same canonical run, the
+  quiet 204 cuts with a 200,000-byte garbage body, and the
+  partial-run 503; plus the source-policy-divergence proof
+  (both copies' `gateway_keys` metadata clone-receipt-only
+  despite the nondefault source policy).
+* **Real Chromium**: the browser copy carries the same seven
+  test-only run leaves (six honest `b"{}"` placeholders plus one
+  real `_san_validation_json` body): the NON-EMPTY catalog index
+  with the seven `?name=` sanitized-selector hrefs (the 224-l
+  selector, unchanged) and no empty-state note, the run detail
+  page with the seven DIRECT
+  `/runs/{run-id}/artifact/{file}` hrefs plus the apply-status
+  link, a REAL authenticated-context artifact
+  download (exact bytes + forced attachment wire law), the
+  collect page listing exactly that one Captured run group, the
+  apply-status fixed-unavailable page with zero records DESPITE
+  the real copied applications row from the source fixture (the
+  no-misattribution negative in a real browser) plus the labeled
+  no-op control, and the key detail page labeling the
+  configuration action unavailable with no configuration.json
+  link.
+* The six placeholder bodies (owned-PG and browser fixtures) are
+  TEST-ONLY and are not valid typed outputs for their kinds; they
+  prove route/reader/transport and the bounded-read law, not
+  artifact content validation or worker publication. The
+  configured-file installed workflow remains objective 225.
+* Hosted checks are recorded as observed at report time, not
+  presumed. No schema migration, role, grant, configuration,
+  release, deployment or merge is introduced; the fake admin
+  remains a sanitized display surface with no write authority.

@@ -12,20 +12,29 @@ unsafe method the pre-body quiet 204 cut.
 
 Read law: ONE request-local SELECT-only transaction on the gate-bound
 engine with the independent ``current_database()`` /
-``transaction_read_only`` recheck; the key must exist in THIS copy
-(fixed 404 otherwise). Both documents are produced by the PROVEN
-read-only normal rendering services, bound to the request-local copy
-session and the demo app's fixed neutral settings (no ambient
-``get_settings()`` read):
+``transaction_read_only`` recheck.
 
-* configuration: the SAME allowlisted strict version-1 document the
-  CLI renders for the exact copied key (``render_key_configuration_
-  document``; no key material, provider credential, raw metadata,
-  replay token, source ID or copy locator);
-* calibration: the SAME service and the SAME strict input validation
-  (``_parse_admin_datetime`` / ``_parse_required_admin_decimal``) as
-  the normal download, recalculated over the FROZEN copied usage rows
-  (copied-data recalculation, never live current usage).
+The calibration summary is produced by the PROVEN read-only normal
+service, bound to the request-local copy session (the key must exist
+in THIS copy, fixed 404 otherwise; no ambient ``get_settings()``
+read): the SAME strict input validation
+(``_parse_admin_datetime`` / ``_parse_required_admin_decimal``) as
+the normal download (the normal selector's default multiplier 3
+applies when the parameter is absent), recalculated over the FROZEN
+copied usage rows (copied-data recalculation, never live current
+usage).
+
+The configuration download is SAFELY UNAVAILABLE in this demo
+(224-x): the 222/224-r sanitizer maps ``gateway_keys.metadata`` to
+KR, retaining only the projected clone receipt and DISCARDING the
+ordinary policy metadata (allowed providers, Responses, throttling,
+streaming-burn and external-tool policies). Rendering the normal
+version-1 document on the stripped copy plus the demo process's
+neutral settings would fabricate defaults or wrong operator ceilings
+for a nondefault source key, so the exact GET performs NO copy read
+and returns a fixed safe 503 with NO JSON - no source fallback, no
+raw metadata passthrough, no default guessing. A later same-PR order
+may implement a verified policy projection.
 
 Whole-output refusal: when ANY nested canonical string of the
 serialized artifact is a known incoming authentication alias or
@@ -63,10 +72,6 @@ from slaif_gateway.services.calibration_summary_service import (
     CalibrationSummaryError,
     CalibrationSummaryService,
 )
-from slaif_gateway.services.key_service import (
-    KeyConfigurationExportError,
-    KeyService,
-)
 
 router = APIRouter(include_in_schema=False)
 
@@ -89,23 +94,31 @@ _SAFE_OVERSIZED = (
 )
 
 
+_ATTACHMENT_REFUSAL_HEADERS = {
+    # The order's wire law for EVERY attachment response (success and
+    # refusal): private no-store (the central gate normalizes every
+    # admitted dynamic response to exactly this one header) plus
+    # nosniff.
+    "Cache-Control": "private, no-store",
+    "X-Content-Type-Options": "nosniff",
+}
+
+
 def _not_found() -> Response:
-    return HTMLResponse(
-        _SAFE_NOT_FOUND, status_code=404, headers={"Cache-Control": "private, no-store"}
-    )
+    return HTMLResponse(_SAFE_NOT_FOUND, status_code=404,
+                        headers=dict(_ATTACHMENT_REFUSAL_HEADERS))
 
 
 def _unavailable() -> Response:
-    return HTMLResponse(
-        _SAFE_UNAVAILABLE, status_code=503, headers={"Cache-Control": "private, no-store"}
-    )
+    return HTMLResponse(_SAFE_UNAVAILABLE, status_code=503,
+                        headers=dict(_ATTACHMENT_REFUSAL_HEADERS))
 
 
 def _refusal(message: str, status_code: int) -> Response:
     return HTMLResponse(
         message,
         status_code=status_code,
-        headers={"Cache-Control": "private, no-store"},
+        headers=dict(_ATTACHMENT_REFUSAL_HEADERS),
     )
 
 
@@ -157,7 +170,16 @@ async def demo_key_calibration_summary(
     params = request.query_params
     start_at = params.get("start_at") or ""
     end_at = params.get("end_at") or ""
-    multiplier = params.get("multiplier") or ""
+    # The normal selector's DEFAULT multiplier 3 applies when the
+    # parameter is ABSENT (an explicit empty value is refused by the
+    # gate law; the branch below is defense in depth).
+    _multiplier_raw = params.get("multiplier")
+    if _multiplier_raw is None:
+        multiplier = "3"
+    elif _multiplier_raw == "":
+        return _refusal(_SAFE_INPUT_REFUSAL, 400)
+    else:
+        multiplier = _multiplier_raw
 
     # Strict normal input validation BEFORE any copy query.
     try:
@@ -225,69 +247,31 @@ async def demo_key_calibration_summary(
 
 @router.get("/admin/keys/{key_id}/configuration.json")
 async def demo_key_configuration(request: Request, key_id: str) -> Response:
-    """224-w: the allowlisted strict version-1 configuration document
-    for the EXACT copied key (same canonical render as the normal
-    export), whole-output alias refusal, 1 MiB ceiling, private
-    no-store nosniff attachment."""
+    """224-x: SAFELY UNAVAILABLE - fixed safe 503, NO JSON.
+
+    The 222/224-r sanitizer maps ``gateway_keys.metadata`` to KR,
+    discarding the ordinary policy metadata (allowed providers,
+    Responses, throttling, streaming-burn and external-tool
+    policies); the normal version-1 renderer on the stripped copy
+    plus the demo process's neutral settings would fabricate
+    defaults or wrong operator ceilings for a nondefault source
+    key. Until a separately verified policy projection exists, this
+    exact GET performs NO copy read and returns the fixed safe 503
+    with no JSON, no source fallback, no raw metadata passthrough
+    and no default guessing. The basic shape laws (demo state,
+    query-free, canonical UUID, path-identity alias refusal before
+    any binding) are unchanged; every response carries the
+    attachment refusal headers (private no-store + nosniff).
+    """
     demo = getattr(request.state, "demo_admin", None)
     if demo is None:
         return _not_found()
     if not _no_query(request):
         return _not_found()
     try:
-        parsed_key_id = _uuid.UUID(key_id)
+        _uuid.UUID(key_id)
     except ValueError:
         return _not_found()
     if _is_known_alias(request, key_id):
         return _refusal(_SAFE_REFUSAL, 400)
-
-    try:
-        session_factory = get_sessionmaker_from_app(request)
-    except Exception:
-        return _unavailable()
-    document: dict[str, Any] | None = None
-    try:
-        async with session_factory() as session, session.begin():
-            if not await _copy_recheck(session, demo.target_db):
-                return _unavailable()
-            key = await GatewayKeysRepository(session).get_gateway_key_by_id(
-                parsed_key_id
-            )
-            if key is None:
-                return _not_found()
-            # The PROVEN pure read-only renderer on the SAME copied
-            # key state (the demo app's fixed neutral settings; the
-            # render path never touches the unused service seams).
-            service = KeyService(
-                settings=request.app.state.settings,
-                gateway_keys_repository=GatewayKeysRepository(session),
-                one_time_secrets_repository=None,
-                audit_repository=None,
-            )
-            document = service.render_key_configuration_document(key)
-    except (KeyConfigurationExportError, ValueError):
-        # Malformed/unsupported stored policy in the copy: one fixed
-        # safe refusal, never an ambient fallback, no echo.
-        return _refusal(_SAFE_UNAVAILABLE, 503)
-    except Exception:  # noqa: BLE001 - unavailable, never ambient
-        return _unavailable()
-
-    if _calibration_payload_has_known_secret_alias(
-        document, scope=request.scope, accepted_prefixes=_accepted_prefixes(request)
-    ):
-        return _refusal(_SAFE_REFUSAL, 400)
-
-    content = (
-        json.dumps(
-            document, indent=2, sort_keys=True,
-            default=_admin_configuration_json_default,
-        )
-        + "\n"
-    )
-    if len(content.encode("utf-8")) > _MAX_ATTACHMENT_BYTES:
-        return _refusal(_SAFE_OVERSIZED, 400)
-    response = Response(content=content, media_type="application/json")
-    _attachment_headers(
-        response, f"slaif-key-configuration-{key.public_key_id}.json"
-    )
-    return response
+    return _unavailable()

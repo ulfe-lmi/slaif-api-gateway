@@ -294,7 +294,7 @@
     <h2 id="key-advanced-configuration-heading">Advanced Configuration (versioned JSON)</h2>
     <p class="muted">The SAME strict version-1 document the CLI uses: download the key's current allowlisted projection, edit it, and apply a presence-aware partial update. Omitted fields preserve the current state; explicit <code>null</code> and <code>[]</code> keep their distinct meanings. Key material, status, owner/cohort, validity, usage counters, and reservations are never touched. Bound client-module changes remain blocked and must use the reviewed migration path, not this editor.</p>
     <p>
-{% if demo_admin %}      <a class="button-link secondary" href="/admin/keys/{{ key.id }}/configuration.json">Download frozen configuration (JSON, exact copied key state)</a>{% else %}      <a class="button-link secondary" href="/admin/keys/{{ key.id }}/configuration.json">Download current configuration (JSON)</a>{% endif %}
+{% if demo_admin %}      <span class="button-link secondary" aria-disabled="true">Download frozen configuration - unavailable in this demo (no faithful version-1 export can be rendered from the sanitized copy's recorded policy data)</span>{% else %}      <a class="button-link secondary" href="/admin/keys/{{ key.id }}/configuration.json">Download current configuration (JSON)</a>{% endif %}
     </p>
     <form method="post" action="/admin/keys/{{ key.id }}/configuration">
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">

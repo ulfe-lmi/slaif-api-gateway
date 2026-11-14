@@ -336,6 +336,72 @@ def test_e2e_admin_gate_two_sessions_distinct_copies(
     request.addfinalizer(
         lambda: shutil.rmtree(_U_BRAND_B, ignore_errors=True)
     )
+    # 224-x: SOURCE POLICY DIVERGENCE (honest label): before worker A
+    # runs, the FIRST source key's metadata is seeded with a NONDEFAULT
+    # ordinary policy through the owned source connection. The
+    # 222/224-r sanitizer maps gateway_keys.metadata to KR (clone-
+    # receipt-only), so BOTH worker-built copies must carry exactly {}
+    # for that key - the copied ordinary policy is PROVEN discarded,
+    # which is why the demo configuration download is fixed-safe-
+    # unavailable (a "faithful" version-1 export cannot be rendered
+    # from the stripped copy). The original metadata value is restored
+    # by a finalizer; row counts never change, so the invariance
+    # baselines are unaffected.
+    _x_src_meta_orig: dict[str, Any] = {}
+    _x_src_key_policy = json.dumps(
+        {
+            "responses_policy": {"enabled": True},
+            "allowed_providers": ["openrouter"],
+            "rate_limit_policy": {"requests_per_minute": 7},
+        }
+    )
+
+    def _seed_src_key_policy() -> str:
+        async def run() -> str:
+            s = await asyncpg.connect(**_conn_kwargs(
+                san_env.source["host"], san_env.source["port"],
+                san_env.source["user"], san_env.source["password"],
+                str(san_env.source["database"]),
+            ))
+            try:
+                row = await s.fetchrow(
+                    "SELECT id, metadata FROM gateway_keys "
+                    "ORDER BY created_at, id LIMIT 1"
+                )
+                assert row is not None
+                _x_src_meta_orig["value"] = row["metadata"]
+                await s.execute(
+                    "UPDATE gateway_keys SET metadata = $2 "
+                    "WHERE id = $1",
+                    row["id"], _x_src_key_policy,
+                )
+                return str(row["id"])
+            finally:
+                await s.close()
+
+        return asyncio.run(run())
+
+    _x_src_key_id = _seed_src_key_policy()
+
+    def _restore_src_key_policy() -> None:
+        async def run() -> None:
+            s = await asyncpg.connect(**_conn_kwargs(
+                san_env.source["host"], san_env.source["port"],
+                san_env.source["user"], san_env.source["password"],
+                str(san_env.source["database"]),
+            ))
+            try:
+                await s.execute(
+                    "UPDATE gateway_keys SET metadata = $2 "
+                    "WHERE id = $1",
+                    _x_src_key_id, _x_src_meta_orig["value"],
+                )
+            finally:
+                await s.close()
+
+        asyncio.run(run())
+
+    request.addfinalizer(_restore_src_key_policy)
     cli_env_a = {
         **cli_env,
         **_T_CANARY_ENV,
@@ -1163,9 +1229,11 @@ def test_e2e_admin_gate_two_sessions_distinct_copies(
                         assert "gpt-test" in rd_text
                         for name, _kind, _data in _rd_files:
                             assert (
-                                f'href="/admin/operations/catalog/artifact'
-                                f'?name=catalog/runs/{_rd_run}/{name}"'
+                                f'href="/admin/operations/catalog/runs/{_rd_run}/artifact/{name}"'
                             ) in r.text, name
+                        assert (
+                            f'href="/admin/operations/catalog/runs/{_rd_run}/apply-status"'
+                        ) in r.text
                         assert target_a not in r.text
                         assert _rd_orig_id not in r.text
                         # Session B: the SAME canonical path against its
@@ -1316,11 +1384,14 @@ def test_e2e_admin_gate_two_sessions_distinct_copies(
                         assert "ILLUSTRATIVE demo-only form" in _pn_text
                         assert "Captured proposal artifact groups (historical)" in _pn_text
                         assert f'value="{_pn_job}" selected' in r.text
-                        for _pn_name, _pn_kind, _pn_data in _pn_files[:2]:
-                            assert (
-                                f'href="/admin/operations/catalog/artifact'
-                                f'?name={_pn_name}"'
-                            ) in r.text, _pn_name
+                        assert (
+                            f'href="/admin/operations/catalog/jobs/{_pn_job}'
+                            f'/artifact/routes-proposal.tsv"'
+                        ) in r.text
+                        assert (
+                            f'href="/admin/operations/catalog/jobs/{_pn_job}'
+                            f'/package/openrouter-chat-text/pricing-proposal.tsv"'
+                        ) in r.text
                         assert "historical at capture time" in _pn_text
                         assert ">ready<" in r.text
                         assert "2025-06-15T15:00:00+00:00" in r.text
@@ -1631,14 +1702,14 @@ def test_e2e_admin_gate_two_sessions_distinct_copies(
                         assert "2025-06-15T15:00:00+00:00" in r.text
                         assert "free text never displayed" not in r.text
                         # The verified references link to the exact
-                        # 224-m run-detail page and the 224-l forced
-                        # download (never the original custody).
+                        # 224-m run-detail page and the 224-x direct
+                        # job-artifact download (never the original
+                        # custody).
                         assert (
                             f'href="/admin/operations/catalog/runs/{_pp_run}/"'
                         ) in r.text
                         assert (
-                            f'href="/admin/operations/catalog/artifact'
-                            f'?name=catalog/uploads/{_pp_job}/{_pp_upload}"'
+                            f'href="/admin/operations/catalog/jobs/{_pp_job}/artifact/{_pp_upload}"'
                         ) in r.text
                         assert _pp_orig_job not in r.text
                         assert _pp_orig_run not in r.text
@@ -2647,50 +2718,60 @@ def test_e2e_admin_gate_two_sessions_distinct_copies(
                         assert _w_doc["summary"]["observed_request_count"] == 0
                         assert target_a not in r.text
                         assert _w_token_hash not in r.text
-                        # The SAME key's allowlisted version-1
-                        # configuration document (pure render of the
-                        # exact copied key state).
+                        # 224-x: the SAME key's configuration download
+                        # is SAFELY UNAVAILABLE in this demo: the
+                        # 222/224-r sanitizer maps gateway_keys.metadata
+                        # to KR, discarding the ordinary policy
+                        # metadata, so a "faithful" version-1 document
+                        # cannot be rendered from the stripped copy.
+                        # Fixed safe 503, NO JSON, and NO copy read of
+                        # any kind (the handler reads nothing).
                         r = await client_a.get(
                             f"/admin/keys/{_w_cal_key}/configuration.json"
                         )
-                        assert r.status_code == 200
-                        assert r.headers["content-type"] == "application/json"
-                        assert r.headers["content-disposition"] == (
-                            "attachment; filename="
-                            f'"slaif-key-configuration-{_w_pub}.json"'
-                        )
+                        assert r.status_code == 503
+                        assert "json" not in r.headers["content-type"]
                         assert r.headers["cache-control"] == "private, no-store"
                         assert r.headers["x-content-type-options"] == "nosniff"
-                        s = await _target_conn()
-                        _w_krow = await s.fetchrow(
-                            "SELECT cost_limit_eur, token_limit_total, "
-                            "request_limit_total, allowed_models "
-                            "FROM gateway_keys WHERE id = $1",
-                            _w_cal_key,
-                        )
-                        await s.close()
-                        _w_doc = json.loads(r.content)
-                        # The strict version-1 ALLOWLISTED policy
-                        # projection of the EXACT copied key state:
-                        # identity in the attachment filename, the
-                        # copied policy fields in the body, and no key
-                        # material, locator or source value anywhere.
-                        assert _w_doc["schema_version"] == 1
-                        assert _w_doc["cost_limit_eur"] == str(
-                            _w_krow["cost_limit_eur"]
-                        )
-                        assert _w_doc["token_limit_total"] == (
-                            _w_krow["token_limit_total"]
-                        )
-                        assert _w_doc["request_limit_total"] == (
-                            _w_krow["request_limit_total"]
-                        )
-                        _w_models = _w_krow["allowed_models"]
-                        if isinstance(_w_models, str):
-                            _w_models = json.loads(_w_models)
-                        assert _w_doc["allowed_models"] == list(_w_models)
                         assert target_a not in r.text
                         assert _w_token_hash not in r.text
+                        # SOURCE POLICY DIVERGENCE (the first source
+                        # key was seeded with a NONDEFAULT ordinary
+                        # policy before the workers ran): the KR law
+                        # (clone-receipt-only) means BOTH copies carry
+                        # exactly {} for the corresponding key - the
+                        # copied ordinary policy is PROVEN discarded.
+                        s = await _target_conn()
+                        _x_meta_a = (await s.fetchrow(
+                            "SELECT metadata FROM gateway_keys "
+                            "WHERE id = $1",
+                            _w_key_a,
+                        ))["metadata"]
+                        await s.close()
+                        assert _x_meta_a in ("{}", {})
+                        assert "responses_policy" not in str(_x_meta_a)
+                        s = await asyncpg.connect(**_conn_kwargs(
+                            san_env.target["host"], san_env.target["port"],
+                            san_env.target["user"], san_env.target["password"],
+                            target_b,
+                        ))
+                        _x_meta_b = (await s.fetchrow(
+                            "SELECT metadata FROM gateway_keys "
+                            "WHERE id = $1",
+                            _w_key_b,
+                        ))["metadata"]
+                        await s.close()
+                        assert _x_meta_b in ("{}", {})
+                        assert "allowed_providers" not in str(_x_meta_b)
+                        # The demo key-detail page for that key
+                        # advertises the frozen-configuration action as
+                        # UNAVAILABLE (no faithful version-1 export can
+                        # be rendered from the sanitized copy) and
+                        # carries no configuration.json link.
+                        r = await client_a.get(f"/admin/keys/{_w_key_a}")
+                        assert r.status_code == 200
+                        assert "unavailable in this demo" in r.text
+                        assert "configuration.json" not in r.text
                         # Purpose gate: the fixture's STANDARD key gets
                         # the fixed safe 400 refusal (never a summary).
                         r = await client_a.get(
@@ -2740,52 +2821,38 @@ def test_e2e_admin_gate_two_sessions_distinct_copies(
                         )
                         assert r.status_code == 400
                         assert _w_cal_key not in r.text
-                        # Whole-output alias: a cookie value matching a
-                        # NESTED document string (the copied allowed
-                        # model) refuses the WHOLE output (no partial
-                        # substitution, no echo).
-                        _w_canary_model = list(_w_models)[0]
-                        client_a.cookies.set(
-                            "w-canary-pub", _w_canary_model
-                        )
+                        # No JSON is rendered at all, so there is no
+                        # output to leak: the fixed 503 must not echo
+                        # an incoming credential either. The
+                        # path-identity alias cookie above is removed
+                        # first so this request reaches the fixed safe
+                        # 503 rather than the 400 alias refusal.
+                        client_a.cookies.delete("w-canary-uuid")
+                        _w_canary = "224w-canary-model-token-123"
+                        client_a.cookies.set("w-canary-pub", _w_canary)
                         r = await client_a.get(
                             f"/admin/keys/{_w_cal_key}/configuration.json"
                         )
-                        assert r.status_code == 400
-                        assert _w_canary_model not in r.text
+                        assert r.status_code == 503
+                        assert _w_canary not in r.text
                         client_a.cookies.delete("w-canary-pub")
                         client_a.cookies.delete("w-canary-uuid")
-                        # Copy isolation: session B 404s A's inserted
-                        # key (per-copy independent UUIDs; no
-                        # cross-copy read)...
+                        # Copy isolation: with NO configuration
+                        # download performed at all (fixed 503 before
+                        # any copy read), session B gets the SAME fixed
+                        # 503 with no JSON for A's inserted key AND for
+                        # B's own fixture key (no cross-copy read is
+                        # even possible).
                         r = await client_b.get(
                             f"/admin/keys/{_w_cal_key}/configuration.json"
                         )
-                        assert r.status_code == 404
-                        # ...and B's OWN fixture key renders from B's
-                        # copy with B's exact copied public id.
-                        s = await asyncpg.connect(**_conn_kwargs(
-                            san_env.target["host"], san_env.target["port"],
-                            san_env.target["user"], san_env.target["password"],
-                            target_b,
-                        ))
-                        _w_pub_b = (
-                            await s.fetchrow(
-                                "SELECT public_key_id FROM gateway_keys "
-                                "WHERE id = $1",
-                                _w_key_b,
-                            )
-                        )["public_key_id"]
-                        await s.close()
+                        assert r.status_code == 503
+                        assert "json" not in r.headers["content-type"]
                         r = await client_b.get(
                             f"/admin/keys/{_w_key_b}/configuration.json"
                         )
-                        assert r.status_code == 200
-                        assert r.headers["content-disposition"] == (
-                            "attachment; filename="
-                            f'"slaif-key-configuration-{_w_pub_b}.json"'
-                        )
-                        assert json.loads(r.content)["schema_version"] == 1
+                        assert r.status_code == 503
+                        assert "json" not in r.headers["content-type"]
                         # (3) route configuration form: copied route +
                         # copy-backed choices. The fixture worker ran
                         # WITH a configured completion-profile
@@ -2947,7 +3014,7 @@ def test_e2e_admin_gate_two_sessions_distinct_copies(
                         r = await client_a.get(
                             f"/admin/keys/{_w_cal_key}/configuration.json"
                         )
-                        assert r.status_code == 404
+                        assert r.status_code == 503
                     finally:
                         # Same exact restore on failure (idempotent;
                         # the invariance phase must see untouched
@@ -2968,6 +3035,333 @@ def test_e2e_admin_gate_two_sessions_distinct_copies(
                             )
                         finally:
                             await s.close()
+
+                    # --- 224-x: direct catalog artifact/package reads +
+                    # apply-status over the verified copies ----------
+                    # TARGET-SIDE INSERTION (honest label): the test
+                    # inserts test-only display leaves into COPY A's
+                    # worker-published demo_display.leaves (plus ONE
+                    # test-only catalog_refresh_applications row)
+                    # through the owned target-owner connection. Only
+                    # the run's validation.json carries an ACTUAL 223
+                    # sanitizer output (for a synthetic original
+                    # document); the other run bodies and the job
+                    # artifact bodies are harmless b"{}" / b"[]" test-
+                    # only placeholders and are NOT valid typed outputs
+                    # for their kinds. This proves
+                    # route/reader/transport/binding of the four 224-x
+                    # read shapes through the real target-only tables,
+                    # the restricted reader role and the gate-bound
+                    # session - NOT complete worker publication,
+                    # artifact content validation or 223 source-file
+                    # capture (the configured-file installed workflow
+                    # remains objective 225).
+                    _x_seed = b"224x-pg-seed"
+                    _x_orig_run = "f8" * 16  # ORIGINAL id (never stored)
+                    _x_run = _rd_dsf._demo_run_id(_x_seed, _x_orig_run)
+                    _x_orig_job = "f9" * 16  # ORIGINAL id (never stored)
+                    _x_job = _rd_dsf._demo_job_id(_x_seed + b"-job", _x_orig_job)
+                    _x_doc = {
+                        "state": "VALID",
+                        "state_reason": "free text never displayed",
+                        "run_id": _x_orig_run,
+                        "generated_at": "2025-06-15T15:06:40+00:00",
+                        "policy_version": 7,
+                        "counts": {"routes": 3, "pricing": 2},
+                        "per_provider": {"openai": {"models": 2}},
+                        "dispositions": [],
+                        "price_comparisons": [],
+                        "warnings": [],
+                        "gates": [],
+                        "import_gates": [],
+                        "baseline": {},
+                        "research": {},
+                        "artifacts": {},
+                        "sql_checks": {},
+                        "baseline_metadata": [],
+                        "sources": [],
+                        "source_evidence": {},
+                        "fx_comparisons": [],
+                        "execution_context": {},
+                        "apply_plan": {"plan": "never displayed"},
+                    }
+                    _x_validation = _rd_dsf._san_validation_json(
+                        _rd_json.dumps(_x_doc).encode(), _x_seed
+                    )
+                    _x_run_files = (
+                        ("catalog/runs/" + _x_run + "/catalog-refresh.json", "refresh_bundle", b"{}"),
+                        ("catalog/runs/" + _x_run + "/catalog-baseline.json", "baseline_document", b"{}"),
+                        ("catalog/runs/" + _x_run + "/routes-proposal.tsv", "route_tsv", b"{}"),
+                        ("catalog/runs/" + _x_run + "/pricing-proposal.tsv", "pricing_tsv", b"{}"),
+                        ("catalog/runs/" + _x_run + "/fx-proposal.json", "fx_json", b"{}"),
+                        ("catalog/runs/" + _x_run + "/validation.json", "validation_json", _x_validation),
+                        ("catalog/runs/" + _x_run + "/REVIEW.html", "review_html", b"{}"),
+                    )
+                    _x_upload = "bundle-" + "ab" * 16
+                    _x_job_files = (
+                        (f"catalog/uploads/{_x_job}/{_x_upload}", f"artifact/{_x_upload}", "refresh_bundle", b"upload-bytes"),
+                        (f"catalog/proposals/{_x_job}/warnings.json", "artifact/warnings.json", "warnings_json", b"[]"),
+                        (
+                            f"catalog/proposals/{_x_job}/packages/"
+                            "openrouter-chat-text/package-manifest.json",
+                            "package/openrouter-chat-text/package-manifest.json",
+                            "package_manifest",
+                            b"{}",
+                        ),
+                    )
+                    _x_app_id = str(uuid.uuid4())
+                    try:
+                        s = await _target_conn()
+                        for _x_name, _x_kind, _x_data in _x_run_files:
+                            await s.execute(
+                                "INSERT INTO demo_display.leaves "
+                                "(logical_name, kind, sha256, byte_count, "
+                                "captured_at, body) "
+                                "VALUES ($1, $2, $3, $4, $5, $6)",
+                                _x_name, _x_kind,
+                                _art_hashlib.sha256(_x_data).hexdigest(),
+                                len(_x_data), 1750001000.0, _x_data,
+                            )
+                        for _x_name, _x_url, _x_kind, _x_data in _x_job_files:
+                            await s.execute(
+                                "INSERT INTO demo_display.leaves "
+                                "(logical_name, kind, sha256, byte_count, "
+                                "captured_at, body) "
+                                "VALUES ($1, $2, $3, $4, $5, $6)",
+                                _x_name, _x_kind,
+                                _art_hashlib.sha256(_x_data).hexdigest(),
+                                len(_x_data), 1750001000.0, _x_data,
+                            )
+                        await s.close()
+                        # (1) run artifact: exact bytes + the forced
+                        # sanitized-attachment wire law.
+                        r = await client_a.get(
+                            f"/admin/operations/catalog/runs/{_x_run}"
+                            "/artifact/validation.json"
+                        )
+                        assert r.status_code == 200
+                        assert r.content == _x_validation
+                        assert r.headers["content-type"] == "application/octet-stream"
+                        assert r.headers["content-disposition"] == (
+                            'attachment; filename="validation.json"'
+                        )
+                        assert r.headers["x-content-type-options"] == "nosniff"
+                        assert r.headers["content-security-policy"] == "default-src 'none'"
+                        assert r.headers["cache-control"] == "private, no-store"
+                        # Copy isolation: B's copy has none of the
+                        # test-only leaves -> fixed 404.
+                        r = await client_b.get(
+                            f"/admin/operations/catalog/runs/{_x_run}"
+                            "/artifact/validation.json"
+                        )
+                        assert r.status_code == 404
+                        assert r.content == b"Not Found"
+                        # Corruption: a wrong stored SHA is the fixed
+                        # safe 503, never the bytes.
+                        s = await _target_conn()
+                        await s.execute(
+                            "UPDATE demo_display.leaves SET sha256 = $2 "
+                            "WHERE logical_name = $1",
+                            f"catalog/runs/{_x_run}/validation.json",
+                            "f" * 64,
+                        )
+                        await s.close()
+                        r = await client_a.get(
+                            f"/admin/operations/catalog/runs/{_x_run}"
+                            "/artifact/validation.json"
+                        )
+                        assert r.status_code == 503
+                        assert r.headers["cache-control"] == "private, no-store"
+                        assert _x_validation not in r.content
+                        s = await _target_conn()
+                        await s.execute(
+                            "UPDATE demo_display.leaves SET sha256 = $2 "
+                            "WHERE logical_name = $1",
+                            f"catalog/runs/{_x_run}/validation.json",
+                            _art_hashlib.sha256(_x_validation).hexdigest(),
+                        )
+                        await s.close()
+                        # (2) job artifact (upload + proposal) and
+                        # (3) package: exact bytes each.
+                        for _x_name, _x_url, _x_kind, _x_data in _x_job_files:
+                            r = await client_a.get(
+                                f"/admin/operations/catalog/jobs/{_x_job}"
+                                f"/{_x_url}"
+                            )
+                            assert r.status_code == 200, _x_url
+                            assert r.content == _x_data
+                        # Gate near-misses and the query-free law on
+                        # the new shapes.
+                        for _x_p in (
+                            f"/admin/operations/catalog/runs/{_x_run}"
+                            "/artifact/validation.json?x=1",
+                            f"/admin/operations/catalog/runs/{_x_run}"
+                            "/apply-status?x=1",
+                            f"/admin/operations/catalog/jobs/{_x_job}"
+                            "/artifact/warnings.json?x=1",
+                            f"/admin/operations/catalog/jobs/{_x_job}"
+                            "/package/openrouter-chat-text/package-manifest.json?x=1",
+                            f"/admin/operations/catalog/runs/{_x_run}"
+                            "/artifact/extra.json",
+                            f"/admin/operations/catalog/jobs/{_x_job}"
+                            "/package/openai-chat-text/package-manifest.json",
+                            f"/admin/operations/catalog/jobs/{_x_job}"
+                            "/artifact/bundle-" + "zz" * 16,
+                        ):
+                            r = await client_a.get(_x_p)
+                            assert r.status_code == 404, _x_p
+                        # (4) apply-status: the FIXED explicit
+                        # "status unavailable for this run in this
+                        # copy" page (no verified run-id mapping
+                        # exists between the copied applications rows
+                        # and the display run id). The run-present
+                        # inventory renders the unavailable page with
+                        # zero records...
+                        r = await client_a.get(
+                            f"/admin/operations/catalog/runs/{_x_run}/apply-status"
+                        )
+                        assert r.status_code == 200
+                        assert r.headers["cache-control"] == "private, no-store"
+                        _x_flat = " ".join(r.text.split())
+                        assert "Status at snapshot time" in _x_flat
+                        assert "NOT live authoritative source status" in _x_flat
+                        assert "Apply status is unavailable for this run in this copy." in _x_flat
+                        assert "no copied record can be verified as this run's status" in _x_flat
+                        assert "not a statement that the run was never applied" in _x_flat
+                        assert "Check status (demo no-op" in r.text
+                        assert "Record 1" not in r.text
+                        # ...and it STAYS unavailable when ONE
+                        # test-only application row exists (honest
+                        # label: test-only row, exact cleanup below):
+                        # without a verified run-id mapping it must
+                        # NOT be presented as this run's status
+                        # (zero records, no misattribution, no value
+                        # echo).
+                        from datetime import (
+                            datetime as _x_dt,
+                            timezone as _x_tz,
+                        )
+
+                        s = await _target_conn()
+                        await s.execute(
+                            "INSERT INTO catalog_refresh_applications "
+                            "(id, run_id, bundle_sha256, "
+                            "receipt_hmac_sha256, plan_sha256, mode, "
+                            "operator_actor, db_actor, admin_user_id, "
+                            "reason, effective_at, applied_provider_ids, "
+                            "applied_route_ids, applied_pricing_created_ids, "
+                            "applied_pricing_superseded_old_ids, "
+                            "applied_pricing_superseded_new_ids, "
+                            "applied_fx_created_ids, "
+                            "applied_fx_superseded_old_ids, "
+                            "applied_fx_superseded_new_ids, "
+                            "created_providers, created_routes, "
+                            "created_pricing, created_fx, "
+                            "superseded_pricing, superseded_fx, outcome, "
+                            "created_at) "
+                            "VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, "
+                            "$10, $11, $12, $13, $14, $15, $16, $17, $18, "
+                            "$19, $20, $21, $22, $23, $24, $25, $26, $27)",
+                            _x_app_id, _x_run,
+                            "224x" + "b" * 60,
+                            "224x" + "d" * 60,
+                            "224x" + "c" * 60,
+                            "refresh", "demo224x-operator", "demo224x-db",
+                            None, "neutralized",
+                            _x_dt(2025, 6, 15, 15, 6, 40, tzinfo=_x_tz.utc),
+                            "[]", "[]", "[]", "[]", "[]", "[]", "[]", "[]",
+                            1, 2, 3, 4, 5, 6, "committed",
+                            _x_dt(2025, 6, 15, 15, 7, 0, tzinfo=_x_tz.utc),
+                        )
+                        await s.close()
+                        r = await client_a.get(
+                            f"/admin/operations/catalog/runs/{_x_run}/apply-status"
+                        )
+                        assert r.status_code == 200
+                        _x_flat = " ".join(r.text.split())
+                        assert "Apply status is unavailable for this run in this copy." in _x_flat
+                        assert "Record 1" not in r.text
+                        assert "demo224x-operator" not in r.text
+                        assert "1 / 2 / 3 / 4" not in _x_flat
+                        assert "2025-06-15 15:06:40 UTC" not in r.text
+                        # Copy isolation: B's apply-status for the same
+                        # canonical run is the fixed 404 (B has none of
+                        # the run's leaves at all).
+                        r = await client_b.get(
+                            f"/admin/operations/catalog/runs/{_x_run}/apply-status"
+                        )
+                        assert r.status_code == 404
+                        # (5) the new read paths are the SAME quiet 204
+                        # cut (body never parsed).
+                        for _x_p in (
+                            f"/admin/operations/catalog/runs/{_x_run}"
+                            "/artifact/validation.json",
+                            f"/admin/operations/catalog/runs/{_x_run}"
+                            "/apply-status",
+                            f"/admin/operations/catalog/jobs/{_x_job}"
+                            "/artifact/warnings.json",
+                            f"/admin/operations/catalog/jobs/{_x_job}"
+                            "/package/openrouter-chat-text/package-manifest.json",
+                        ):
+                            r = await client_a.post(
+                                _x_p,
+                                content=b"x" * 200_000,
+                                headers={"content-type": "text/garbage"},
+                            )
+                            assert r.status_code == 204, _x_p
+                            assert r.content == b""
+                        # (6) partial run: six of the seven files is the
+                        # fixed safe 503 for apply-status (never a
+                        # half page).
+                        s = await _target_conn()
+                        await s.execute(
+                            "DELETE FROM demo_display.leaves "
+                            "WHERE logical_name = $1",
+                            f"catalog/runs/{_x_run}/REVIEW.html",
+                        )
+                        await s.close()
+                        r = await client_a.get(
+                            f"/admin/operations/catalog/runs/{_x_run}/apply-status"
+                        )
+                        assert r.status_code == 503
+                        assert r.headers["cache-control"] == "private, no-store"
+                    finally:
+                        # Exact cleanup: the nine test-inserted leaf
+                        # names (never a prefix match - a pre-existing
+                        # run sharing a prefix must never be touched)
+                        # and the ONE test-only apply row (exact id);
+                        # copy A returns to the exact worker-published
+                        # state.
+                        s = await _target_conn()
+                        await s.execute(
+                            "DELETE FROM demo_display.leaves "
+                            "WHERE logical_name = ANY($1::text[])",
+                            [
+                                _x_name
+                                for _x_name, *_x_rest in _x_run_files
+                            ]
+                            + [
+                                _x_name
+                                for _x_name, *_x_rest in _x_job_files
+                            ],
+                        )
+                        await s.execute(
+                            "DELETE FROM catalog_refresh_applications "
+                            "WHERE id = $1",
+                            _x_app_id,
+                        )
+                        await s.close()
+                        # Cleanup proven: the canonical shapes 404
+                        # again (run leaves gone).
+                        r = await client_a.get(
+                            f"/admin/operations/catalog/runs/{_x_run}"
+                            "/artifact/validation.json"
+                        )
+                        assert r.status_code == 404
+                        r = await client_a.get(
+                            f"/admin/operations/catalog/runs/{_x_run}/apply-status"
+                        )
+                        assert r.status_code == 404
 
                     # --- CSRF-verified demo sign-out (session A) ---------
                     csrf_a = _demo_csrf_token(cfg.cookie_secret, token_a)
@@ -3413,6 +3807,101 @@ def test_browser_smoke_demo_copy_pages(
     _w_key = asyncio.run(_first_id(san_env, target, "gateway_keys"))
     _w_pub_key = asyncio.run(_first_public_key_id(san_env, target, _w_key))
 
+    # 224-x pre-computed copy facts (same greenlet constraint): ONE
+    # synthetic run's seven TEST-ONLY leaves inserted into copy A's
+    # worker-published demo_display.leaves. Only validation.json is an
+    # ACTUAL 223 sanitizer output (for a synthetic original document);
+    # the other six bodies are b"{}" placeholders and are NOT valid
+    # typed outputs for their kinds (transport/binding proof, not
+    # artifact content validation). Exact-name cleanup via finalizer.
+    import hashlib as _x_hashlib
+
+    from slaif_gateway.services import (
+        demo_snapshot_files as _x_dsf,
+    )
+
+    _x_browser_seed = b"224x-browser-seed"
+    _x_browser_run = _x_dsf._demo_run_id(_x_browser_seed, "fa" * 16)
+    _x_browser_doc = {
+        "state": "VALID",
+        "state_reason": "free text never displayed",
+        "run_id": "fa" * 16,
+        "generated_at": "2025-06-15T15:06:40+00:00",
+        "policy_version": 7,
+        "counts": {"routes": 3, "pricing": 2},
+        "per_provider": {"openai": {"models": 2}},
+        "dispositions": [],
+        "price_comparisons": [],
+        "warnings": [],
+        "gates": [],
+        "import_gates": [],
+        "baseline": {},
+        "research": {},
+        "artifacts": {},
+        "sql_checks": {},
+        "baseline_metadata": [],
+        "sources": [],
+        "source_evidence": {},
+        "fx_comparisons": [],
+        "execution_context": {},
+        "apply_plan": {"plan": "never displayed"},
+    }
+    _x_browser_validation = _x_dsf._san_validation_json(
+        json.dumps(_x_browser_doc).encode(), _x_browser_seed
+    )
+    _x_browser_files = (
+        ("catalog-refresh.json", "refresh_bundle", b"{}"),
+        ("catalog-baseline.json", "baseline_document", b"{}"),
+        ("routes-proposal.tsv", "route_tsv", b"{}"),
+        ("pricing-proposal.tsv", "pricing_tsv", b"{}"),
+        ("fx-proposal.json", "fx_json", b"{}"),
+        ("validation.json", "validation_json", _x_browser_validation),
+        ("REVIEW.html", "review_html", b"{}"),
+    )
+
+    async def _x_browser_insert() -> None:
+        s = await asyncpg.connect(**_conn_kwargs(
+            san_env.target["host"], san_env.target["port"],
+            san_env.target["user"], san_env.target["password"],
+            target,
+        ))
+        try:
+            for _x_name, _x_kind, _x_data in _x_browser_files:
+                await s.execute(
+                    "INSERT INTO demo_display.leaves "
+                    "(logical_name, kind, sha256, byte_count, "
+                    "captured_at, body) "
+                    "VALUES ($1, $2, $3, $4, $5, $6)",
+                    f"catalog/runs/{_x_browser_run}/{_x_name}",
+                    _x_kind,
+                    _x_hashlib.sha256(_x_data).hexdigest(),
+                    len(_x_data), 1750002000.0, _x_data,
+                )
+        finally:
+            await s.close()
+
+    asyncio.run(_x_browser_insert())
+
+    async def _x_browser_cleanup() -> None:
+        s = await asyncpg.connect(**_conn_kwargs(
+            san_env.target["host"], san_env.target["port"],
+            san_env.target["user"], san_env.target["password"],
+            target,
+        ))
+        try:
+            await s.execute(
+                "DELETE FROM demo_display.leaves "
+                "WHERE logical_name = ANY($1::text[])",
+                [
+                    f"catalog/runs/{_x_browser_run}/{_x_name}"
+                    for _x_name, _x_kind, _x_data in _x_browser_files
+                ],
+            )
+        finally:
+            await s.close()
+
+    request.addfinalizer(lambda: asyncio.run(_x_browser_cleanup()))
+
     port = _free_port()
     base_url = f"http://127.0.0.1:{port}"
     facade = PgDemoWebFacade(cfg)
@@ -3581,21 +4070,25 @@ def test_browser_smoke_demo_copy_pages(
             content = page.content()
             assert "Demo preview:" in content
             assert "Catalog snapshot index" in content
-            # Desktop-width layout check (default 1280x720 context): the
-            # bounded-index note, the empty-state table row and the
-            # no-storage-inference note are all visible in one screen.
-            assert "0 captured catalog artifacts" in content
-            assert "This copy has no captured catalog artifacts." in content
-            assert "does not establish whether operator catalog storage was configured" in " ".join(content.split())
+            # 224-x: the owned browser fixture carries the seven
+            # test-only run leaves inserted pre-greenlet (honest
+            # placeholders except validation.json), so the index is
+            # NON-EMPTY: the bounded-index note, the seven artifact
+            # rows with direct download links and the
+            # no-storage-inference note render together.
+            assert "7 captured catalog artifacts" in content
+            assert "This copy has no captured catalog artifacts." not in content
+            # The no-storage-inference note belongs to the EMPTY
+            # state only; with seven rows rendered it must be absent.
+            assert "does not establish whether operator catalog storage was configured" not in " ".join(content.split())
             assert "at most 4,096 entries" in content
             assert "separate, bounded phase" in content
             assert "no original seal or apply authority" in content
-            # 224-l: the owned browser fixture has NO configured
-            # catalog leaf, so the honest empty page renders NO
-            # download link at all (the positive link is proven by the
-            # mocked-ASGI follow test; the configured-file installed
-            # workflow is objective 225).
-            assert 'href="/admin/operations/catalog/artifact' not in content
+            for _xi_name, _xi_kind, _xi_data in _x_browser_files:
+                assert (
+                    f'href="/admin/operations/catalog/artifact'
+                    f'?name=catalog/runs/{_x_browser_run}/{_xi_name}"'
+                ) in content, _xi_name
             # ...and the exact artifact path is a fixed safe 404 for
             # any selector in the real browser.
             r = page.goto(
@@ -3629,19 +4122,27 @@ def test_browser_smoke_demo_copy_pages(
             assert "Sanitized demo snapshot display" in " ".join(_pn_page.split())
             assert "No captured proposal artifact groups in this snapshot" in " ".join(_pn_page.split())
             assert 'name="provider_scope"' in _pn_page  # illustrative form
-            # 224-o: the owned browser fixture has NO configured run
-            # leaves, so the collect page renders the honest empty
-            # complete-run state in the real browser (demo banner +
-            # illustrative form; the positive page is proven by owned-PG
-            # transport + mocked-ASGI unit coverage; the configured-file
-            # installed browser workflow remains objective 225).
+            # 224-o/224-x: the owned browser fixture carries the ONE
+            # 224-x test-only complete run (seven run leaves, honest
+            # placeholders except validation.json), so the collect
+            # page lists exactly that Captured run group (bound 100;
+            # the list covers all acquisition origins and is NOT
+            # attributed to the collect form).
             r = page.goto("/admin/operations/catalog/collect")
             assert r is not None and r.status == 200
             assert r.headers["cache-control"] == "private, no-store"
             _co_page = page.content()
             assert "Sanitized demo snapshot display" in " ".join(_co_page.split())
-            assert "No captured complete runs in this snapshot" in " ".join(_co_page.split())
             assert 'name="mode"' in _co_page  # illustrative form
+            assert 'aria-label="Captured complete run groups"' in _co_page
+            assert (
+                f'href="/admin/operations/catalog/runs/{_x_browser_run}/"'
+            ) in _co_page
+            assert "7 files" in _co_page
+            assert (
+                "No captured complete runs in this snapshot."
+                not in " ".join(_co_page.split())
+            )
             # 224-p: the owned browser fixture has NO configured job
             # records, so the jobs page renders the honest empty state
             # in the real browser and the review/export pages render
@@ -4032,24 +4533,18 @@ def test_browser_smoke_demo_copy_pages(
             _ww_flat = " ".join(page.content().split())
             assert "Sanitized demo snapshot view" in _ww_flat
             assert "no live one-use token" in _ww_flat
-            # A REAL download through the authenticated browser
-            # context: the exact copied key's configuration document
-            # (attachment bytes + safety headers, copied public id,
-            # never a source/copy locator).
+            # 224-x: the configuration download is SAFELY UNAVAILABLE
+            # in the real browser too: fixed 503, NO JSON (the
+            # sanitized copy's recorded policy data cannot render a
+            # faithful version-1 export).
             _ww_resp = context.request.get(
                 f"/admin/keys/{_w_key}/configuration.json"
             )
-            assert _ww_resp.status == 200
-            assert _ww_resp.headers["content-type"] == "application/json"
-            assert _ww_resp.headers["content-disposition"] == (
-                'attachment; filename='
-                f'"slaif-key-configuration-{_w_pub_key}.json"'
-            )
+            assert _ww_resp.status == 503
+            assert "json" not in _ww_resp.headers["content-type"]
             assert _ww_resp.headers.get("x-content-type-options") == "nosniff"
             assert "no-store" in _ww_resp.headers.get("cache-control", "")
             _ww_body = _ww_resp.body().decode("utf-8")
-            _ww_doc = json.loads(_ww_body)
-            assert _ww_doc["schema_version"] == 1
             assert target not in _ww_body
             # The fixture's STANDARD key gets the fixed safe 400
             # calibration refusal in the real browser context too
@@ -4094,6 +4589,69 @@ def test_browser_smoke_demo_copy_pages(
             )
             page.screenshot(path=str(shot_ww))
             print(f"DEMO_BROWSER_224W_SCREENSHOT={shot_ww}")
+
+            # --- 224-x: direct catalog artifact download + apply-status
+            # + the unavailable configuration action in the real
+            # browser ---------------------------------------------
+            # The captured run page links the seven artifacts to the
+            # exact 224-x DIRECT run-artifact downloads (never the
+            # ?name= selector) and the frozen historical apply-status
+            # page...
+            r = page.goto(
+                f"/admin/operations/catalog/runs/{_x_browser_run}/"
+            )
+            assert r is not None and r.status == 200
+            _wx_page = page.content()
+            for _wx_name, _wx_kind, _wx_data in _x_browser_files:
+                assert (
+                    f'href="/admin/operations/catalog/runs/{_x_browser_run}/artifact/{_wx_name}"'
+                ) in _wx_page, _wx_name
+            assert (
+                f'href="/admin/operations/catalog/runs/{_x_browser_run}/apply-status"'
+            ) in _wx_page
+            assert target not in _wx_page
+            # ...and a REAL download through the authenticated browser
+            # context: exact bytes + the forced sanitized-attachment
+            # wire law.
+            _wx_resp = context.request.get(
+                f"/admin/operations/catalog/runs/{_x_browser_run}"
+                "/artifact/validation.json"
+            )
+            assert _wx_resp.status == 200
+            assert _wx_resp.body() == _x_browser_validation
+            assert _wx_resp.headers["content-type"] == "application/octet-stream"
+            assert _wx_resp.headers["content-disposition"] == (
+                'attachment; filename="validation.json"'
+            )
+            assert _wx_resp.headers.get("x-content-type-options") == "nosniff"
+            assert _wx_resp.headers.get("content-security-policy") == "default-src 'none'"
+            assert _wx_resp.headers.get("cache-control") == "private, no-store"
+            # The apply-status page: the FIXED explicit unavailable
+            # state with zero records (the real browser copy carries
+            # a copied application row from the source fixture;
+            # without a verified run-id mapping it must NOT be
+            # presented as this run's status) plus the labeled no-op
+            # control.
+            r = page.goto(
+                f"/admin/operations/catalog/runs/{_x_browser_run}/apply-status"
+            )
+            assert r is not None and r.status == 200
+            _wx_flat = " ".join(page.content().split())
+            assert "Status at snapshot time" in _wx_flat
+            assert "NOT live authoritative source status" in _wx_flat
+            assert "Apply status is unavailable for this run in this copy." in _wx_flat
+            assert "no copied record can be verified as this run's status" in _wx_flat
+            assert "Record 1" not in page.content()
+            assert "Check status (demo no-op" in page.content()
+            # The key detail page advertises the frozen-configuration
+            # action as UNAVAILABLE (no faithful version-1 export can
+            # be rendered from the sanitized copy) and carries no
+            # configuration.json link.
+            r = page.goto(f"/admin/keys/{_w_key}")
+            assert r is not None and r.status == 200
+            _wx_flat = " ".join(page.content().split())
+            assert "unavailable in this demo" in _wx_flat
+            assert "configuration.json" not in page.content()
 
             # --- 224-i: an admitted form renders; the operational submit
             # is a quiet 204 no-op that changes nothing -------------------

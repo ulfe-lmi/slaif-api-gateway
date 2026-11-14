@@ -79,7 +79,7 @@
     <p class="muted small">
       Cooldown: at most {{ budget_attempts }} test attempts per {{ budget_window_seconds }} seconds per admin
       (attempted and unconfirmed sends both count). Each reviewed intent is one-use: an accidental
-      double submit sends at most one message.{% if demo_admin %} In this demo, submitting this form does nothing: no reviewed test is prepared and no message is sent.{% endif %}
+      double submit sends at most one message.{% if demo_admin %} In this demo, submitting this form does nothing: no reviewed test is prepared and no message is sent, and the cooldown numbers shown are this demo process's own settings - not the source deployment's.{% endif %}
     </p>
     <button type="submit">Prepare reviewed test{% if demo_admin %} (demo no-op){% endif %}</button>
   </form>

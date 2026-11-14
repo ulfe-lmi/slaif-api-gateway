@@ -21,12 +21,20 @@ come ONLY from the 223-verified sanitized
 (kind/size/digest/actual-length), the bounded body re-asserting every
 condition as bound parameters, exact length + SHA256, and the typed
 verifier law; there is NO live ``COMPLETION_SERVICE_PROFILE_DIR`` or
-filesystem fallback in the demo process. An absent leaf means the
-source deployment recorded no operator completion profiles and the
-page labels the package defaults; a corrupt leaf is the fixed safe
-503. No provider network or source file read. The existing form,
-field hints and visible action controls are kept with a persistent
-frozen/no-op cue.
+operator-directory fallback in the demo process: the operator
+directory is source state, and reading it (or the demo process's own
+copy of the setting) would be an ambient read. An absent leaf means
+the source deployment recorded no operator completion profiles, and
+the picker then shows the FINITE PACKAGED defaults - the same
+package-only bundled profile data the normal form offers when the
+operator directory is absent (an honest finite list, never an empty
+picker labeled "package defaults"); a corrupt leaf is the fixed safe
+503. No provider network or source file read. Captured choice IDs
+and the copied selected ID that match a known incoming
+authentication alias are withheld (no echo, no link, the same pure
+request-aware classifier as the other demo surfaces). The existing
+form, field hints and visible action controls are kept with a
+persistent frozen/no-op cue.
 """
 
 from __future__ import annotations
@@ -60,6 +68,9 @@ from slaif_gateway.services import demo_snapshot_files as dsf
 from slaif_gateway.services.admin_record_choices import (
     RecordChoice,
     load_choices,
+)
+from slaif_gateway.services.request_diagnostics import (
+    is_known_incoming_secret_alias,
 )
 
 router = APIRouter(include_in_schema=False)
@@ -229,6 +240,23 @@ async def demo_route_configuration_form(
             completion, unconfigured = await _completion_choices_from_leaf(
                 session
             )
+            if unconfigured:
+                # 224-x: the source recorded no operator completion
+                # profiles. Show the FINITE PACKAGED defaults - the
+                # same package-only bundled profile data the normal
+                # form offers when the operator directory is absent.
+                # The demo process's OWN settings are never consulted
+                # (profile_dir is pinned to the bundled package
+                # data), and the honest empty state (a package with
+                # no bundled profiles) is rendered as no choices.
+                completion = list(
+                    await load_choices(
+                        session,
+                        "completion_profile",
+                        selected=(),
+                        profile_dir="",
+                    )
+                )
             # Hydrate the copied selected completion id (it was
             # sanitizer-remapped, so it is a closed fictional id).
             selected_completion = form.get("completion_profile") or None
@@ -248,6 +276,44 @@ async def demo_route_configuration_form(
         return _unavailable()
     except Exception:  # noqa: BLE001 - unavailable, never ambient
         return _unavailable()
+
+    # 224-x: output-side known-incoming-alias withholding for the
+    # captured completion-profile choice IDs (and their labels) and
+    # the copied selected ID: a captured ID equal to a known incoming
+    # authentication alias must not be echoed or linked (the same
+    # pure request-aware classifier as the other demo surfaces; the
+    # demo app's fixed neutral prefix tuple, never ambient settings;
+    # fail closed on a classifier error or an unusable tuple).
+    try:
+        _alias_prefixes = tuple(
+            request.app.state.settings.get_gateway_key_accepted_prefixes()
+        )
+        if not all(isinstance(x, str) for x in _alias_prefixes):
+            _alias_prefixes = None
+    except Exception:
+        _alias_prefixes = None
+
+    def _is_alias(value: object) -> bool:
+        if not isinstance(value, str) or not value:
+            return False
+        if _alias_prefixes is None:
+            return True  # fail closed: the classifier cannot be proven safe
+        try:
+            return is_known_incoming_secret_alias(
+                value, scope=request.scope, accepted_prefixes=_alias_prefixes
+            )
+        except Exception:  # noqa: BLE001 - fail closed, no echo
+            return True
+
+    _selected_completion = form.get("completion_profile") or None
+    if _selected_completion is not None and _is_alias(_selected_completion):
+        _selected_completion = None
+        form["completion_profile"] = ""  # no pre-selected withheld value
+    choices["completion_profile"] = [
+        c
+        for c in choices["completion_profile"]
+        if not _is_alias(c.id) and not _is_alias(c.label)
+    ]
 
     choice_labels = _choice_selected_labels(
         choices,

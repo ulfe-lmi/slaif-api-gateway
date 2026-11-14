@@ -129,7 +129,7 @@
       <p>
         Upload reference:
         {% if demo_job_detail.artifact_verified %}
-        <a href="/admin/operations/catalog/artifact?name={{ demo_job_detail.artifact_download_name | urlencode }}"><code>{{ demo_job_detail.artifact_name }}</code></a>
+        <a href="/admin/operations/catalog/jobs/{{ demo_selected.job_id }}/artifact/{{ demo_job_detail.artifact_name }}"><code>{{ demo_job_detail.artifact_name }}</code></a>
         {% else %}
         <code>{{ demo_job_detail.artifact_name }}</code>
         <span class="muted">(its captured upload is not present in

@@ -117,7 +117,7 @@
       <tr>
         <td class="row-ordinal">{{ loop.index }}</td>
         <td>
-          <a href="/admin/operations/catalog/artifact?name={{ row.download_name | urlencode }}">
+          <a href="/admin/operations/catalog/runs/{{ run_id }}/artifact/{{ row.name }}">
             <code>{{ row.name }}</code>
           </a>
         </td>
@@ -137,6 +137,14 @@
     Each link forces a file download of that sanitized display copy;
     nothing is rendered inline, and the copies carry no original seal
     or apply authority.
+  </p>
+
+  <h2>Apply status (historical)</h2>
+  <p>
+    <a href="/admin/operations/catalog/runs/{{ run_id }}/apply-status">Status at snapshot time</a>
+    <span class="muted">— the frozen historical apply record of this
+    copy (status at snapshot time, not live authoritative source
+    status).</span>
   </p>
 </section>
 {% endblock %}

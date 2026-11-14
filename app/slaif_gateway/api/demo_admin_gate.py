@@ -326,6 +326,89 @@ _CALIBRATION_DATETIME_RE = re.compile(
     r"(?:Z|[+-][0-9]{2}:[0-9]{2})?)?\Z"
 )
 _CALIBRATION_DECIMAL_RE = re.compile(r"[0-9]+(?:\.[0-9]+)?\Z")
+# 224-x: the exact catalog read GET family. The closed name/preset
+# vocabularies are the INTERSECTION of the normal route's finite
+# artifact vocabulary and the already-published 223 sanitized
+# display-leaf law (the worker-published leaf names): the seven run
+# content files (the normal run-artifact route's closed set), the
+# closed remapped upload grammar, the six proposal files, the fixed
+# product preset order and the five package files. Every name is a
+# closed literal or the fixed 32-hex suffix grammar, so a slash,
+# traversal, uppercase or source-shaped value can never appear;
+# query-free, alternate-slash and unknown-shape near misses stay
+# default-denied, and every unsafe method remains the pre-body quiet
+# 204 cut.
+_CATALOG_RUN_ID_G = r"demo-run-[0-9a-f]{24}"
+_CATALOG_RUN_ARTIFACT_NAMES = frozenset(
+    {
+        "catalog-refresh.json",
+        "catalog-baseline.json",
+        "routes-proposal.tsv",
+        "pricing-proposal.tsv",
+        "fx-proposal.json",
+        "validation.json",
+        "REVIEW.html",
+    }
+)
+_CATALOG_JOB_ID_G = r"[0-9a-f]{32}"
+_CATALOG_JOB_UPLOAD_NAME_RE = re.compile(
+    r"(bundle|baseline|baseline-export)-[0-9a-f]{32}\Z"
+)
+_CATALOG_PROPOSAL_ARTIFACT_NAMES = frozenset(
+    {
+        "source-manifest.json",
+        "provider-catalog-normalized.json",
+        "routes-proposal.tsv",
+        "pricing-proposal.tsv",
+        "provider-catalog-report.md",
+        "warnings.json",
+    }
+)
+_CATALOG_PACKAGE_PRESETS = frozenset(
+    {
+        "openrouter-chat-text",
+        "openrouter-chat-image",
+        "openrouter-chat-audio",
+        "openrouter-chat-multimodal",
+        "openrouter-responses-text",
+    }
+)
+_CATALOG_PACKAGE_FILE_NAMES = frozenset(
+    {
+        "routes-proposal.tsv",
+        "pricing-proposal.tsv",
+        "package-report.md",
+        "model-review.md",
+        "package-manifest.json",
+    }
+)
+_CATALOG_RUN_ARTIFACT_RE = re.compile(
+    rf"/admin/operations/catalog/runs/{_CATALOG_RUN_ID_G}"
+    r"/artifact/(?:catalog-refresh\.json|catalog-baseline\.json"
+    r"|routes-proposal\.tsv|pricing-proposal\.tsv|fx-proposal\.json"
+    r"|validation\.json|REVIEW\.html)\Z"
+)
+_CATALOG_APPLY_STATUS_RE = re.compile(
+    rf"/admin/operations/catalog/runs/{_CATALOG_RUN_ID_G}/apply-status\Z"
+)
+_CATALOG_JOB_ARTIFACT_RE = re.compile(
+    rf"/admin/operations/catalog/jobs/{_CATALOG_JOB_ID_G}"
+    r"/artifact/(?:bundle|baseline|baseline-export)-[0-9a-f]{32}\Z"
+)
+_CATALOG_JOB_PROPOSAL_ARTIFACT_RE = re.compile(
+    rf"/admin/operations/catalog/jobs/{_CATALOG_JOB_ID_G}"
+    r"/artifact/(?:source-manifest\.json"
+    r"|provider-catalog-normalized\.json|routes-proposal\.tsv"
+    r"|pricing-proposal\.tsv|provider-catalog-report\.md"
+    r"|warnings\.json)\Z"
+)
+_CATALOG_JOB_PACKAGE_RE = re.compile(
+    rf"/admin/operations/catalog/jobs/{_CATALOG_JOB_ID_G}/package/"
+    r"(?:openrouter-chat-text|openrouter-chat-image|openrouter-chat-audio"
+    r"|openrouter-chat-multimodal|openrouter-responses-text)"
+    r"/(?:routes-proposal\.tsv|pricing-proposal\.tsv|package-report\.md"
+    r"|model-review\.md|package-manifest\.json)\Z"
+)
 ADMIN_LOGIN_PATH = "/admin/login"
 ADMIN_STATIC_PREFIX = "/admin/static"
 DEMO_LOGOUT_PATH = "/admin/logout"
@@ -483,47 +566,81 @@ def _percent_decode_once(raw: str) -> str:
     return "".join(out)
 
 
-def _calibration_query_admitted(query_string: bytes) -> bool:
-    """224-w: the bounded POSITIVE query law for the demo calibration
+def _calibration_query_admitted(
+    query_string: bytes,
+    scope: dict,
+    accepted_prefixes: tuple[str, ...] | None,
+) -> bool:
+    """224-x: the bounded POSITIVE query law for the demo calibration
     summary download (``start_at`` / ``end_at`` / ``multiplier``),
     enforced BEFORE any copy binding.
 
-    A finite raw-byte ceiling first, then a strict single-pass
-    percent-decode (the normal template link urlencodes the datetimes;
-    the handler's normal strict parsers validate the decoded values),
-    then: at most one of each exact parameter, no unknown names, no
-    duplicates, no oversized values, and strict value grammars
-    (ISO-8601 date/datetime; positive decimal) that no
-    credential-shaped value can fit. ``multiplier`` is required
-    (the normal selector's default applies only when the parameter is
-    absent, not when it is empty)."""
+    Order of the law: (1) the whole RAW query is checked against the
+    small byte ceiling BEFORE it is split; (2) the raw query is split
+    on LITERAL ``&`` and each pair must carry exactly ONE literal
+    ``=`` with an EXACT literal ASCII parameter name - encoded names
+    or encoded delimiters can therefore never change a parameter
+    boundary; (3) each value is bounded in RAW length and then
+    percent-decoded EXACTLY ONCE (a strict single pass - an invalid or
+    truncated escape is refused, ``+`` is not a space); (4) unknown
+    names, duplicates and oversized values are refused; (5) the
+    DECODED value must match the strict value grammars (ISO-8601
+    date/datetime or empty for the optional bounds; positive decimal
+    for multiplier); (6) every NONEMPTY decoded value is then checked
+    against the pure known-incoming-secret-alias classifier with the
+    raw scope and the DEMO APP'S fixed neutral accepted-prefix tuple
+    BEFORE the session is resolved and the copy is bound - a
+    date/numeric-shaped credential can fit the value grammars. A
+    classifier error or the unavailable prefix sentinel fails closed.
+    Every refusal is a plain default-denied 404 with no echo.
+    """
     if not query_string:
         return True
     if not isinstance(query_string, (bytes, bytearray)):
         return False
     if len(query_string) > _CALIBRATION_QUERY_MAX_LEN:
         return False
-    try:
-        raw = bytes(query_string).decode("ascii")
-    except UnicodeDecodeError:
-        return False
-    try:
-        raw = _percent_decode_once(raw)
-    except ValueError:
-        return False
-    seen: set[str] = set()
-    for pair in raw.split("&"):
-        name, sep, value = pair.partition("=")
-        if not sep or name not in {"start_at", "end_at", "multiplier"}:
+    seen: set[bytes] = set()
+    for pair in bytes(query_string).split(b"&"):
+        # Exactly one literal ``=``: a value containing ``=`` (raw or
+        # an encoded ``%3D`` that survives the single decode as a
+        # literal) can never be admitted, and an encoded delimiter
+        # (``%26``) stays inside the one bounded value and then fails
+        # the grammar.
+        if pair.count(b"=") != 1:
             return False
-        if name in seen or len(value) > _CALIBRATION_VALUE_MAX_LEN:
+        name, _, raw_value = pair.partition(b"=")
+        # The name is NEVER decoded: it must be the exact ASCII
+        # literal (``st%61rt_at`` etc. are refused here).
+        if name not in (b"start_at", b"end_at", b"multiplier") or name in seen:
             return False
         seen.add(name)
-        if name == "multiplier":
+        if len(raw_value) > _CALIBRATION_VALUE_MAX_LEN:
+            return False
+        try:
+            value = _percent_decode_once(raw_value.decode("ascii"))
+        except (UnicodeDecodeError, ValueError):
+            return False
+        if name == b"multiplier":
             if _CALIBRATION_DECIMAL_RE.fullmatch(value) is None:
                 return False
         elif value and _CALIBRATION_DATETIME_RE.fullmatch(value) is None:
             return False
+        if value:
+            # Fail closed: the admission law only runs with the raw
+            # scope and the DEMO APP'S fixed neutral accepted-prefix
+            # tuple (never the ambient global settings); the
+            # unavailable sentinel and any classifier error refuse.
+            if accepted_prefixes is None:
+                return False
+            try:
+                alias = is_known_incoming_secret_alias(
+                    value, scope=scope, accepted_prefixes=accepted_prefixes
+                )
+            except Exception:  # noqa: BLE001 - fail closed, no echo
+                return False
+            if alias:
+                return False
     return True
 
 
@@ -633,13 +750,13 @@ def _is_admitted_path(path: str) -> bool:
 def _is_admitted_path_with_query(
     path: str,
     query_string: bytes,
-    diagnostics_context: tuple[dict, tuple[str, ...] | None] | None = None,
+    query_context: tuple[dict, tuple[str, ...] | None] | None = None,
 ) -> bool:
     """The closed GET admission law; the 224-q key read pages also
     carry the bounded query law (see ``_key_read_page_query_admitted``),
-    and the 224-v diagnostics selector takes the raw scope plus the
-    demo app's fixed neutral accepted-prefix tuple for its pre-copy
-    alias refusal.
+    and the 224-v diagnostics selector plus the 224-x calibration
+    summary take the raw scope plus the demo app's fixed neutral
+    accepted-prefix tuple for their pre-copy alias refusal.
     """
     if path in ADMITTED_DASHBOARD_PATHS or path in ADMITTED_LIST_PATHS:
         return True
@@ -704,9 +821,9 @@ def _is_admitted_path_with_query(
         # mandatory for a nonempty query; fail closed without it.
         if not query_string:
             return True
-        if diagnostics_context is None:
+        if query_context is None:
             return False
-        scope, accepted_prefixes = diagnostics_context
+        scope, accepted_prefixes = query_context
         return _diagnostics_query_admitted(
             query_string, scope, accepted_prefixes
         )
@@ -736,8 +853,15 @@ def _is_admitted_path_with_query(
     # 224-w: the exact key JSON attachment shapes.
     if _KEY_CALIBRATION_SUMMARY_RE.fullmatch(path) is not None:
         # the bounded positive query law (start_at/end_at/multiplier),
-        # enforced BEFORE any copy binding.
-        return _calibration_query_admitted(query_string)
+        # enforced BEFORE any copy binding, with the raw scope and the
+        # demo app's fixed neutral prefix tuple for its pre-copy alias
+        # refusal (fail closed without the context).
+        if not query_string:
+            return True
+        if query_context is None:
+            return False
+        scope, accepted = query_context
+        return _calibration_query_admitted(query_string, scope, accepted)
     if _KEY_CONFIGURATION_JSON_RE.fullmatch(path) is not None:
         return not query_string
     # 224-w: the exact route read shapes (query-free).
@@ -749,6 +873,18 @@ def _is_admitted_path_with_query(
         # 224-q: exact shape admitted only under the bounded query
         # law (the receipts page's single optional `operation`).
         return _key_read_page_query_admitted(path, query_string)
+    # 224-x: the exact catalog read GET family (all query-free; the
+    # 224-m run-detail shape keeps its own existing law below).
+    if _CATALOG_RUN_ARTIFACT_RE.fullmatch(path) is not None:
+        return not query_string
+    if _CATALOG_APPLY_STATUS_RE.fullmatch(path) is not None:
+        return not query_string
+    if _CATALOG_JOB_ARTIFACT_RE.fullmatch(path) is not None:
+        return not query_string
+    if _CATALOG_JOB_PROPOSAL_ARTIFACT_RE.fullmatch(path) is not None:
+        return not query_string
+    if _CATALOG_JOB_PACKAGE_RE.fullmatch(path) is not None:
+        return not query_string
     if _CATALOG_RUN_DETAIL_RE.fullmatch(path) is not None:
         return True
     for prefix in ADMITTED_EDIT_FAMILY_PREFIXES:
@@ -969,12 +1105,20 @@ class DemoAdminGate:
             # receipts page's single optional `operation` selector may
             # appear, bounded in raw length; everything else 404s
             # before session resolution or routing.
+            # The bounded selector laws (224-v diagnostics, 224-x
+            # calibration) run BEFORE session resolution with the raw
+            # scope and the DEMO APP'S fixed neutral prefix tuple
+            # (never the ambient global settings).
+            _query_context = (
+                (scope, self._accepted_key_prefixes)
+                if path == ADMITTED_DIAGNOSTICS_PATH
+                or _KEY_CALIBRATION_SUMMARY_RE.fullmatch(path) is not None
+                else None
+            )
             if _is_admitted_path_with_query(
                 path,
                 scope.get("query_string") or b"",
-                (scope, self._accepted_key_prefixes)
-                if path == ADMITTED_DIAGNOSTICS_PATH
-                else None,
+                _query_context,
             ):
                 projection = await self._resolve_session(scope)
                 if path in ADMITTED_BRANDING_PATHS:
