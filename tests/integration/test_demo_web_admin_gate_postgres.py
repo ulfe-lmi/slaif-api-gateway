@@ -478,16 +478,151 @@ def test_e2e_admin_gate_two_sessions_distinct_copies(
     target_b = row_b["worker_target_db"]
     assert target_b and target_b != target_a
 
+    # Phase 4y (224-y): a THIRD owned worker-processed copy (C) whose
+    # worker is the ONLY one configured with a catalog custody: a REAL
+    # sealed first-install run (CLI review against an owned seal key)
+    # plus ONE source catalog_refresh_applications row for that run.
+    # This is the real worker/sanitizer POSITIVE run-mapping proof.
+    # Copies A and B stay unconfigured, so their existing empty-state
+    # assertions hold byte-for-byte; isolation is proven in both
+    # directions below (C's slug is 404 on A and B, A's test-only run
+    # slug is 404 on C). The source row (disposable fixture data for
+    # the owned source) and the catalog root are finalizer-guarded.
+    from typer.testing import CliRunner as _y_CliRunner
+
+    from slaif_gateway.cli.main import app as _y_cli_app
+
+    _y_tmp = Path(tempfile.mkdtemp(prefix="slaif224y-tmp-"))
+    _y_root = Path(tempfile.mkdtemp(prefix="slaif224y-catalog-"))
+    for _y_sub in ("runs", "uploads", "proposals", "jobs"):
+        (_y_root / _y_sub).mkdir()
+        (_y_root / _y_sub).chmod(0o700)
+    _y_root.chmod(0o700)
+    _y_seal_key = _y_tmp / "seal.key"
+    request.addfinalizer(
+        lambda: shutil.rmtree(_y_root, ignore_errors=True)
+    )
+    request.addfinalizer(lambda: _y_tmp.unlink(missing_ok=True))
+    request.addfinalizer(
+        lambda: shutil.rmtree(_y_tmp, ignore_errors=True)
+    )
+
+    # The tracked sealed first-install fixture is the PROVEN catalog
+    # artifact (unit-proven through the same CLI review + capture
+    # law); its exact raw run id is synthetic (never live-applied) and
+    # is the ORIGINAL id the source application row carries - it is
+    # remapped in the copy and never stored raw.
+    _y_orig_run = "fixture-first-install-001"
+    _y_bundle = (
+        Path(__file__).resolve().parents[1]
+        / "fixtures"
+        / "catalog_refresh"
+        / "bundle-first-install.json"
+    )
+    _y_review = _y_CliRunner().invoke(
+        _y_cli_app,
+        ["catalog-refresh", "review", str(_y_bundle), "--first-install",
+         "--run-root", str(_y_root / "runs"),
+         "--seal-key", str(_y_seal_key)],
+    )
+    assert _y_review.exit_code in (0, 10), _y_review.output
+    assert (_y_root / "runs" / _y_orig_run / "validation.json").is_file()
+
+    _y_src_app_id = str(uuid.uuid4())
+
+    def _seed_y_src_app_row() -> None:
+        # ONE source application row for the sealed run (typed values;
+        # admin_user_id NULL also proves the nullable column survives
+        # the copy). Disposable owned-source fixture data: exact-id
+        # cleanup finalizer, row counts never change.
+        async def run() -> None:
+            from datetime import datetime as _y_dt, timezone as _y_tz
+
+            s = await asyncpg.connect(**_conn_kwargs(
+                san_env.source["host"], san_env.source["port"],
+                san_env.source["user"], san_env.source["password"],
+                str(san_env.source["database"]),
+            ))
+            try:
+                await s.execute(
+                    "INSERT INTO catalog_refresh_applications "
+                    "(id, run_id, bundle_sha256, receipt_hmac_sha256, "
+                    "plan_sha256, mode, operator_actor, db_actor, "
+                    "admin_user_id, reason, effective_at, "
+                    "applied_provider_ids, applied_route_ids, "
+                    "applied_pricing_created_ids, "
+                    "applied_pricing_superseded_old_ids, "
+                    "applied_pricing_superseded_new_ids, "
+                    "applied_fx_created_ids, "
+                    "applied_fx_superseded_old_ids, "
+                    "applied_fx_superseded_new_ids, "
+                    "created_providers, created_routes, "
+                    "created_pricing, created_fx, "
+                    "superseded_pricing, superseded_fx, outcome, "
+                    "created_at) "
+                    "VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, "
+                    "$10, $11, $12, $13, $14, $15, $16, $17, $18, "
+                    "$19, $20, $21, $22, $23, $24, $25, $26, $27)",
+                    _y_src_app_id, _y_orig_run,
+                    "aa" * 32, "bb" * 32, "cc" * 32,
+                    "bootstrap", "ops@y", "db@y",
+                    None, "y: apply reviewed plan",
+                    _y_dt(2025, 6, 15, 15, 6, 40, tzinfo=_y_tz.utc),
+                    "[]", "[]", "[]", "[]", "[]", "[]", "[]", "[]",
+                    1, 2, 3, 4, 5, 6, "committed",
+                    _y_dt(2025, 6, 15, 15, 7, 0, tzinfo=_y_tz.utc),
+                )
+            finally:
+                await s.close()
+
+        asyncio.run(run())
+
+    def _delete_y_src_app_row() -> None:
+        async def run() -> None:
+            s = await asyncpg.connect(**_conn_kwargs(
+                san_env.source["host"], san_env.source["port"],
+                san_env.source["user"], san_env.source["password"],
+                str(san_env.source["database"]),
+            ))
+            try:
+                await s.execute(
+                    "DELETE FROM catalog_refresh_applications WHERE id = $1",
+                    _y_src_app_id,
+                )
+            finally:
+                await s.close()
+
+        asyncio.run(run())
+
+    _seed_y_src_app_row()
+    request.addfinalizer(_delete_y_src_app_row)
+
+    rid_c, pending_c = asyncio.run(_login_phase(cfg, env))
+    cli_env_c = {
+        **cli_env,
+        "CATALOG_REFRESH_ROOT": str(_y_root),
+        "CATALOG_REFRESH_SEAL_KEY": str(_y_seal_key),
+    }
+    out_c = _run_worker_cli(
+        ["process-request", str(rid_c), "--json"], cli_env_c, monkeypatch
+    )
+    assert "verified_unpublished" in out_c
+    row_c = _request_row(env, rid_c)
+    target_c = row_c["worker_target_db"]
+    assert target_c and target_c not in (target_a, target_b)
+
     # Phase 5: wait surfaces issue one session each.
     token_a = asyncio.run(_wait_phase(cfg, pending_a))
     token_b = asyncio.run(_wait_phase(cfg, pending_b))
+    token_c = asyncio.run(_wait_phase(cfg, pending_c))
 
     # Phase 6: invariance baselines (before any admin read): source AND
-    # both copies.
+    # every worker-processed copy (A, B, and the 224-y copy C).
     src_before = _source_counts(san_env)
     copy_before = {
         target_a: _copy_counts(san_env, target_a),
         target_b: _copy_counts(san_env, target_b),
+        target_c: _copy_counts(san_env, target_c),
     }
     # DB-level distinct-copy proof: the marker row entered the source after
     # worker A's dump and before worker B's, so only copy B holds it - under
@@ -3210,13 +3345,12 @@ def test_e2e_admin_gate_two_sessions_distinct_copies(
                         ):
                             r = await client_a.get(_x_p)
                             assert r.status_code == 404, _x_p
-                        # (4) apply-status: the FIXED explicit
-                        # "status unavailable for this run in this
-                        # copy" page (no verified run-id mapping
-                        # exists between the copied applications rows
-                        # and the display run id). The run-present
-                        # inventory renders the unavailable page with
-                        # zero records...
+                        # (4) apply-status: the run exists in copy A's
+                        # inventory but NO copied committed application
+                        # record joins its 96-bit slug prefix (224-y)
+                        # -> the fixed UNKNOWN/UNAVAILABLE page with
+                        # zero records, never "not applied" /
+                        # "rolled back"...
                         r = await client_a.get(
                             f"/admin/operations/catalog/runs/{_x_run}/apply-status"
                         )
@@ -3225,18 +3359,20 @@ def test_e2e_admin_gate_two_sessions_distinct_copies(
                         _x_flat = " ".join(r.text.split())
                         assert "Status at snapshot time" in _x_flat
                         assert "NOT live authoritative source status" in _x_flat
-                        assert "Apply status is unavailable for this run in this copy." in _x_flat
-                        assert "no copied record can be verified as this run's status" in _x_flat
-                        assert "not a statement that the run was never applied" in _x_flat
+                        assert "Apply status is unknown (unavailable) for this run in this copy" in _x_flat
+                        assert "no copied committed application record matches" in _x_flat
+                        assert "NOT a statement that the run was never applied" in _x_flat
+                        assert "rolled back" in _x_flat
                         assert "Check status (demo no-op" in r.text
-                        assert "Record 1" not in r.text
-                        # ...and it STAYS unavailable when ONE
-                        # test-only application row exists (honest
-                        # label: test-only row, exact cleanup below):
-                        # without a verified run-id mapping it must
-                        # NOT be presented as this run's status
-                        # (zero records, no misattribution, no value
-                        # echo).
+                        assert "Committed record" not in r.text
+                        # ...and it STAYS unknown when ONE test-only
+                        # application row exists (honest label:
+                        # test-only row, exact cleanup below). The row
+                        # carries the SLUG shape, not a sanitized full
+                        # id, so it cannot form the 96-bit prefix
+                        # join and must NOT be presented as this run's
+                        # status (zero records, no misattribution, no
+                        # value echo).
                         from datetime import (
                             datetime as _x_dt,
                             timezone as _x_tz,
@@ -3279,8 +3415,8 @@ def test_e2e_admin_gate_two_sessions_distinct_copies(
                         )
                         assert r.status_code == 200
                         _x_flat = " ".join(r.text.split())
-                        assert "Apply status is unavailable for this run in this copy." in _x_flat
-                        assert "Record 1" not in r.text
+                        assert "Apply status is unknown (unavailable) for this run in this copy" in _x_flat
+                        assert "Committed record" not in r.text
                         assert "demo224x-operator" not in r.text
                         assert "1 / 2 / 3 / 4" not in _x_flat
                         assert "2025-06-15 15:06:40 UTC" not in r.text
@@ -3379,16 +3515,275 @@ def test_e2e_admin_gate_two_sessions_distinct_copies(
                     assert r.status_code == 400
                     r = await client_b.get("/admin/keys")
                     assert r.status_code == 200
+
+                # --- 224-y: real worker/sanitizer POSITIVE run mapping on
+                # copy C (the ONLY catalog-configured copy) -----------
+                async with AsyncClient(
+                    transport=ASGITransport(app=app),
+                    base_url="https://demo.test",
+                ) as client_c:
+                    client_c.cookies.set(
+                        "slaif_demo_session", token_c,
+                        domain="demo.test", path="/",
+                    )
+
+                    def _yc_conn():
+                        return asyncpg.connect(**_conn_kwargs(
+                            san_env.target["host"], san_env.target["port"],
+                            san_env.target["user"],
+                            san_env.target["password"], target_c,
+                        ))
+
+                    async def _yc_slug() -> str:
+                        # Discover the WORKER-PUBLISHED run slug from
+                        # copy C's own leaves (the per-copy seed is never
+                        # known to the test; the slug IS the sanitized
+                        # display name the worker published).
+                        s = await _yc_conn()
+                        try:
+                            rows = await s.fetch(
+                                "SELECT logical_name FROM demo_display.leaves "
+                                "WHERE logical_name LIKE "
+                                "'catalog/runs/%/catalog-refresh.json'"
+                            )
+                        finally:
+                            await s.close()
+                        assert len(rows) == 1, [str(r["logical_name"]) for r in rows]
+                        slug = rows[0]["logical_name"].split("/")[2]
+                        assert re.fullmatch(r"demo-run-[0-9a-f]{24}", slug)
+                        assert _y_orig_run not in slug
+                        return slug
+
+                    _y_slug = await _yc_slug()
+
+                    # The sanitized copied application row (full remapped
+                    # run id + NULL admin) as stored in copy C, found by
+                    # the SAME 96-bit prefix join the handler uses.
+                    async def _yc_app_row():
+                        s = await _yc_conn()
+                        try:
+                            return await s.fetchrow(
+                                "SELECT run_id, admin_user_id, "
+                                "operator_actor FROM "
+                                "public.catalog_refresh_applications "
+                                "WHERE run_id LIKE 'demo' || $1 || '%'",
+                                _y_slug[9:],
+                            )
+                        finally:
+                            await s.close()
+
+                    _yc_app = await _yc_app_row()
+                    assert _yc_app is not None
+                    assert _yc_app["run_id"].startswith("demo" + _y_slug[9:])
+                    assert _yc_app["admin_user_id"] is None  # NULL survived
+
+                    # (1) POSITIVE: the copied committed record renders
+                    # with its OWN event times, copied counts, null
+                    # admin -> n/a, no seal/HMAC/source exposure.
+                    r = await client_c.get(
+                        f"/admin/operations/catalog/runs/{_y_slug}/apply-status"
+                    )
+                    assert r.status_code == 200
+                    assert r.headers["cache-control"] == "private, no-store"
+                    assert "Demo preview:" in r.text
+                    _y_flat = " ".join(r.text.split())
+                    assert "Status at snapshot time" in _y_flat
+                    assert "NOT live authoritative source status" in _y_flat
+                    assert "Committed record 1" in _y_flat
+                    assert "as stored at DB snapshot time" in _y_flat
+                    assert "Effective at (record event time)" in _y_flat
+                    assert "Record created at (record event time)" in _y_flat
+                    assert "Admin user (sanitized)" in _y_flat
+                    assert "<code>n/a</code>" in r.text  # NULL admin
+                    assert (
+                        "Bundle/plan/receipt-HMAC identities are not shown in this demo"
+                        in _y_flat
+                    )
+                    assert "Check status (demo no-op" in r.text
+                    assert "File capture time (worker snapshot):" in _y_flat
+                    # The copied counts (source row: 1,2,3,4,5,6).
+                    assert "created: providers 1, routes 2, pricing 3, fx 4" in _y_flat
+                    assert "superseded: pricing 5, fx 6" in _y_flat
+                    # The copied (remapped) run id IS displayed...
+                    assert _yc_app["run_id"] in r.text
+                    # ...and NOTHING source-shaped leaks.
+                    assert _y_orig_run not in r.text
+                    assert str(san_env.source["database"]) not in r.text
+                    assert str(custody) not in r.text
+                    assert env["worker_pw"] not in r.text
+                    assert target_c not in r.text
+                    assert str(_y_root) not in r.text
+                    assert str(_y_seal_key) not in r.text
+
+                    # (2) Cross-copy isolation: B's session was never
+                    # revoked (its wrong-CSRF logout was refused), so a
+                    # NEW client carrying the still-valid token_b proves
+                    # B's unconfigured copy holds NONE of C's runs: a
+                    # true 404. The old A/B client objects are closed
+                    # once their block ended, so neither is used here;
+                    # A's session-revocation redirect (303) was already
+                    # proven in the sign-out section above and is NOT
+                    # re-claimed as an A copy 404 after logout. C has
+                    # none of A's test-only x run either (cleaned).
+                    async with AsyncClient(
+                        transport=ASGITransport(app=app),
+                        base_url="https://demo.test",
+                    ) as client_b2:
+                        client_b2.cookies.set(
+                            "slaif_demo_session", token_b,
+                            domain="demo.test", path="/",
+                        )
+                        r = await client_b2.get(
+                            f"/admin/operations/catalog/runs/{_y_slug}"
+                            "/apply-status"
+                        )
+                        assert r.status_code == 404
+                    r = await client_c.get(
+                        f"/admin/operations/catalog/runs/{_x_run}/apply-status"
+                    )
+                    assert r.status_code == 404
+
+                    # (3)-(6) TEST-ONLY negative insertions into copy C's
+                    # catalog_refresh_applications (exact-id cleanup in
+                    # the finally): ambiguous prefix, malformed row,
+                    # over-bound, and the incoming-alias canary.
+                    _y_neg_ids: list[str] = []
+
+                    async def _yc_insert_app(run_id: str) -> str:
+                        from datetime import (
+                            datetime as _y_dt,
+                            timezone as _y_tz,
+                        )
+                        new_id = str(uuid.uuid4())
+                        # Per-row unique 64-hex digests: the table has a
+                        # UNIQUE (bundle_sha256, plan_sha256) constraint,
+                        # so the multiple test-only rows must not reuse
+                        # one pair.
+                        _y_hex = new_id.replace("-", "") * 2
+                        _y_plan = _y_hex[:-1] + ("0" if _y_hex[-1] != "0" else "1")
+                        s = await _yc_conn()
+                        try:
+                            await s.execute(
+                                "INSERT INTO catalog_refresh_applications "
+                                "(id, run_id, bundle_sha256, "
+                                "receipt_hmac_sha256, plan_sha256, mode, "
+                                "operator_actor, db_actor, admin_user_id, "
+                                "reason, effective_at, "
+                                "applied_provider_ids, applied_route_ids, "
+                                "applied_pricing_created_ids, "
+                                "applied_pricing_superseded_old_ids, "
+                                "applied_pricing_superseded_new_ids, "
+                                "applied_fx_created_ids, "
+                                "applied_fx_superseded_old_ids, "
+                                "applied_fx_superseded_new_ids, "
+                                "created_providers, created_routes, "
+                                "created_pricing, created_fx, "
+                                "superseded_pricing, superseded_fx, "
+                                "outcome, created_at) "
+                                "VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, "
+                                "$10, $11, $12, $13, $14, $15, $16, $17, "
+                                "$18, $19, $20, $21, $22, $23, $24, $25, "
+                                "$26, $27)",
+                                new_id, run_id,
+                                _y_hex, "ee" * 32, _y_plan,
+                                "refresh", "demo" + "d1" * 30, "demo" + "d2" * 30,
+                                None, "y-neg",
+                                _y_dt(2025, 6, 15, 15, 6, 40, tzinfo=_y_tz.utc),
+                                "[]", "[]", "[]", "[]", "[]", "[]", "[]", "[]",
+                                1, 2, 3, 4, 5, 6, "committed",
+                                _y_dt(2025, 6, 15, 15, 7, 0, tzinfo=_y_tz.utc),
+                            )
+                        finally:
+                            await s.close()
+                        return new_id
+
+                    async def _yc_delete_apps(ids: list[str]) -> None:
+                        if not ids:
+                            return
+                        s = await _yc_conn()
+                        try:
+                            await s.execute(
+                                "DELETE FROM catalog_refresh_applications "
+                                "WHERE id = ANY($1::uuid[])",
+                                ids,
+                            )
+                        finally:
+                            await s.close()
+
+                    _y_prefix = "demo" + _y_slug[9:]
+                    _y_status_url = (
+                        f"/admin/operations/catalog/runs/{_y_slug}/apply-status"
+                    )
+                    try:
+                        # (3) AMBIGUOUS: a SECOND distinct full remapped
+                        # run id sharing the 96-bit prefix -> 503.
+                        _y_neg_ids.append(
+                            await _yc_insert_app(_y_prefix + "e" * 36)
+                        )
+                        r = await client_c.get(_y_status_url)
+                        assert r.status_code == 503
+                        assert r.headers["cache-control"] == "private, no-store"
+
+                        # (4) MALFORMED: a LIKE-matching TRUNCATED run id
+                        # (demo + 24 hex, not 64) -> 503.
+                        await _yc_delete_apps(_y_neg_ids)
+                        _y_neg_ids.clear()
+                        _y_neg_ids.append(await _yc_insert_app(_y_prefix))
+                        r = await client_c.get(_y_status_url)
+                        assert r.status_code == 503
+
+                        # (5) OVER-BOUND: five matching rows (the real one
+                        # plus four distinct siblings) -> 503.
+                        await _yc_delete_apps(_y_neg_ids)
+                        _y_neg_ids.clear()
+                        for _y_i in range(4):
+                            _y_neg_ids.append(
+                                await _yc_insert_app(
+                                    _y_prefix + format(_y_i, "036x")
+                                )
+                            )
+                        r = await client_c.get(_y_status_url)
+                        assert r.status_code == 503
+
+                        # (6) INCOMING-ALIAS canary: a known incoming
+                        # cookie equal to the path SLUG (a dynamic
+                        # displayed value) is the whole-page fixed safe
+                        # refusal, never an echo.
+                        await _yc_delete_apps(_y_neg_ids)
+                        _y_neg_ids.clear()
+                        r = await client_c.get(
+                            _y_status_url,
+                            headers={
+                                "cookie":
+                                    f"slaif_demo_session={token_c}; "
+                                    f"x-canary={_y_slug}"
+                            },
+                        )
+                        assert r.status_code == 503
+                        assert _y_slug not in r.text
+                    finally:
+                        # Exact cleanup: the test-only ids only (never a
+                        # prefix match) - copy C returns to the exact
+                        # worker-published state (one committed record).
+                        await _yc_delete_apps(_y_neg_ids)
+                        _y_neg_ids.clear()
+                        # Cleanup proven: the POSITIVE page renders again
+                        # with exactly the one worker-published record.
+                        r = await client_c.get(_y_status_url)
+                        assert r.status_code == 200
+                        assert "Committed record 1" in " ".join(r.text.split())
+                        assert "Committed record 2" not in r.text
         finally:
             await facade.close()
 
     asyncio.run(admin_phase())
 
-    # Phase 7: exact invariance - source and BOTH copies unchanged by the
-    # whole read/POST/logout phase (marker still exactly once in source).
+    # Phase 7: exact invariance - source and EVERY worker-processed copy
+    # (A, B, and the 224-y copy C) unchanged by the whole read/POST/logout
+    # phase (marker still exactly once in source).
     src_after = _source_counts(san_env)
     assert src_after == src_before, (src_before, src_after)
-    for target in (target_a, target_b):
+    for target in (target_a, target_b, target_c):
         copy_after = _copy_counts(san_env, target)
         assert copy_after == copy_before[target], (
             target, copy_before[target], copy_after
@@ -4626,12 +5021,11 @@ def test_browser_smoke_demo_copy_pages(
             assert _wx_resp.headers.get("x-content-type-options") == "nosniff"
             assert _wx_resp.headers.get("content-security-policy") == "default-src 'none'"
             assert _wx_resp.headers.get("cache-control") == "private, no-store"
-            # The apply-status page: the FIXED explicit unavailable
-            # state with zero records (the real browser copy carries
-            # a copied application row from the source fixture;
-            # without a verified run-id mapping it must NOT be
-            # presented as this run's status) plus the labeled no-op
-            # control.
+            # The apply-status page: the fixed UNKNOWN/UNAVAILABLE
+            # state with zero records (224-y: the test-only run slug
+            # joins NO copied committed application record, so the
+            # status stays unknown - never "not applied" / "rolled
+            # back") plus the labeled no-op control.
             r = page.goto(
                 f"/admin/operations/catalog/runs/{_x_browser_run}/apply-status"
             )
@@ -4639,9 +5033,10 @@ def test_browser_smoke_demo_copy_pages(
             _wx_flat = " ".join(page.content().split())
             assert "Status at snapshot time" in _wx_flat
             assert "NOT live authoritative source status" in _wx_flat
-            assert "Apply status is unavailable for this run in this copy." in _wx_flat
-            assert "no copied record can be verified as this run's status" in _wx_flat
-            assert "Record 1" not in page.content()
+            assert "Apply status is unknown (unavailable) for this run in this copy" in _wx_flat
+            assert "no copied committed application record matches" in _wx_flat
+            assert "NOT a statement that the run was never applied" in _wx_flat
+            assert "Committed record" not in page.content()
             assert "Check status (demo no-op" in page.content()
             # The key detail page advertises the frozen-configuration
             # action as UNAVAILABLE (no faithful version-1 export can
@@ -4652,6 +5047,58 @@ def test_browser_smoke_demo_copy_pages(
             _wx_flat = " ".join(page.content().split())
             assert "unavailable in this demo" in _wx_flat
             assert "configuration.json" not in page.content()
+
+            # --- 224-y: the three OpenAI-assisted read pages in the
+            # real browser -------------------------------------------
+            # The index renders the frozen demo display with working
+            # navigation to the two forms, the packaged-reference
+            # default (the 223 process leaf does not capture the
+            # source proposal-model setting) and the fixed official
+            # source URLs - with NO live-call / discovery-key claim.
+            r = page.goto("/admin/openai-assisted")
+            assert r is not None and r.status == 200
+            _wy_page = " ".join(page.content().split())
+            assert "Frozen demo display" in _wy_page
+            assert "PACKAGED REFERENCE" in _wy_page
+            assert "the source proposal-model setting was not captured" in _wy_page
+            assert "https://platform.openai.com/docs/pricing" in _wy_page
+            assert "https://platform.openai.com/docs/models/compare" in _wy_page
+            assert 'href="/admin/openai-assisted/pricing"' in page.content()
+            assert 'href="/admin/openai-assisted/routes"' in page.content()
+            assert "no OpenAI call" in _wy_page
+            assert "Admin discovery uses" not in page.content()
+            assert "OPENAI_ADMIN_DISCOVERY_API_KEY" not in page.content()
+            # The pricing form: copied-choice seam rendered, honest
+            # no-op wording, and a REAL submission through the
+            # browser: the central gate returns the pre-body quiet
+            # 204 (no generation, no provider call, no change).
+            r = page.goto("/admin/openai-assisted/pricing")
+            assert r is not None and r.status == 200
+            _wy_page = " ".join(page.content().split())
+            assert "Frozen demo display" in _wy_page
+            assert "quiet server no-op" in _wy_page
+            assert "This calls OpenAI" not in page.content()
+            assert (
+                "Generation can take up to the configured HTTP timeout"
+                not in page.content()
+            )
+            page.click('button[type="submit"]:has-text("Generate pricing proposal")')
+            page.wait_for_timeout(300)
+            _wy_posted = [
+                (u, st)
+                for (u, st, _cc) in all_responses
+                if u.endswith("/admin/openai-assisted/pricing/propose")
+                and st == 204
+            ]
+            assert _wy_posted, "no 204 no-op recorded for the pricing POST"
+            # The routes form renders the same frozen/no-op law...
+            r = page.goto("/admin/openai-assisted/routes")
+            assert r is not None and r.status == 200
+            assert "quiet server no-op" in " ".join(page.content().split())
+            assert "This calls OpenAI" not in page.content()
+            # ...and every near miss stays default-denied 404.
+            r = page.goto("/admin/openai-assisted/pricing/extra")
+            assert r is not None and r.status == 404
 
             # --- 224-i: an admitted form renders; the operational submit
             # is a quiet 204 no-op that changes nothing -------------------

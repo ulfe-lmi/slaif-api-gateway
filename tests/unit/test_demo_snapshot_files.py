@@ -1264,6 +1264,47 @@ def test_fx_json_refuses_non_list_top_level() -> None:
     assert exc.value.code == dsf.CODE_FILES_SOURCE_UNSUPPORTED
 
 
+def test_fx_json_display_verifier_accepts_sanitized_output() -> None:
+    # A fact with valid_until present and one with it null: both are
+    # legal _san_fx_json outputs and must pass the closed display law.
+    fact_null_until = _fx_fact(source=None)
+    fact_null_until["valid_until"] = None
+    out = dsf._san_fx_json(json.dumps([_fx_fact(), fact_null_until]).encode(), b"seed-1")
+    dsf._verify_leaf_policy(dsf.KIND_FX_JSON, out, None)
+
+
+def test_fx_json_display_verifier_refuses_adversarial_shapes() -> None:
+    good = json.loads(
+        dsf._san_fx_json(json.dumps([_fx_fact()]).encode(), b"seed-1")
+    )
+    cases: list[callable] = [
+        lambda d: d["fx"][0].__setitem__("rate", "0"),
+        lambda d: d["fx"][0].__setitem__("rate", "abc"),
+        lambda d: d["fx"][0].__setitem__("rate", "-1"),
+        lambda d: d["fx"][0].__setitem__("rate", "Infinity"),
+        lambda d: d["fx"][0].__setitem__("rate", 1.08),
+        lambda d: d["fx"][0].__setitem__("base_currency", "eur"),
+        lambda d: d["fx"][0].__setitem__("base_currency", "EURO"),
+        lambda d: d["fx"][0].__setitem__("quote_currency", "EUR"),
+        lambda d: d["fx"][0].__setitem__("valid_from", "not-a-date"),
+        lambda d: d["fx"][0].__setitem__("valid_until", "not-a-date"),
+        lambda d: d["fx"][0].__setitem__("valid_until", "2026-11-01T00:00:00+00:00"),
+        lambda d: d["fx"][0].__setitem__("valid_until", "2026-10-01T00:00:00+00:00"),
+        lambda d: d["fx"][0].__setitem__("valid_until", True),
+        lambda d: d["fx"][0].__setitem__("valid_until", 123),
+        lambda d: d["fx"][0].__setitem__("extra", "x"),
+        lambda d: d["fx"][0].pop("rate"),
+        lambda d: d.__setitem__("kind", "refresh_bundle"),
+        lambda d: d.__setitem__("fx", "nope"),
+    ]
+    for mutate in cases:
+        doc = json.loads(json.dumps(good))
+        mutate(doc)
+        with pytest.raises(ds.DemoSnapshotError) as exc:
+            dsf._verify_leaf_policy(dsf.KIND_FX_JSON, json.dumps(doc).encode(), None)
+        assert exc.value.code == dsf.CODE_FILES_VERIFY_FAILED
+
+
 def _warnings_raw(row_extra: dict | None = None) -> bytes:
     row = {
         "code": "fx.manual_source",
@@ -2073,3 +2114,30 @@ def test_process_configuration_capture_all_includes_required_leaf() -> None:
     capture_process_configuration(capture)
     names = [leaf.logical_name for leaf in capture.leaves]
     assert names == ["configuration/process-configuration.json"]
+
+
+def test_demo_run_id_mapping_law_224y() -> None:
+    # 224-y direct mapping law (snapshot-file side): the file display
+    # slug is the first 24 hex of the EXISTING remap_str_id output -
+    # the SAME keyed b"s" digest domain the DB sanitizer uses for
+    # catalog_refresh_applications.run_id. Deterministic, per-copy
+    # unlinkable, no raw run id or seed in the slug, and the 96-bit
+    # slug prefix joins the sanitized full run id.
+    from slaif_gateway.services.demo_snapshot_sanitize import remap_str_id
+
+    seed = b"job-id-seed-224y"
+    raw = "run-abc-123"
+    slug = dsf._demo_run_id(seed, raw)
+    full = remap_str_id(seed, raw)
+    assert re.fullmatch(r"demo-run-[0-9a-f]{24}", slug) is not None
+    assert full.startswith("demo")
+    assert slug[9:] == full[4:28]
+    assert full.startswith("demo" + slug[9:])
+    # Deterministic for the same (seed, raw) pair...
+    assert dsf._demo_run_id(seed, raw) == slug
+    # ...but unlinkable per copy seed and per raw run id.
+    assert dsf._demo_run_id(b"other-seed", raw) != slug
+    assert dsf._demo_run_id(seed, "run-abc-124") != slug
+    # Zero raw-ID/seed exposure.
+    assert raw not in slug
+    assert "224y" not in slug

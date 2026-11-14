@@ -883,6 +883,9 @@ def _mount_demo_admin_routers(app: FastAPI) -> None:
     from slaif_gateway.api.demo_admin_compatibility import (
         router as demo_admin_compatibility_router,
     )
+    from slaif_gateway.api.demo_admin_openai import (
+        router as demo_admin_openai_router,
+    )
     from slaif_gateway.api.demo_admin_operations import (
         router as demo_admin_operations_router,
     )
@@ -922,6 +925,11 @@ def _mount_demo_admin_routers(app: FastAPI) -> None:
     # that route lives on the core admin router, so this demo router
     # must register before it.
     app.include_router(demo_admin_codex_artifacts_router)
+    # 224-y: the demo OpenAI-assisted read pages win over the normal
+    # live-Settings routes (the normal POSTs stay the gate's quiet
+    # pre-body 204); that route lives on the core admin router, so
+    # this demo router must register before it.
+    app.include_router(demo_admin_openai_router)
     app.include_router(admin_router)
     # 224-w: the demo SMTP-test GETs win over the normal form/apply
     # routes (the normal POSTs stay the gate's quiet pre-body 204).

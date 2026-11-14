@@ -3610,6 +3610,25 @@ that the run was never applied. The page keeps the "status at
 snapshot time" / "NOT live authoritative source status" framing,
 and visible operational controls are labeled quiet no-ops.
 
+**224-y correction note (supersedes the no-mapping limitation
+above for NEW copies only):** the "NO verified mapping exists"
+statement above described the 224-x implementation state.
+Objective 224-y established that the two mapping producers share
+EXACTLY one per-login seed (``manifest.job_id``, encoded) and one
+canonical raw run id (the worker's ``bundle.run_id``, written as
+BOTH the sealed run directory name and the application row's
+``run_id``): the 223 file capture derives the display slug from
+the first 24 hex characters of ``remap_str_id(seed, run_id)``, and
+the 222 sanitizer applies the SAME keyed digest to the copied
+``catalog_refresh_applications.run_id`` values. The 224-y
+apply-status handler therefore joins copied records by the derived
+96-bit prefix for copies created after this upgrade. Active
+PRE-UPGRADE copies (old slug domain, no joinable value) remain in
+the fixed UNKNOWN/UNAVAILABLE state, and the no-match wording
+(never "not applied" / "rolled back") is unchanged. The 224-x
+report itself remains immutable (SHA-256
+``1f50f7c5bed36a32e646fb0d074dba331bbac13dd3e232721b6f101abc98a367``).
+
 ### Key configuration export remains safely unavailable
 
 The 224-w `configuration.json` fixed safe 503 stands. The owned
@@ -3695,6 +3714,215 @@ projection remains pending human choice.
   prove route/reader/transport and the bounded-read law, not
   artifact content validation or worker publication. The
   configured-file installed workflow remains objective 225.
+* Hosted checks are recorded as observed at report time, not
+  presumed. No schema migration, role, grant, configuration,
+  release, deployment or merge is introduced; the fake admin
+  remains a sanitized display surface with no write authority.
+
+## Frozen apply-status run mapping and OpenAI-assisted read pages (objective 224-y)
+
+### Run-status mapping law (worker-owned, at copy time)
+
+For a catalog-configured worker copy, the display run slug and the
+copied application record's run id are deterministic DISPLAY
+correlates of one another, produced under one shared per-login
+seed and one canonical raw run id:
+
+* The 223 file capture (``demo_snapshot_files.run_files_job``)
+  seeds the per-copy remap with ``manifest.job_id.encode("utf-8")``
+  and names each sealed run's display directory ``demo-run-`` plus
+  the first 24 hex characters of the existing
+  ``remap_str_id(seed, run_id)`` keyed digest
+  (``_demo_run_id``; the same ``b"s"`` digest domain the sanitizer
+  uses for copied string ids).
+* The 222 sanitizer
+  (``demo_snapshot_sanitize._sanitize_copy_async``) uses the SAME
+  ``manifest.job_id.encode("utf-8")`` seed when it remaps the
+  copied ``catalog_refresh_applications.run_id`` values.
+* The raw run id is the worker's ``bundle.run_id``: the review CLI
+  writes it as the sealed run directory name and the source
+  application row carries it as ``run_id`` - ONE canonical value in
+  both places.
+
+The slug's 96-bit prefix is therefore a deterministic display
+correlation with the already-sanitized copy DB id. It is a display
+mapping ONLY: never identity, authorization, or replay authority.
+The unit test ``test_demo_run_id_mapping_law_224y`` proves the
+shared-seed premise directly.
+
+### Apply-status read law (demo process, verified copy only)
+
+``GET /admin/operations/catalog/runs/{run-id}/apply-status``
+(query-free, exact canonical shape admitted by the central gate):
+
+* ONE SELECT-only/read-only transaction on the gate's SAME
+  request-local copy engine, with the independent
+  ``current_database()`` / ``transaction_read_only`` recheck FIRST.
+* The run must exist in THIS copy via the SAME closed seven-file
+  metadata-only inventory as the 224-m run detail (no body
+  transfer): a missing run is the fixed 404; a partial run, a
+  kind-mismatched leaf, or a nonfinite / unrepresentable
+  ``captured_at`` is the fixed safe 503 (a corrupt-existing leaf is
+  never "not found" and never a silent missing time).
+* The copied ``catalog_refresh_applications`` rows are then queried
+  ONLY by the derived 96-bit prefix
+  (``run_id LIKE 'demo' || :prefix || '%'``) with a BOUND
+  ``LIMIT 5`` (bound 4 + one over-bound probe). Any malformed row
+  (wrong mode/outcome vocabulary, non-``_S_MAPPED_TEXT`` actor,
+  non-nullable-shape admin, bool/negative counts), more than ONE
+  distinct full remapped run id (collision or corruption), or an
+  over-bound result is the fixed safe 503.
+* Row law: ``mode`` in ``{bootstrap, refresh}``, ``outcome``
+  ``committed``, actor strings matching the sanitized string-id
+  grammar, ``admin_user_id`` NULLABLE (CLI-applied records may carry
+  no admin identity; NULL renders as ``n/a`` - a classifier FAILURE
+  on a non-null admin value is the distinct fixed safe 503, never
+  an indistinguishable ``n/a``), counts non-bool integers >= 0.
+* For a unique full remapped run id, ONLY that id's typed, safe
+  committed records are displayed as stored at DB snapshot time:
+  the copied counts, the record's OWN historical event times
+  (labeled "record event time" - the DB snapshot timestamp itself is
+  NOT displayed), and the separately labeled file capture time
+  (worker snapshot; may differ from the record times). NO
+  bundle/plan/receipt-HMAC identity values are shown (seal/HMAC
+  receipt authority is never presented).
+* A no-match is rendered UNKNOWN/UNAVAILABLE - "no copied committed
+  application record matches ... NOT a statement that the run was
+  never applied" - which also keeps pre-upgrade active copies
+  safely unknown.
+* Whole-page incoming-alias law: every dynamic displayed value
+  (the path slug, canonical/display forms of times, raw and
+  grouped count forms, and every record string) equal to a known
+  incoming bearer/cookie/session/proxy alias makes the WHOLE page
+  the fixed safe refusal; a classifier error is the fixed safe
+  refusal (never a 500). No source run id, seed, seal/HMAC receipt
+  authority, provider credential, copy locator or unbounded free
+  text is ever shown.
+* No source DB, live custody, seal key, network or DML; visible
+  operational controls are labeled quiet no-ops; the normal
+  authoritative admin status is unchanged.
+
+### OpenAI-assisted read pages
+
+Three query-free GETs admitted by the central gate before any copy
+access: ``/admin/openai-assisted`` (index),
+``/admin/openai-assisted/pricing``, ``/admin/openai-assisted/routes``
+(exact shapes; near-misses 404; unsafe methods are quiet pre-body
+204 no-ops with the body never parsed).
+
+* The INDEX performs NO copy read: fixed demo display framing,
+  working navigation, and the packaged-reference model default,
+  explicitly labeled as such because the 223 process-configuration
+  leaf does not capture the source proposal-model setting. Fixed
+  official source URLs (pricing / model comparison) only - no
+  live-call, Admin-discovery-key or environment-variable claim.
+* The PRICING and ROUTES forms are copy-backed: ONE transaction on
+  the gate's request-local copy session with the in-transaction
+  database/read-only recheck, then the existing typed
+  ``load_choices`` seam (for the routes form, model options come
+  from the copied model data; scope/currency/preset options are
+  fixed product vocabularies, stated as such). A failed copy query
+  is the fixed safe 503 (never a silent empty dropdown), and
+  choice values equal to a known incoming alias are withheld
+  before render.
+* Form submission is a demo no-op (the central gate returns the
+  pre-body quiet 204); the pages carry persistent no-op wording and
+  never infer live setup readiness from form visibility.
+
+### FX display-verifier repair (the 224-y worker blocker)
+
+The first real catalog-configured worker copy exposed a pre-existing
+gap in the 223 file verifier: ``_JSON_DOC_VALIDATORS`` omitted
+``KIND_FX_JSON``, so the sealed run's ``fx-proposal.json`` leaf
+failed post-write verification with ``FILES_VERIFY_FAILED``
+("A display leaf kind is unverifiable") and the worker request
+failed closed without publishing. The repair is a narrow typed
+display validator (``_v_doc_fx_json``) matching the closed
+``_san_fx_json`` output exactly - schema/kind constants, the closed
+per-fact field set (three-letter currency codes, positive finite
+decimal-text rate, ISO timestamps, nullable ``valid_until``), plus
+the source invariants the sanitizer preserves (distinct
+base/quote currencies, ``valid_until`` after ``valid_from``) - with
+adversarial shape refusals unit-tested. No source capture,
+sanitizer or verification bypass was changed; the failure remains
+fail-closed for any nonconforming leaf.
+
+### Scope repairs folded from review threads
+
+Six GitHub review threads are repaired by this objective's commit:
+``PRRT_kwDOSLm-qM63cdHp`` (unused local
+``_selected_completion`` in ``demo_admin_route_configuration.py``)
+and the five unused gate constants in ``demo_admin_gate.py``
+(``PRRT_kwDOSLm-qM63cdHt`` ``_CATALOG_RUN_ARTIFACT_NAMES``,
+``PRRT_kwDOSLm-qM63cdHv`` ``_CATALOG_JOB_UPLOAD_NAME_RE``,
+``PRRT_kwDOSLm-qM63cdHz`` ``_CATALOG_PROPOSAL_ARTIFACT_NAMES``,
+``PRRT_kwDOSLm-qM63cdH2`` ``_CATALOG_PACKAGE_PRESETS``,
+``PRRT_kwDOSLm-qM63cdH9`` ``_CATALOG_PACKAGE_FILE_NAMES``) - all
+now inlined at their single use sites, behavior unchanged.
+
+### Limits
+
+* The 224-w key configuration export remains the fixed safe 503
+  (no faithful version-1 export from the stripped copy); the
+  224-x direct artifact downloads and their wire law are
+  unchanged.
+* Pre-upgrade active copies keep the fixed UNKNOWN apply-status
+  state (old slug domain, no joinable value).
+* The apply-status page is a historical sanitized display, not
+  live source status, and confers no seal/HMAC receipt authority.
+
+### Evidence (224-y)
+
+* **Focused mocked units (counted from source)**: the 19 new
+  ``test_y_`` tests in ``tests/unit/test_demo_web.py`` (12
+  apply-status incl. the mapping-law premise, null-admin ``n/a``,
+  ambiguous/over-bound/malformed 503s, the path-slug /
+  datetime-shaped / numeric-count incoming-alias canaries, the
+  non-null-admin classifier-error 503, and the bad ``captured_at``
+  503; 7 OpenAI-page tests: exact gate shapes, unsafe-method quiet
+  204s with the body unparsed, index-no-copy-read, copy-backed
+  pricing/routes choices with alias withholding, and the copy
+  failure 503) plus 3 new tests in
+  ``tests/unit/test_demo_snapshot_files.py``
+  (``test_demo_run_id_mapping_law_224y`` and the two
+  ``test_fx_json_display_verifier_*`` cases, the second covering
+  17 adversarial mutations). The affected unit files
+  (``test_demo_web.py``, ``test_demo_snapshot_files.py``, catalog
+  index, design/usability inventories) pass; Ruff is clean on all
+  touched files; the normal-render byte oracle reports zero
+  failures across its contexts.
+* **Owned PostgreSQL (as observed)**: the two-test fixture
+  (``test_e2e_admin_gate_two_sessions_distinct_copies`` and
+  ``test_browser_smoke_demo_copy_pages``) adds a THIRD owned
+  worker-processed copy (C) - the ONLY catalog-configured worker,
+  with a real CLI-reviewed sealed first-install run from the
+  tracked fixture (exact raw run id ``fixture-first-install-001``,
+  synthetic, never live-applied) and ONE source
+  ``catalog_refresh_applications`` row (NULL admin, exact-id
+  cleanup). It proves the POSITIVE worker-published mapping
+  (slug discovered from C's own leaves; the copied row joined by
+  the same 96-bit prefix; the positive page with copied counts,
+  record-event-time labels, ``n/a`` admin, no seal/HMAC/source
+  exposure), cross-copy isolation (fresh B client 404 for C's
+  slug; C 404 for A's test-only x run; A's post-logout 303
+  recorded only as the session-revocation proof from the sign-out
+  section), and the test-only C negatives (ambiguous prefix,
+  truncated prefix, over-bound, and the incoming-alias canary, all
+  exact-id cleaned), plus the invariance of source and all three
+  copies after the whole read/POST/logout cycle.
+* **Real Chromium (as observed)**: the browser fixture asserts the
+  three OpenAI-assisted pages (frozen display framing,
+  packaged-reference label, fixed official URLs, working hrefs,
+  no live-call/discovery claim), a REAL pricing-form submission
+  through the browser returning the pre-body quiet 204, and the
+  near-miss 404; the 224-x browser evidence (non-empty catalog
+  index, run detail, real download, UNKNOWN apply-status for the
+  test-only x run, key-config unavailability) is preserved.
+* The source application row is disposable owned-source fixture
+  data (exact-id cleanup finalizer; row counts never change); the
+  catalog root is a fresh restrictive-mode (0700) tree with the
+  seal key OUTSIDE it. Target-side test-only insertions are labeled
+  as such and exact-id cleaned.
 * Hosted checks are recorded as observed at report time, not
   presumed. No schema migration, role, grant, configuration,
   release, deployment or merge is introduced; the fake admin

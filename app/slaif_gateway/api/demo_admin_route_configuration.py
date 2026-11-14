@@ -305,9 +305,11 @@ async def demo_route_configuration_form(
         except Exception:  # noqa: BLE001 - fail closed, no echo
             return True
 
-    _selected_completion = form.get("completion_profile") or None
-    if _selected_completion is not None and _is_alias(_selected_completion):
-        _selected_completion = None
+    # 224-y review cleanup: the local was reassigned but never read;
+    # the withholding effect is the form mutation below (behavior
+    # unchanged).
+    _completion_selected = form.get("completion_profile") or None
+    if _completion_selected is not None and _is_alias(_completion_selected):
         form["completion_profile"] = ""  # no pre-selected withheld value
     choices["completion_profile"] = [
         c

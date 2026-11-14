@@ -197,6 +197,15 @@ ADMITTED_CATALOG_COLLECT_PATH = "/admin/operations/catalog/collect"
 ADMITTED_CATALOG_REVIEW_PATH = "/admin/operations/catalog/review"
 ADMITTED_CATALOG_EXPORT_PATH = "/admin/operations/catalog/export-baseline"
 ADMITTED_CATALOG_JOBS_PATH = "/admin/operations/catalog/jobs/"
+# 224-y: the three exact OpenAI-assisted read pages (the core admin
+# router's GET family, query-free; the proposal POSTs and every
+# near miss / subpath / alternate-slash value stay default-denied
+# 404, and every unsafe method remains the pre-body quiet 204 cut).
+ADMITTED_OPENAI_ASSISTED_PATHS = (
+    "/admin/openai-assisted",
+    "/admin/openai-assisted/pricing",
+    "/admin/openai-assisted/routes",
+)
 # 224-t: the two exact static demo operations read pages. The index
 # REQUIRES its trailing slash; process-configuration takes NONE.
 # Both define NO query parameters (any query stays 404).
@@ -339,49 +348,10 @@ _CALIBRATION_DECIMAL_RE = re.compile(r"[0-9]+(?:\.[0-9]+)?\Z")
 # default-denied, and every unsafe method remains the pre-body quiet
 # 204 cut.
 _CATALOG_RUN_ID_G = r"demo-run-[0-9a-f]{24}"
-_CATALOG_RUN_ARTIFACT_NAMES = frozenset(
-    {
-        "catalog-refresh.json",
-        "catalog-baseline.json",
-        "routes-proposal.tsv",
-        "pricing-proposal.tsv",
-        "fx-proposal.json",
-        "validation.json",
-        "REVIEW.html",
-    }
-)
 _CATALOG_JOB_ID_G = r"[0-9a-f]{32}"
-_CATALOG_JOB_UPLOAD_NAME_RE = re.compile(
-    r"(bundle|baseline|baseline-export)-[0-9a-f]{32}\Z"
-)
-_CATALOG_PROPOSAL_ARTIFACT_NAMES = frozenset(
-    {
-        "source-manifest.json",
-        "provider-catalog-normalized.json",
-        "routes-proposal.tsv",
-        "pricing-proposal.tsv",
-        "provider-catalog-report.md",
-        "warnings.json",
-    }
-)
-_CATALOG_PACKAGE_PRESETS = frozenset(
-    {
-        "openrouter-chat-text",
-        "openrouter-chat-image",
-        "openrouter-chat-audio",
-        "openrouter-chat-multimodal",
-        "openrouter-responses-text",
-    }
-)
-_CATALOG_PACKAGE_FILE_NAMES = frozenset(
-    {
-        "routes-proposal.tsv",
-        "pricing-proposal.tsv",
-        "package-report.md",
-        "model-review.md",
-        "package-manifest.json",
-    }
-)
+# 224-y review cleanup: the closed vocabularies documented above are
+# inlined in the exact REs below (the unused constant mirrors were
+# removed; no runtime behavior change, no broader permissive regex).
 _CATALOG_RUN_ARTIFACT_RE = re.compile(
     rf"/admin/operations/catalog/runs/{_CATALOG_RUN_ID_G}"
     r"/artifact/(?:catalog-refresh\.json|catalog-baseline\.json"
@@ -884,6 +854,10 @@ def _is_admitted_path_with_query(
     if _CATALOG_JOB_PROPOSAL_ARTIFACT_RE.fullmatch(path) is not None:
         return not query_string
     if _CATALOG_JOB_PACKAGE_RE.fullmatch(path) is not None:
+        return not query_string
+    # 224-y: the exact read-only OpenAI-assisted GET family
+    # (all query-free).
+    if path in ADMITTED_OPENAI_ASSISTED_PATHS:
         return not query_string
     if _CATALOG_RUN_DETAIL_RE.fullmatch(path) is not None:
         return True

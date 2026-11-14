@@ -71,6 +71,7 @@ from slaif_gateway.services import demo_snapshot as ds
 from slaif_gateway.services import demo_snapshot_sanitize as dss
 from slaif_gateway.services.demo_snapshot_sanitize import (
     demo_profile_id,
+    remap_str_id,
     remap_uuid,
 )
 from slaif_gateway.services.catalog_refresh import filesystem as catfs
@@ -474,12 +475,23 @@ _COMPLETION_PROFILE_MAX_COUNT = 1000
 _PROFILE_ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$")
 
 def _demo_run_id(seed: bytes, run_id: str) -> str:
-    """Per-copy deterministic demo run id (slug-safe, link-preserving)."""
-    import hashlib as _hashlib
-    import hmac as _hmac
+    """Per-copy deterministic demo run id (slug-safe, link-preserving).
 
-    digest = _hmac.new(seed, b"run|" + run_id.encode("utf-8"), _hashlib.sha256).digest()
-    return f"demo-run-{digest[:12].hex()}"
+    224-y: the slug is the first 24 hex characters of the EXISTING
+    ``remap_str_id(seed, run_id)`` output (the same keyed ``b"s"``
+    digest domain the sanitizer applies to copied
+    ``catalog_refresh_applications.run_id`` values). Both producers
+    share the same per-login seed (``manifest.job_id``) and the same
+    canonical raw run id (the worker's ``bundle.run_id`` is written as
+    BOTH the sealed run directory name and the application row's
+    ``run_id``), so the slug's 96-bit prefix is a deterministic
+    DISPLAY correlation with the already-sanitized copy DB id. This
+    is a display mapping ONLY: never identity, authorization or
+    apply authority. Zero raw-id/seed exposure: the slug is the keyed
+    prefix (not the raw value), and per-copy seeds keep distinct
+    copies unlinkable.
+    """
+    return "demo-run-" + remap_str_id(seed, run_id)[4:28]
 
 
 def _demo_job_id(seed: bytes, job_id: str) -> str:
@@ -3209,6 +3221,42 @@ def _v_iso():
     return check
 
 
+def _v_opt_iso():
+    base = _v_iso()
+
+    def check(value: object) -> None:
+        if value is None:
+            return
+        base(value)
+
+    return check
+
+
+_CURRENCY_CODE_RE = re.compile(r"^[A-Z]{3}$")
+
+
+def _v_currency():
+    def check(value: object) -> None:
+        if not isinstance(value, str) or not _CURRENCY_CODE_RE.fullmatch(value):
+            raise _v_unexpected()
+
+    return check
+
+
+def _v_positive_decimal():
+    def check(value: object) -> None:
+        if not isinstance(value, str):
+            raise _v_unexpected()
+        try:
+            number = decimal.Decimal(value)
+        except (decimal.InvalidOperation, ValueError):
+            raise _v_unexpected()
+        if not number.is_finite() or number <= 0:
+            raise _v_unexpected()
+
+    return check
+
+
 def _v_uuid():
     def check(value: object) -> None:
         if not isinstance(value, str) or not _UUID_RE.fullmatch(value):
@@ -4086,6 +4134,46 @@ def _proc_config_source_check(value: object) -> None:
         raise _v_unexpected()
 
 
+def _v_fx_rows(count_max: int = _MAX_ROWS):
+    """Exact closed FX fact rows as emitted by ``_san_fx_json``: the
+    source invariants (distinct currencies, positive rate, valid_until
+    after valid_from) are preserved in the display projection, so a leaf
+    violating them is not a sanitized output."""
+    row_spec = {
+        "base_currency": _v_currency(),
+        "quote_currency": _v_currency(),
+        "rate": _v_positive_decimal(),
+        "valid_from": _v_iso(),
+        "valid_until": _v_opt_iso(),
+    }
+
+    def check(value: object) -> None:
+        if not isinstance(value, list) or len(value) > count_max:
+            raise _v_unexpected()
+        for row in value:
+            _v_row_spec(row_spec)(row)
+            if row["base_currency"] == row["quote_currency"]:
+                raise _v_unexpected()
+            if row["valid_until"] is not None:
+                if _dt.fromisoformat(row["valid_until"]) <= _dt.fromisoformat(
+                    row["valid_from"]
+                ):
+                    raise _v_unexpected()
+
+    return check
+
+
+def _v_doc_fx_json(document: dict[str, object]) -> None:
+    _v_spec(
+        document,
+        {
+            "schema": _v_const(DEMO_SCHEMA_VERSION),
+            "kind": _v_const(KIND_FX_JSON),
+            "fx": _v_fx_rows(),
+        },
+    )
+
+
 def _v_doc_process_configuration(document: dict[str, object]) -> None:
     _v_spec(
         document,
@@ -4116,6 +4204,7 @@ _JSON_DOC_VALIDATORS: dict[str, object] = {
     KIND_REFRESH_BUNDLE: _v_doc_refresh_bundle,
     KIND_COMPLETION_CHOICES: _v_doc_completion_choices,
     KIND_BASELINE_DOC: _v_doc_baseline,
+    KIND_FX_JSON: _v_doc_fx_json,
     KIND_VALIDATION_JSON: _v_doc_validation,
     KIND_NORMALIZED_JSON: _v_doc_normalized,
     KIND_SOURCE_MANIFEST: _v_doc_source_manifest,

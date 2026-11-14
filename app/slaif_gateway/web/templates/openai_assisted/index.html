@@ -21,10 +21,34 @@
     </div>
   </header>
 
+  {%- if demo_admin %}
+  <div class="admin-flash" role="status">
+    <strong>Frozen demo display (no calls, no-op):</strong> the pages
+    and forms below are the operator's OpenAI-assisted proposal
+    surfaces. In this demo every proposal submission does NOTHING -
+    the server returns a quiet no-op before parsing: no OpenAI
+    call, no discovery key read, no proposal generation, no import.
+    Model and currency choices come from your verified private
+    copy; the default model is a PACKAGED REFERENCE (the source
+    proposal-model setting was not captured).
+  </div>
+  {%- endif %}
+
   <section class="action-panel danger-zone" aria-labelledby="openai-assisted-warning-heading">
     <h2 id="openai-assisted-warning-heading">Review Required</h2>
+    {%- if demo_admin %}
+    <p class="warning-text">
+      In this demo nothing is generated or called: the forms below
+      are a frozen display of the operator's proposal workflow.
+      Submitting a form does nothing (quiet server no-op before
+      parsing) - no OpenAI call, no discovery key, no proposal, no
+      import.
+    </p>
+    <p class="muted">No discovery key is used or read in this demo; the source deployment's OpenAI assisted settings were not captured. The default model shown is a packaged reference, not the captured source setting.</p>
+    {%- else %}
     <p class="warning-text">{{ warning }}</p>
     <p class="muted">Admin discovery uses the {{ api_key_env_var }} environment variable and proposal model {{ proposal_model }}. The key value is never displayed.</p>
+    {%- endif %}
   </section>
 
   <div class="summary-grid" aria-label="OpenAI assisted proposal choices">
@@ -33,12 +57,14 @@
       <p class="muted">Draft local OpenAI Chat Completions accounting assumptions from official pricing and model documentation.</p>
       <p class="muted small">Sources: {% for source_url in source_urls %}<span>{{ source_url }}</span>{% if not loop.last %}, {% endif %}{% endfor %}</p>
       <a class="button-link" href="/admin/openai-assisted/pricing">Generate pricing proposal</a>
+      {%- if demo_admin %}<p class="muted small">Demo no-op: the form is browse-only and its submission changes nothing.</p>{% endif %}
     </section>
     <section class="metric-card">
       <h2>Route proposal</h2>
       <p class="muted">Draft OpenAI Chat Completions route metadata for models that remain inside the implemented gateway endpoint scope.</p>
       <p class="muted small">Sources: {% for source_url in route_source_urls %}<span>{{ source_url }}</span>{% if not loop.last %}, {% endif %}{% endfor %}</p>
       <a class="button-link" href="/admin/openai-assisted/routes">Generate route proposal</a>
+      {%- if demo_admin %}<p class="muted small">Demo no-op: the form is browse-only and its submission changes nothing.</p>{% endif %}
     </section>
   </div>
 </section>

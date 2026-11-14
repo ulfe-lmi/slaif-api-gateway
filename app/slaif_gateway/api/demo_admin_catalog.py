@@ -64,6 +64,7 @@ from __future__ import annotations
 
 import json
 import math
+import uuid
 import hashlib
 import re
 from datetime import UTC, datetime
@@ -78,6 +79,10 @@ from slaif_gateway.api.admin import templates
 from slaif_gateway.services.admin_record_choices import load_choices
 from slaif_gateway.db.session import get_sessionmaker_from_app
 from slaif_gateway.services import demo_snapshot_files as dsf
+from slaif_gateway.services.request_diagnostics import (
+    is_known_incoming_secret_alias,
+)
+from slaif_gateway.web.formatting import format_number
 from slaif_gateway.services.provider_catalog_proposal import OPENROUTER_PACKAGE_ORDER
 
 router = APIRouter(prefix="/admin/operations/catalog", include_in_schema=False)
@@ -95,6 +100,20 @@ _SAFE_UNAVAILABLE = "The catalog snapshot index is unavailable for this demo ses
 # is tighter). Enforced BEFORE any body fetch.
 _MAX_ARTIFACT_BYTES = 32 * 1024 * 1024
 _SHA256_HEX = re.compile(r"[0-9a-f]{64}\Z")
+# 224-y: the bounded copied apply-record read law. The copied
+# ``catalog_refresh_applications.run_id`` values are the sanitizer's
+# S-remap (``demo`` + 60 lowercase hex); the 224-y run slug carries
+# the first 24 hex of the SAME keyed digest, so the 96-bit slug
+# prefix is the exact derived query prefix. A small bounded result
+# plus ONE over-bound probe; any malformed row, more than one
+# distinct full remapped run id, or an over-bound result is the
+# fixed safe refusal. No-match is UNKNOWN/UNAVAILABLE, never
+# "not applied" / "rolled back" (pre-upgrade copies stay safe).
+_APPLY_RECORD_BOUND = 4
+_S_MAPPED_TEXT = re.compile(r"demo[0-9a-f]{60}\Z")
+_APPLY_MODE_VOCAB = frozenset({"bootstrap", "refresh"})
+_APPLY_OUTCOME_VOCAB = frozenset({"committed"})
+_ALIAS_WITHHELD = "withheld (credential-shaped alias)"
 _SAFE_ARTIFACT_UNAVAILABLE = (
     "The catalog artifact is unavailable for this demo session."
 )
@@ -1914,7 +1933,7 @@ async def demo_catalog_job_package_artifact(
 async def demo_catalog_apply_status(
     request: Request, run_id: str
 ) -> Response:
-    """224-x: frozen historical apply status for one captured run.
+    """224-y: frozen historical apply status for one captured run.
 
     Exact canonical shape only (gate-admitted, query-free). ONE
     SELECT-only/read-only transaction on the gate's SAME
@@ -1925,23 +1944,39 @@ async def demo_catalog_apply_status(
     copy (missing run -> fixed 404; a partial or kind-mismatched
     run -> the fixed safe 503).
 
-    The page then shows the FIXED explicit "status unavailable for
-    this run in this copy" state with ZERO records. Reported
-    limitation: the worker remaps captured run identifiers for the
-    display leaves (the ``demo-run-`` keyed-HMAC slug) while the
-    sanitizer remaps the copied
-    ``catalog_refresh_applications.run_id`` values by an INDEPENDENT
-    per-copy string remap; the web process holds neither the
-    original run id nor the per-copy seed, so NO verified mapping
-    exists between a copied application record and this display run
-    id. Presenting copied rows as this run's status would mislead,
-    so the copied applications table is NOT read or listed on this
-    page at all. The unavailable state is a historical display
-    limitation of the sanitized copy - it is NOT a statement that
-    the run was never applied. Missing/unrecognized run or a
-    corrupt/partial row set is a fixed safe refusal; visible
-    operational controls are clearly labeled quiet no-ops and cannot
-    reach source DML.
+    The copied ``catalog_refresh_applications`` rows are then
+    queried ONLY by the derived 96-bit prefix of the
+    already-sanitized ``run_id`` (the 224-y slug carries the first
+    24 hex of the SAME keyed ``remap_str_id`` digest both
+    producers share: one seed - ``manifest.job_id`` - and one
+    canonical raw run id - the worker's ``bundle.run_id``, written
+    as both the sealed run directory name and the application row).
+    The query is parameterized with a small bounded LIMIT plus one
+    over-bound probe; any malformed row, more than ONE distinct
+    full remapped run id (collision or corruption) or an
+    over-bound result is the fixed safe 503. For a unique full
+    remapped run id, ONLY that id's typed, safe committed records
+    are displayed as stored at DB snapshot time: the real copied
+    counts and the record's OWN historical event times (UTC; the
+    DB snapshot timestamp itself is not displayed) and no
+    bundle/plan/receipt-HMAC identity values (seal/HMAC receipt
+    authority is never presented). Every seven-file leaf's
+    captured_at must be a finite representable worker time or the
+    fixed safe 503 fires; the file capture time is stated
+    separately when present and may differ from the record
+    times. A no-match is UNKNOWN/UNAVAILABLE - never "not applied"
+    or "rolled back" - which also keeps pre-upgrade active copies
+    (old slug domain, no joinable value) safely unknown. Every
+    displayed value (path slug, canonical time forms, raw and
+    grouped count forms, and every record string) equal to a known
+    incoming bearer/cookie/session/proxy alias makes the WHOLE page
+    the fixed safe refusal, and a classifier failure is the fixed
+    safe refusal (never a 500); no source run id, seed,
+    seal/HMAC receipt authority, provider credential, copy
+    locator or unbounded free text is ever shown. No source DB,
+    live custody, seal key, network or DML; visible operational
+    controls are clearly labeled quiet no-ops; the normal
+    authoritative admin status is unchanged.
     """
     demo = getattr(request.state, "demo_admin", None)
     if demo is None or _RUN_ID.fullmatch(run_id) is None:
@@ -1954,6 +1989,8 @@ async def demo_catalog_apply_status(
         session_factory = get_sessionmaker_from_app(request)
     except Exception:
         return _run_detail_unavailable()
+    bundle_captured_at: float = 0.0
+    app_rows: list = []
     try:
         async with session_factory() as session, session.begin():
             current = await session.scalar(text("SELECT current_database()"))
@@ -1961,8 +1998,8 @@ async def demo_catalog_apply_status(
             if current != demo.target_db or read_only != "on":
                 return _run_detail_unavailable()
             # The run must exist in THIS copy (the SAME closed
-            # seven-file inventory as the 224-m run detail, metadata
-            # only - no body transfer).
+            # seven-file inventory as the 224-m run detail,
+            # metadata only - no body transfer).
             params: dict[str, object] = {}
             placeholders: list[str] = []
             for index, full_name in enumerate(expected):
@@ -1971,34 +2008,247 @@ async def demo_catalog_apply_status(
             rows = (
                 await session.execute(
                     text(
-                        "SELECT logical_name, kind "
+                        "SELECT logical_name, kind, captured_at "
                         "FROM demo_display.leaves "
                         f"WHERE logical_name IN ({', '.join(placeholders)})"
                     ),
                     params,
                 )
             ).all()
-            present = {
-                str(r[0]): str(r[1]) for r in rows
-                if isinstance(r[0], str) and isinstance(r[1], str)
-            }
+            present: dict[str, str] = {}
+            for r in rows:
+                if (
+                    isinstance(r[0], str)
+                    and r[0] in expected
+                    and isinstance(r[1], str)
+                    and expected[r[0]] == r[1]
+                    and isinstance(r[2], (int, float))
+                    and not isinstance(r[2], bool)
+                    and math.isfinite(float(r[2]))
+                    and 0 <= float(r[2]) < _MAX_CAPTURE_AT
+                ):
+                    present[str(r[0])] = str(r[1])
+                else:
+                    # A leaf that EXISTS in this copy but is
+                    # corrupted (unknown name, bad kind, or a
+                    # nonfinite / unrepresentable capture time)
+                    # is the fixed safe refusal - never
+                    # "not found", never a silent missing time.
+                    return _run_detail_unavailable()
             if not present:
                 return _run_detail_not_found()
-            if set(present) != set(expected) or any(
-                present[k] != v for k, v in expected.items()
-            ):
-                # A partial or kind-mismatched run is an incomplete
-                # row set: one fixed safe 503, never a half page.
+            if set(present) != set(expected):
+                # A partial run inventory: one fixed safe 503,
+                # never a half page.
                 return _run_detail_unavailable()
+            bundle_row = next(
+                (r for r in rows if r[0] == f"catalog/runs/{run_id}/catalog-refresh.json"),
+                None,
+            )
+            assert bundle_row is not None
+            bundle_captured_at = float(bundle_row[2])
+            # 224-y: the bounded copied apply-record read by the
+            # derived 96-bit prefix of the already-sanitized run_id
+            # (bound parameter; small bound + one over-bound probe).
+            app_rows = (
+                await session.execute(
+                    text(
+                        "SELECT run_id, mode, outcome, effective_at, "
+                        "created_at, operator_actor, db_actor, "
+                        "admin_user_id, created_providers, created_routes, "
+                        "created_pricing, created_fx, superseded_pricing, "
+                        "superseded_fx "
+                        "FROM public.catalog_refresh_applications "
+                        "WHERE run_id LIKE 'demo' || :prefix || '%' "
+                        "ORDER BY created_at NULLS LAST "
+                        "LIMIT :limit"
+                    ),
+                    {
+                        "prefix": run_id[len("demo-run-"):],
+                        "limit": _APPLY_RECORD_BOUND + 1,
+                    },
+                )
+            ).all()
     except Exception:
         # Driver, connection or statement failure: one fixed safe
         # refusal. Cancellation is a BaseException and is not
         # swallowed.
         return _run_detail_unavailable()
 
-    # No copied application record is read or rendered: without a
-    # verified run-id mapping (see the docstring) the page can only
-    # state the fixed explicit unavailable condition.
+    if len(app_rows) > _APPLY_RECORD_BOUND:
+        # The over-bound probe fired: corruption, never a list.
+        return _run_detail_unavailable()
+
+    prefix = run_id[len("demo-run-"):]
+    records: list[dict[str, object]] = []
+    full_ids: set[str] = set()
+    for r in app_rows:
+        (
+            row_run_id, mode, outcome, effective_at, created_at,
+            operator_actor, db_actor, admin_user_id,
+            created_providers, created_routes, created_pricing,
+            created_fx, superseded_pricing, superseded_fx,
+        ) = r
+        counts = (
+            created_providers, created_routes, created_pricing,
+            created_fx, superseded_pricing, superseded_fx,
+        )
+        if (
+            not isinstance(row_run_id, str)
+            or _S_MAPPED_TEXT.fullmatch(row_run_id) is None
+            or not row_run_id.startswith("demo" + prefix)
+            or not isinstance(mode, str) or mode not in _APPLY_MODE_VOCAB
+            or not isinstance(outcome, str) or outcome not in _APPLY_OUTCOME_VOCAB
+            or not isinstance(effective_at, datetime)
+            or not isinstance(created_at, datetime)
+            or not isinstance(operator_actor, str)
+            or _S_MAPPED_TEXT.fullmatch(operator_actor) is None
+            or not isinstance(db_actor, str)
+            or _S_MAPPED_TEXT.fullmatch(db_actor) is None
+            # admin_user_id is a NULLABLE column: CLI-applied records
+            # may carry no admin identity; None renders as n/a.
+            or (admin_user_id is not None
+                and not isinstance(admin_user_id, uuid.UUID))
+            or any(
+                isinstance(v, bool) or not isinstance(v, int) or v < 0
+                for v in counts
+            )
+        ):
+            # One malformed row poisons the join: fixed safe 503.
+            return _run_detail_unavailable()
+        full_ids.add(row_run_id)
+        records.append(
+            {
+                "run_id": row_run_id,
+                "mode": mode,
+                "outcome": outcome,
+                "effective_at": effective_at,
+                "created_at": created_at,
+                "operator_actor": operator_actor,
+                "db_actor": db_actor,
+                "admin_user_id": (
+                    str(admin_user_id) if admin_user_id is not None else None
+                ),
+                "created_providers": created_providers,
+                "created_routes": created_routes,
+                "created_pricing": created_pricing,
+                "created_fx": created_fx,
+                "superseded_pricing": superseded_pricing,
+                "superseded_fx": superseded_fx,
+            }
+        )
+    if len(full_ids) > 1:
+        # More than one distinct full remapped run id shares the
+        # 96-bit prefix: collision or corruption, never a display.
+        return _run_detail_unavailable()
+
+    try:
+        # bundle_captured_at was range-checked finite and
+        # representable; a conversion failure is still the fixed
+        # safe refusal, never a silently missing time.
+        file_captured_at = datetime.fromtimestamp(bundle_captured_at, tz=UTC)
+    except (OverflowError, OSError, ValueError):
+        return _run_detail_unavailable()
+
+    # 224-y output-alias law (whole page, fail closed): EVERY
+    # dynamic value the template will display - the path slug, the
+    # canonical datetime forms, the raw AND comma-grouped count
+    # forms, and then each record string - is checked with the same
+    # pure known-incoming-alias classifier. A match (or a classifier
+    # error) is the whole-page fixed safe refusal: simpler than
+    # partial formatting, and a known incoming cookie that is
+    # slug-shaped, date-shaped or numeric can never be echoed. The
+    # demo app's fixed neutral prefix tuple is used, never ambient
+    # settings.
+    try:
+        alias_prefixes = tuple(
+            request.app.state.settings.get_gateway_key_accepted_prefixes()
+        )
+        if not all(isinstance(x, str) for x in alias_prefixes):
+            return _run_detail_unavailable()
+    except Exception:
+        return _run_detail_unavailable()
+
+    def _is_alias(value: str) -> bool:
+        try:
+            return is_known_incoming_secret_alias(
+                value, scope=request.scope, accepted_prefixes=alias_prefixes
+            )
+        except Exception:
+            return True  # fail closed
+
+    dynamic_values: list[str] = [run_id, str(file_captured_at)]
+    for rec in records:
+        dynamic_values.append(str(rec["effective_at"]))
+        dynamic_values.append(str(rec["created_at"]))
+        for v in (
+            rec["created_providers"], rec["created_routes"],
+            rec["created_pricing"], rec["created_fx"],
+            rec["superseded_pricing"], rec["superseded_fx"],
+        ):
+            dynamic_values.append(str(v))
+            formatted = format_number(v)
+            if formatted is not None:
+                dynamic_values.append(str(formatted))
+    if any(_is_alias(v) for v in dynamic_values):
+        return _run_detail_unavailable()
+
+    demo_apply_records: list[dict[str, object]] | None = None
+    if records:
+        # A DISTINCT error sentinel: a classifier failure must be
+        # refused, and can never be confused with the legitimate
+        # NULL admin_user_id (which renders as n/a).
+        _show_error = object()
+
+        def _show(value: str | None):
+            if value is None:
+                return None
+            try:
+                if is_known_incoming_secret_alias(
+                    value, scope=request.scope, accepted_prefixes=alias_prefixes
+                ):
+                    return _ALIAS_WITHHELD
+            except Exception:
+                # A classifier failure cannot be proven safe: mark
+                # the fixed safe refusal, never a 500 or an echo.
+                return _show_error
+            return value
+
+        masked: list[dict[str, object]] = []
+        try:
+            for rec in records:
+                masked.append(
+                    {
+                        "run_id": _show(str(rec["run_id"])),
+                        "mode": _show(str(rec["mode"])),
+                        "outcome": _show(str(rec["outcome"])),
+                        "operator_actor": _show(str(rec["operator_actor"])),
+                        "db_actor": _show(str(rec["db_actor"])),
+                        "admin_user_id": _show(rec["admin_user_id"]),
+                        "effective_at": rec["effective_at"],
+                        "created_at": rec["created_at"],
+                        "created_providers": rec["created_providers"],
+                        "created_routes": rec["created_routes"],
+                        "created_pricing": rec["created_pricing"],
+                        "created_fx": rec["created_fx"],
+                        "superseded_pricing": rec["superseded_pricing"],
+                        "superseded_fx": rec["superseded_fx"],
+                    }
+                )
+        except Exception:
+            return _run_detail_unavailable()
+        for rec in masked:
+            for key in (
+                "run_id", "mode", "outcome", "operator_actor",
+                "db_actor", "admin_user_id",
+            ):
+                if rec[key] is _show_error:
+                    # A classifier failure on ANY displayed field
+                    # (including a non-null admin user): one fixed
+                    # safe refusal.
+                    return _run_detail_unavailable()
+        demo_apply_records = masked
+
     response = templates.TemplateResponse(
         request,
         "catalog_refresh/apply_result.html",
@@ -2015,6 +2265,8 @@ async def demo_catalog_apply_status(
             "apply_unconfirmed": True,
             "demo_admin": True,
             "demo_apply_run_id": run_id,
+            "demo_apply_records": demo_apply_records,
+            "demo_file_captured_at": file_captured_at,
         },
         status_code=200,
     )

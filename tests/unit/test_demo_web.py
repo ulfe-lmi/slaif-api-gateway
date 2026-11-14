@@ -511,8 +511,12 @@ def test_v1_absent_admin_gated_on_demo_app():
             r = await client.get("/admin")
             assert r.status_code == 303
             assert r.headers["location"] == "/fakeadmin/login"
-            # ...and unreviewed admin GETs stay default-denied.
-            assert (await client.get("/admin/openai-assisted")).status_code == 404
+            # 224-y: the three OpenAI-assisted read pages are now
+            # admitted (no session -> demo entry redirect); ANY query
+            # on them stays default-denied (the exact near-miss law is
+            # covered by test_y_openai_gate_admission_exact_shapes).
+            assert (await client.get("/admin/openai-assisted")).status_code == 303
+            assert (await client.get("/admin/openai-assisted?x=1")).status_code == 404
             # 224-f: the new DB-backed families are admitted too
             # (no session -> demo entry redirect); 224-i admits the
             # routes list/detail and the core form GETs as well.
@@ -9613,7 +9617,7 @@ def test_x_route_completion_alias_withheld(monkeypatch):
 X_UPLOAD_NAME = "bundle-" + "ab" * 16
 X_PRESET = "openrouter-chat-text"
 X_PKG_NAME = "package-manifest.json"
-X_APPLY_BOUND = 100  # the handler's copied apply-record bound
+X_APPLY_BOUND = dac._APPLY_RECORD_BOUND  # the handler's copied apply-record bound (224-y)
 
 
 class _XFakeSession:
@@ -9654,7 +9658,16 @@ class _XFakeSession:
         if text.lstrip().startswith("SELECT body"):
             rows = [(b,) for b in self.body_rows]
         elif "catalog_refresh_applications" in text:
-            rows = list(self.app_rows)
+            # Emulate the DB-side LIKE 'demo' || :prefix || '%'
+            # filter: only rows whose run_id matches the bound
+            # prefix are returned.
+            want = "demo" + str(params.get("prefix") or "")
+            rows = [
+                r
+                for r in self.app_rows
+                if isinstance(r, (tuple, list)) and len(r) >= 1
+                and isinstance(r[0], str) and r[0].startswith(want)
+            ]
         elif "FROM demo_display.leaves" in text and "octet_length" in text:
             rows = list(self.leaf_meta)
         elif "FROM demo_display.leaves" in text:
@@ -9669,6 +9682,11 @@ def _x_catalog_app(monkeypatch, session):
     fake.worker_target_db = COPY_OK
     _preflight_case(monkeypatch, COPY_OK, "on")
     _patch_sessionmaker(monkeypatch, session)
+    # The 224-y OpenAI adapter has its OWN module-level seam (same
+    # request-local copy session; restored by the fixture).
+    monkeypatch.setattr(
+        _y_dao, "get_sessionmaker_from_app", lambda _req: lambda: session
+    )
     return _app(fake), fake
 
 
@@ -9968,6 +9986,54 @@ def test_x_job_package_positive(monkeypatch):
     assert session.executed[0][1] == {"name": logical}
 
 
+    asyncio.run(run())
+    assert all("catalog_refresh_applications" not in t for t, _ in session.executed)
+
+
+def _x_inventory(run_id: str = RD_RUN_ID):
+    """The closed seven-file run inventory as
+    (logical_name, kind, captured_at)."""
+    return [
+        (full, kind, cap)
+        for full, kind, _size, _sha, cap, _actual in _rd_inventory(run_id)
+    ]
+
+
+def _x_apply_row(**over):
+    """One shape-VALID copied application-record row as the 224-y
+    handler's 14-tuple (no bundle/plan/receipt-HMAC identities).
+    The default run_id shares NO 96-bit prefix with the default
+    RD_RUN_ID slug (the no-match case)."""
+    row = dict(
+        run_id="demo" + "a1" * 30,
+        mode="refresh",
+        outcome="committed",
+        effective_at=datetime(2025, 6, 15, 15, 6, 40, tzinfo=timezone.utc),
+        created_at=datetime(2025, 6, 15, 15, 7, 0, tzinfo=timezone.utc),
+        operator_actor="demo" + "b2" * 30,
+        db_actor="demo" + "c3" * 30,
+        admin_user_id=uuid.UUID("11111111-1111-4111-8111-111111111111"),
+        created_providers=1,
+        created_routes=2,
+        created_pricing=3,
+        created_fx=4,
+        superseded_pricing=5,
+        superseded_fx=6,
+    )
+    row.update(over)
+    return (
+        row["run_id"], row["mode"], row["outcome"], row["effective_at"],
+        row["created_at"], row["operator_actor"], row["db_actor"],
+        row["admin_user_id"], row["created_providers"],
+        row["created_routes"], row["created_pricing"], row["created_fx"],
+        row["superseded_pricing"], row["superseded_fx"],
+    )
+
+
+def _x_apply_queries(session):
+    return [p for t, p in session.executed if "catalog_refresh_applications" in t]
+
+
 def test_x_apply_status_missing_run_404(monkeypatch):
     # No seven-file run inventory in THIS copy -> fixed 404, and the
     # copied apply-record table is never read.
@@ -9986,50 +10052,12 @@ def test_x_apply_status_missing_run_404(monkeypatch):
     assert all("catalog_refresh_applications" not in t for t, _ in session.executed)
 
 
-def _x_inventory(run_id: str = RD_RUN_ID):
-    """The closed seven-file run inventory as (logical_name, kind)."""
-    return [(full, kind) for full, kind, *_ in _rd_inventory(run_id)]
-
-
-def _x_apply_row(**over):
-    row = dict(
-        run_id="demo" + "a1" * 30,
-        bundle_sha256="demo" + "b2" * 30,
-        plan_sha256="demo" + "c3" * 30,
-        receipt_hmac_sha256="demo" + "d4" * 30,
-        mode="refresh",
-        operator_actor="demo-operator",
-        db_actor="demo-db",
-        admin_user_id="demo-admin-1",
-        reason="neutralized",
-        effective_at=datetime(2025, 6, 15, 15, 6, 40, tzinfo=timezone.utc),
-        created_providers=1,
-        created_routes=2,
-        created_pricing=3,
-        created_fx=4,
-        superseded_pricing=5,
-        superseded_fx=6,
-        outcome="committed",
-        created_at=datetime(2025, 6, 15, 15, 7, 0, tzinfo=timezone.utc),
-    )
-    row.update(over)
-    return (
-        row["run_id"], row["bundle_sha256"], row["plan_sha256"],
-        row["receipt_hmac_sha256"], row["mode"], row["operator_actor"],
-        row["db_actor"], row["admin_user_id"], row["reason"],
-        row["effective_at"], row["created_providers"],
-        row["created_routes"], row["created_pricing"],
-        row["created_fx"], row["superseded_pricing"],
-        row["superseded_fx"], row["outcome"], row["created_at"],
-    )
-
-
 def test_x_apply_status_partial_run_503(monkeypatch):
     # Six of the seven files (and a kind-mismatched set) are an
     # incomplete row set: one fixed safe 503, never a half page.
     async def run():
         for inv in (_x_inventory()[:-1],
-                    [(n, "wrong_kind") for n, _k in _x_inventory()]):
+                    [(n, "wrong_kind", 1750000000.0) for n, _k, _c in _x_inventory()]):
             session = _XFakeSession([], [], inv, [_x_apply_row()], COPY_OK, "on")
             app, fake = _x_catalog_app(monkeypatch, session)
             async with _client(app) as client:
@@ -10044,10 +10072,12 @@ def test_x_apply_status_partial_run_503(monkeypatch):
 
 
 def test_x_apply_status_run_present_unavailable(monkeypatch):
-    # The run exists in THIS copy (closed seven-file inventory) ->
-    # the FIXED explicit "status unavailable for this run in this
-    # copy" page with ZERO records; the copied applications table
-    # is NOT read at all (no verified run-id mapping exists).
+    # 224-y: the run exists in THIS copy (closed seven-file
+    # inventory); the one shape-valid row does NOT share the
+    # slug's 96-bit prefix -> NO MATCH -> the UNKNOWN/UNAVAILABLE
+    # page with zero records (never "not applied" / "rolled back").
+    # The copied applications table IS now read, but ONLY through
+    # the bounded parameterized prefix query.
     session = _XFakeSession([], [], _x_inventory(), [_x_apply_row()], COPY_OK, "on")
     app, fake = _x_catalog_app(monkeypatch, session)
 
@@ -10062,12 +10092,13 @@ def test_x_apply_status_run_present_unavailable(monkeypatch):
             norm = _re.sub(r"\s+", " ", r.text)
             assert "Status at snapshot time" in norm
             assert "NOT live authoritative source status" in norm
-            assert "Apply status is unavailable for this run in this copy." in norm
-            assert "no copied record can be verified as this run's status" in norm
-            assert "not a statement that the run was never applied" in norm
+            assert "unknown (unavailable) for this run in this copy" in norm
+            assert "no copied committed application record matches" in norm
+            assert "NOT a statement that the run was never applied" in norm
+            assert "rolled back" in norm
             # zero records: no record header, no copied value.
-            assert "Record 1" not in r.text
-            assert "demo-operator" not in r.text
+            assert "Committed record" not in r.text
+            assert "demo" + "b2" * 30 not in r.text
             # the visible operational control is a labeled no-op...
             assert "Check status (demo no-op" in r.text
             # ...and its form is a GET re-read (no write method).
@@ -10078,22 +10109,21 @@ def test_x_apply_status_run_present_unavailable(monkeypatch):
             assert COPY_OK not in r.text
 
     asyncio.run(run())
-    # The copied applications table is never read at all.
-    assert all("catalog_refresh_applications" not in t for t, _ in session.executed)
+    # The bounded parameterized prefix query (and ONLY it) read the
+    # copied applications table.
+    queries = _x_apply_queries(session)
+    assert len(queries) == 1
+    assert queries[0]["prefix"] == RD_RUN_ID[len("demo-run-"):]
+    assert queries[0]["limit"] == X_APPLY_BOUND + 1
 
 
 def test_x_apply_status_rows_never_rendered(monkeypatch):
-    # Even with application rows present in the copy - valid,
-    # tampered, and an alias-canary row among 101+ rows - NO
-    # verified run-id mapping exists, so none is rendered as this
-    # run's status and no row value (including the incoming
-    # credential alias) is ever echoed.
+    # 224-y: even with shape-valid application rows present in the
+    # copy, NONE shares the slug's 96-bit prefix, so none is
+    # rendered as this run's status (unknown page, zero records)
+    # and the incoming-alias canary value is never echoed.
     canary = "demo" + "e5" * 30
-    rows = (
-        [_x_apply_row()] * X_APPLY_BOUND
-        + [_x_apply_row(operator_actor=canary)]
-        + [_x_apply_row(mode="delete"), _x_apply_row(outcome="rolled_back")]
-    )
+    rows = [_x_apply_row(), _x_apply_row(operator_actor=canary)]
     session = _XFakeSession([], [], _x_inventory(), rows, COPY_OK, "on")
     app, fake = _x_catalog_app(monkeypatch, session)
 
@@ -10106,13 +10136,548 @@ def test_x_apply_status_rows_never_rendered(monkeypatch):
             import re as _re
 
             norm = _re.sub(r"\s+", " ", r.text)
-            assert "Apply status is unavailable for this run in this copy." in norm
-            assert "Record 1" not in r.text
-            assert "demo-operator" not in r.text
-            assert "1 / 2 / 3 / 4" not in norm
+            assert "unknown (unavailable) for this run in this copy" in norm
+            assert "Committed record" not in r.text
+            assert "demo" + "b2" * 30 not in r.text
             assert canary not in r.text
-            assert "rolled_back" not in r.text
 
     asyncio.run(run())
-    # No copied application row was ever read.
-    assert all("catalog_refresh_applications" not in t for t, _ in session.executed)
+    # Only the bounded prefix query touched the copied table.
+    queries = _x_apply_queries(session)
+    assert len(queries) == 1
+    assert queries[0]["limit"] == X_APPLY_BOUND + 1
+
+
+# --- 224-y: shared captured-run identity + positive historical status ---
+
+import re as _y_re  # noqa: E402
+import slaif_gateway.services.demo_snapshot_sanitize as _y_dss  # noqa: E402
+import slaif_gateway.api.demo_admin_openai as _y_dao  # noqa: E402
+
+
+def test_y_demo_run_id_mapping_law():
+    # The display slug is the first 24 hex of the EXISTING
+    # remap_str_id output (same keyed b"s" digest domain as the
+    # copied DB run_id): deterministic, per-copy unlinkable, and the
+    # 96-bit slug prefix joins the sanitized value.
+    seed = b"y-mapping-seed"
+    raw = "y-run-0001"
+    slug = dac.dsf._demo_run_id(seed, raw)
+    db = _y_dss.remap_str_id(seed, raw)
+    assert _y_re.fullmatch(r"demo-run-[0-9a-f]{24}", slug)
+    assert slug[9:] == db[4:28]
+    assert db.startswith("demo" + slug[9:])
+    assert dac.dsf._demo_run_id(seed, raw) == slug
+    assert dac.dsf._demo_run_id(b"other-seed", raw) != slug
+    assert dac.dsf._demo_run_id(seed, "y-run-0002") != slug
+
+
+def _y_slug_pair(hex24: str) -> tuple[str, str]:
+    """(display slug, matching sanitized run_id) sharing hex24."""
+    return "demo-run-" + hex24, "demo" + hex24 + ("f" * (60 - len(hex24)))
+
+
+def test_y_apply_status_positive_unique_record(monkeypatch):
+    # ONE shape-valid row shares the slug's 96-bit prefix -> the
+    # typed committed record with real copied counts/times, honest
+    # labels, the file capture time, and NO bundle/plan/receipt-HMAC
+    # identities.
+    slug, row_run = _y_slug_pair("f1" * 12)
+    row = _x_apply_row(run_id=row_run)
+    session = _XFakeSession([], [], _x_inventory(slug), [row], COPY_OK, "on")
+    app, fake = _x_catalog_app(monkeypatch, session)
+
+    async def run():
+        async with _client(app) as client:
+            await _verified_session_client(fake, client)
+            r = await client.get(f"/admin/operations/catalog/runs/{slug}/apply-status")
+        assert r.status_code == 200
+        assert r.headers.get("cache-control") == "private, no-store"
+        assert "Committed record 1" in r.text
+        assert row_run in r.text  # the sanitized run id is displayed
+        assert "demo" + "b2" * 30 in r.text  # operator actor
+        assert "2025-06-15 15:06:40" in r.text  # effective_at (record event time)
+        assert "2025-06-15 15:07:00" in r.text  # created_at
+        assert "record event time" in r.text
+        assert "as stored at DB snapshot time" in r.text
+        assert "DB snapshot timestamp itself is not displayed" in r.text
+        assert "File capture time (worker snapshot)" in r.text
+        assert "providers 1" in r.text and "fx 6" in r.text
+        # seal/HMAC receipt identities are never presented.
+        assert "Bundle (sanitized)" not in r.text
+        assert "Plan (sanitized)" not in r.text
+        assert "Receipt HMAC" not in r.text
+
+    asyncio.run(run())
+    queries = _x_apply_queries(session)
+    assert len(queries) == 1
+    assert queries[0]["prefix"] == "f1" * 12
+    assert queries[0]["limit"] == X_APPLY_BOUND + 1
+
+
+def test_y_apply_status_null_admin_renders_na(monkeypatch):
+    # admin_user_id is a NULLABLE column: a legitimate CLI-applied
+    # record without an admin identity renders n/a, not 503.
+    slug, row_run = _y_slug_pair("f2" * 12)
+    row = _x_apply_row(run_id=row_run, admin_user_id=None)
+    session = _XFakeSession([], [], _x_inventory(slug), [row], COPY_OK, "on")
+    app, fake = _x_catalog_app(monkeypatch, session)
+
+    async def run():
+        async with _client(app) as client:
+            await _verified_session_client(fake, client)
+            r = await client.get(f"/admin/operations/catalog/runs/{slug}/apply-status")
+        assert r.status_code == 200
+        assert "Committed record 1" in r.text
+        import re as _re
+
+        m = _re.search(r"Admin user \(sanitized\)</dt><dd><code>(.*?)</code>", r.text)
+        assert m is not None
+        assert m.group(1) == "n/a"
+
+    asyncio.run(run())
+
+
+def test_y_apply_status_ambiguous_prefix_503(monkeypatch):
+    # Two DISTINCT full remapped run ids sharing the 96-bit prefix
+    # (collision or corruption) -> fixed safe 503.
+    slug = "demo-run-" + "f3" * 12
+    rows = [
+        _x_apply_row(run_id="demo" + "f3" * 30),
+        _x_apply_row(run_id="demo" + "f3" * 12 + "ff" * 18),
+    ]
+    session = _XFakeSession([], [], _x_inventory(slug), rows, COPY_OK, "on")
+    app, fake = _x_catalog_app(monkeypatch, session)
+
+    async def run():
+        async with _client(app) as client:
+            await _verified_session_client(fake, client)
+            r = await client.get(f"/admin/operations/catalog/runs/{slug}/apply-status")
+            assert r.status_code == 503
+            assert "Committed record" not in r.text
+
+    asyncio.run(run())
+
+
+def test_y_apply_status_overbound_503(monkeypatch):
+    # The over-bound probe fired (more than the small bound) ->
+    # fixed safe 503, never a list.
+    slug, row_run = _y_slug_pair("f4" * 12)
+    rows = [_x_apply_row(run_id=row_run)] * X_APPLY_BOUND
+    rows.append(_x_apply_row(run_id=row_run, operator_actor="demo" + "d9" * 30))
+    session = _XFakeSession([], [], _x_inventory(slug), rows, COPY_OK, "on")
+    app, fake = _x_catalog_app(monkeypatch, session)
+
+    async def run():
+        async with _client(app) as client:
+            await _verified_session_client(fake, client)
+            r = await client.get(f"/admin/operations/catalog/runs/{slug}/apply-status")
+            assert r.status_code == 503
+
+    asyncio.run(run())
+
+
+def test_y_apply_status_malformed_row_503(monkeypatch):
+    # Any malformed row (bad vocabulary, non-S-mapped actor,
+    # truncated run_id matching the LIKE, negative count) -> fixed
+    # safe 503.
+    slug, row_run = _y_slug_pair("f5" * 12)
+    cases = (
+        dict(mode="delete"),
+        dict(outcome="rolled_back"),
+        dict(operator_actor="oops"),
+        dict(db_actor="demo" + "f5" * 12),  # truncated S-mapped shape
+        dict(run_id="demo" + "f5" * 12),  # LIKE-matching, bad shape
+        dict(created_providers=-1),
+        dict(superseded_fx=True),  # bool is not an int count
+    )
+    for over in cases:
+        row_over = dict(run_id=row_run)
+        row_over.update(over)
+        session = _XFakeSession([], [], _x_inventory(slug), [_x_apply_row(**row_over)], COPY_OK, "on")
+        app, fake = _x_catalog_app(monkeypatch, session)
+
+        async def run(over=over):
+            async with _client(app) as client:
+                await _verified_session_client(fake, client)
+                r = await client.get(f"/admin/operations/catalog/runs/{slug}/apply-status")
+                assert r.status_code == 503, over
+                assert "Committed record" not in r.text
+
+        asyncio.run(run())
+
+
+def test_y_apply_status_alias_withheld(monkeypatch):
+    # A displayed record string EQUAL to a known incoming cookie is
+    # withheld; the rest of the page renders.
+    slug, row_run = _y_slug_pair("f6" * 12)
+    actor = "demo" + "ab" * 30
+    row = _x_apply_row(run_id=row_run, operator_actor=actor)
+    session = _XFakeSession([], [], _x_inventory(slug), [row], COPY_OK, "on")
+    app, fake = _x_catalog_app(monkeypatch, session)
+
+    async def run():
+        async with _client(app) as client:
+            await _verified_session_client(fake, client)
+            client.cookies.set("x-canary", actor)
+            r = await client.get(f"/admin/operations/catalog/runs/{slug}/apply-status")
+            assert r.status_code == 200
+            assert "Committed record 1" in r.text
+            assert actor not in r.text
+            assert dac._ALIAS_WITHHELD in r.text
+
+    asyncio.run(run())
+
+
+def test_y_apply_status_path_slug_cookie_canary_503(monkeypatch):
+    # The path SLUG itself is a dynamic displayed value: a known
+    # incoming cookie equal to it is the whole-page fixed safe
+    # refusal (never an echo).
+    slug, row_run = _y_slug_pair("f7" * 12)
+    session = _XFakeSession([], [], _x_inventory(slug), [_x_apply_row(run_id=row_run)], COPY_OK, "on")
+    app, fake = _x_catalog_app(monkeypatch, session)
+
+    async def run():
+        async with _client(app) as client:
+            await _verified_session_client(fake, client)
+            client.cookies.set("x-canary", slug)
+            r = await client.get(f"/admin/operations/catalog/runs/{slug}/apply-status")
+            assert r.status_code == 503
+            assert slug not in r.text
+
+    asyncio.run(run())
+
+
+def test_y_apply_status_datetime_cookie_canary_503(monkeypatch):
+    # A known incoming cookie shaped like the canonical datetime
+    # display form (the copied effective_at) is the whole-page
+    # fixed safe refusal.
+    slug, row_run = _y_slug_pair("f8" * 12)
+    eff = datetime(2025, 6, 15, 15, 6, 40, tzinfo=timezone.utc)
+    row = _x_apply_row(run_id=row_run, effective_at=eff)
+    session = _XFakeSession([], [], _x_inventory(slug), [row], COPY_OK, "on")
+    app, fake = _x_catalog_app(monkeypatch, session)
+
+    async def run():
+        async with _client(app) as client:
+            await _verified_session_client(fake, client)
+            # Raw per-request header: the canonical datetime form
+            # contains a space, which a cookie jar might re-encode.
+            cookie = "; ".join(f"{k}={v}" for k, v in client.cookies.items())
+            r = await client.get(
+                f"/admin/operations/catalog/runs/{slug}/apply-status",
+                headers={"cookie": f"{cookie}; x-canary={eff}"},
+            )
+            assert r.status_code == 503
+            assert "Committed record" not in r.text
+
+    asyncio.run(run())
+
+
+def test_y_apply_status_numeric_count_cookie_canary_503(monkeypatch):
+    # A known incoming cookie equal to a copied count (raw or
+    # comma-grouped display form) is the whole-page fixed safe
+    # refusal.
+    slug, row_run = _y_slug_pair("f9" * 12)
+    row = _x_apply_row(run_id=row_run, created_providers=1000)
+    session = _XFakeSession([], [], _x_inventory(slug), [row], COPY_OK, "on")
+    app, fake = _x_catalog_app(monkeypatch, session)
+
+    async def run():
+        async with _client(app) as client:
+            await _verified_session_client(fake, client)
+            client.cookies.set("x-canary", "1,000")
+            r = await client.get(f"/admin/operations/catalog/runs/{slug}/apply-status")
+            assert r.status_code == 503
+            assert "Committed record" not in r.text
+
+    asyncio.run(run())
+
+
+def test_y_apply_status_classifier_error_non_null_admin_503(monkeypatch):
+    # A classifier failure on a NON-NULL admin user is the fixed
+    # safe refusal - never an indistinguishable n/a or a 500.
+    slug, row_run = _y_slug_pair("fa" * 12)
+    admin = uuid.uuid4()
+    row = _x_apply_row(run_id=row_run, admin_user_id=admin)
+    session = _XFakeSession([], [], _x_inventory(slug), [row], COPY_OK, "on")
+    app, fake = _x_catalog_app(monkeypatch, session)
+
+    def _raising(value, **kw):
+        if isinstance(value, str) and len(value) == 36 and value.count("-") == 4:
+            raise RuntimeError("classifier boom")
+        return False
+
+    monkeypatch.setattr(dac, "is_known_incoming_secret_alias", _raising)
+
+    async def run():
+        async with _client(app) as client:
+            await _verified_session_client(fake, client)
+            r = await client.get(f"/admin/operations/catalog/runs/{slug}/apply-status")
+            assert r.status_code == 503
+            assert "Committed record" not in r.text
+            assert str(admin) not in r.text
+
+    asyncio.run(run())
+
+
+def test_y_apply_status_bad_captured_at_503(monkeypatch):
+    # A nonfinite / unrepresentable leaf capture time is the fixed
+    # safe refusal, never a 200 with a silently missing time.
+    for cap in (float("inf"), -1.0, 2**63):
+        slug, _row_run = _y_slug_pair("fb" * 12)
+        inv = [(n, k, cap) for n, k, _c in _x_inventory(slug)]
+        session = _XFakeSession([], [], inv, [], COPY_OK, "on")
+        app, fake = _x_catalog_app(monkeypatch, session)
+
+        async def run(cap=cap):
+            async with _client(app) as client:
+                await _verified_session_client(fake, client)
+                r = await client.get(f"/admin/operations/catalog/runs/{slug}/apply-status")
+                assert r.status_code == 503, cap
+
+        asyncio.run(run())
+
+
+# --- 224-y: the three OpenAI-assisted read pages ---
+
+OA_INDEX = "/admin/openai-assisted"
+OA_PRICING = "/admin/openai-assisted/pricing"
+OA_ROUTES = "/admin/openai-assisted/routes"
+
+
+def test_y_openai_gate_admission_exact_shapes():
+    async def run():
+        app = _app(FakeFacade())
+        async with _client(app) as client:
+            # The three exact query-free shapes are ADMITTED (no
+            # session -> the entry redirect, same law as the other
+            # read pages)...
+            for p in (OA_INDEX, OA_PRICING, OA_ROUTES):
+                r = await client.get(p)
+                assert r.status_code == 303, p
+                assert r.headers["location"] == "/fakeadmin/login"
+            # ...ANY query is refused on every shape...
+            for p in (OA_INDEX, OA_PRICING, OA_ROUTES):
+                r = await client.get(p + "?x=1")
+                assert r.status_code == 404, p
+            # ...and every near miss / subpath / alternate-slash /
+            # case variant stays default-denied 404.
+            for p in (
+                OA_INDEX + "/",
+                OA_PRICING + "/",
+                OA_ROUTES + "/",
+                "/admin/openai-assisted/pricing/propose",
+                "/admin/openai-assisted/routes/propose",
+                "/admin/openai-assisted/models",
+                "/admin/openai-assisted/pricing/extra",
+                "/admin/openai-assistedX",
+                "/admin/openai-Assisted",
+            ):
+                r = await client.get(p)
+                assert r.status_code == 404, p
+
+    asyncio.run(run())
+
+
+def test_y_openai_unsafe_methods_quiet_noop_body_not_parsed(monkeypatch):
+    # Every proposal POST and every unsafe method is the pre-body
+    # quiet 204 cut: no handler dispatch, no provider call, no copy
+    # statement.
+    session = _XFakeSession([], [], [], [], COPY_OK, "on")
+    app, fake = _x_catalog_app(monkeypatch, session)
+
+    async def run():
+        async with _client(app) as client:
+            await _verified_session_client(fake, client)
+            for method, p in (
+                ("POST", "/admin/openai-assisted/pricing/propose"),
+                ("POST", "/admin/openai-assisted/routes/propose"),
+                ("PUT", OA_INDEX),
+                ("PATCH", OA_PRICING),
+                ("DELETE", OA_ROUTES),
+            ):
+                r = await client.request(
+                    method,
+                    p,
+                    content=b"x" * 200_000,
+                    headers={"content-type": "text/garbage"},
+                )
+                assert r.status_code == 204, (method, p)
+                assert r.content == b""
+        async with _client(app) as anon:
+            r = await anon.post(
+                "/admin/openai-assisted/pricing/propose",
+                content=b"y" * 200_000,
+            )
+            assert r.status_code == 404
+
+    asyncio.run(run())
+    # The cut precedes routing: no copy statement was executed.
+    assert session.executed == []
+
+
+def test_y_openai_index_positive(monkeypatch):
+    session = _XFakeSession([], [], [], [], COPY_OK, "on")
+    app, fake = _x_catalog_app(monkeypatch, session)
+
+    async def run():
+        async with _client(app) as client:
+            await _verified_session_client(fake, client)
+            r = await client.get(OA_INDEX)
+        assert r.status_code == 200
+        assert r.headers.get("cache-control") == "private, no-store"
+        import re as _re
+
+        norm = _re.sub(r"\s+", " ", r.text)
+        assert "Frozen demo display" in norm
+        assert "PACKAGED REFERENCE" in norm
+        assert "the source proposal-model setting was not captured" in norm
+        # The fixed official public source URL constants.
+        assert "https://platform.openai.com/docs/pricing" in norm
+        assert "https://platform.openai.com/docs/models/compare" in norm
+        # Working navigation to the demo forms.
+        assert f'href="{OA_PRICING}"' in r.text
+        assert f'href="{OA_ROUTES}"' in r.text
+        # No live-call / discovery-key-in-use claim.
+        assert "This calls OpenAI" not in r.text
+        assert "Admin discovery uses" not in r.text
+        assert "OPENAI_ADMIN_DISCOVERY_API_KEY" not in r.text
+        assert "no OpenAI call" in norm
+
+    asyncio.run(run())
+    # The index performs NO copy read.
+    assert session.executed == []
+
+
+class _YChoiceSession(_XFakeSession):
+    """One fake copy session that ALSO answers the bounded
+    load_choices queries: the pricing page requests the model kind
+    (5 source statements), the currency kind (3) and the model kind
+    again (5); ``choice_rows`` is the ordered list of row lists."""
+
+    def __init__(self, choice_rows, **kw):
+        super().__init__(**kw)
+        self.choice_rows = list(choice_rows)
+        self.choice_index = 0
+
+    async def execute(self, stmt, params=None):
+        text = str(stmt)
+        if (
+            text.lstrip().startswith("SELECT body")
+            or "catalog_refresh_applications" in text
+            or "FROM demo_display.leaves" in text
+        ):
+            return await super().execute(stmt, params)
+        if self.choice_rows:
+            rows = self.choice_rows[self.choice_index]
+            self.choice_index += 1
+            return _ArtifactResult(rows)
+        return await super().execute(stmt, params)
+
+
+def _y_pricing_choice_rows():
+    # 13 ordered row lists: model kind x5, currency kind x3,
+    # model kind x5 (the closed statement order of load_choices).
+    return [
+        [("copied-model-a", None), ("copied-model-b", None)],
+        [],
+        [],
+        [],
+        [],
+        [("USD", None), ("EUR", None)],
+        [],
+        [],
+        [("copied-model-a", None)],
+        [],
+        [],
+        [],
+        [],
+    ]
+
+
+def test_y_openai_pricing_choices_copy_backed(monkeypatch):
+    session = _YChoiceSession(_y_pricing_choice_rows(), leaf_meta=[], body_rows=[], inventory_rows=[], app_rows=[], db=COPY_OK, ro="on")
+    app, fake = _x_catalog_app(monkeypatch, session)
+
+    async def run():
+        async with _client(app) as client:
+            await _verified_session_client(fake, client)
+            r = await client.get(OA_PRICING)
+        assert r.status_code == 200
+        assert "Frozen demo display" in r.text
+        # Copied model + currency choices are rendered...
+        assert "copied-model-a" in r.text
+        assert "copied-model-b" in r.text
+        assert "EUR" in r.text
+        # ...with the packaged reference default selected.
+        assert 'value="gpt-5.5"' in r.text
+        # Honest no-op wording, no live-call claim.
+        assert "quiet server no-op" in r.text
+        assert "This calls OpenAI" not in r.text
+        assert "Generation can take up to the configured HTTP timeout" not in r.text
+        assert "This uses OPENAI_ADMIN_DISCOVERY_API_KEY" not in r.text
+
+    asyncio.run(run())
+
+
+def test_y_openai_routes_choices_copy_backed(monkeypatch):
+    session = _YChoiceSession(
+        [
+            [("routed-model-1", None)], [], [], [], [],
+            [("routed-model-1", None)], [], [], [], [],
+        ],
+        leaf_meta=[], body_rows=[], inventory_rows=[], app_rows=[], db=COPY_OK, ro="on",
+    )
+    app, fake = _x_catalog_app(monkeypatch, session)
+
+    async def run():
+        async with _client(app) as client:
+            await _verified_session_client(fake, client)
+            r = await client.get(OA_ROUTES)
+        assert r.status_code == 200
+        assert "Frozen demo display" in r.text
+        assert "routed-model-1" in r.text
+        assert "quiet server no-op" in r.text
+        assert "This calls OpenAI" not in r.text
+
+    asyncio.run(run())
+
+
+def test_y_openai_choices_alias_withheld(monkeypatch):
+    # A copied model identity equal to a known incoming cookie is
+    # withheld from the choices entirely.
+    canary = "canary-model-token-224y"
+    rows = _y_pricing_choice_rows()
+    rows[0] = [("copied-model-a", None), (canary, None)]
+    session = _YChoiceSession(rows, leaf_meta=[], body_rows=[], inventory_rows=[], app_rows=[], db=COPY_OK, ro="on")
+    app, fake = _x_catalog_app(monkeypatch, session)
+
+    async def run():
+        async with _client(app) as client:
+            await _verified_session_client(fake, client)
+            client.cookies.set("x-canary", canary)
+            r = await client.get(OA_PRICING)
+        assert r.status_code == 200
+        assert "copied-model-a" in r.text
+        assert canary not in r.text
+
+    asyncio.run(run())
+
+
+def test_y_openai_copy_failure_503(monkeypatch):
+    # A failed copy query (wrong database binding) is the fixed safe
+    # 503 - never an ambient read, never an empty-page success.
+    session = _XFakeSession([], [], [], [], "other_db", "on")
+    app, fake = _x_catalog_app(monkeypatch, session)
+
+    async def run():
+        async with _client(app) as client:
+            await _verified_session_client(fake, client)
+            for p in (OA_PRICING, OA_ROUTES):
+                r = await client.get(p)
+                assert r.status_code == 503, p
+                assert "unavailable" in r.text
+                assert r.headers.get("cache-control") == "private, no-store"
+
+    asyncio.run(run())
