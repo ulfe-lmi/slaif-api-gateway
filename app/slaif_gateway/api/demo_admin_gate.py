@@ -80,8 +80,11 @@ from slaif_gateway.services.admin_session_service import AdminSessionContext
 # reads on GET); 224-j adds the fixed reporting, accounting
 # candidate/review entry, administrator-account read and key-batch
 # entry GETs (frozen copied rows; request-time calculations carry a
-# demo-only hint). Everything else - operations, catalog,
-# compatibility, OpenAI-assisted, replay maintenance, key clone,
+# demo-only hint); 224-t adds the two exact static operations read
+# pages (the operations index and the captured worker-observed
+# process-configuration page). Everything else - the remaining
+# operations pages (diagnostics, compatibility, replay-maintenance),
+# catalog (beyond the admitted set), OpenAI-assisted, key clone,
 # exports and /admin/branding - stays default-denied.
 
 ADMITTED_DASHBOARD_PATHS = ("/admin", "/admin/")
@@ -188,6 +191,13 @@ ADMITTED_CATALOG_COLLECT_PATH = "/admin/operations/catalog/collect"
 ADMITTED_CATALOG_REVIEW_PATH = "/admin/operations/catalog/review"
 ADMITTED_CATALOG_EXPORT_PATH = "/admin/operations/catalog/export-baseline"
 ADMITTED_CATALOG_JOBS_PATH = "/admin/operations/catalog/jobs/"
+# 224-t: the two exact static demo operations read pages. The index
+# REQUIRES its trailing slash; process-configuration takes NONE.
+# Both define NO query parameters (any query stays 404); every other
+# operations shape (diagnostics, compatibility, replay-maintenance,
+# subpaths) stays default-denied for later suffixes.
+ADMITTED_OPERATIONS_INDEX_PATH = "/admin/operations/"
+ADMITTED_OPERATIONS_PROCESS_CONFIG_PATH = "/admin/operations/process-configuration"
 # 224-q: the three exact key read-page GET shapes (canonical
 # lowercase dashed UUID + exact suffix, no extra path components):
 # calibration, clone and clone/receipts. Malformed/uppercase/
@@ -376,6 +386,14 @@ def _is_admitted_path_with_query(path: str, query_string: bytes) -> bool:
         or path == ADMITTED_CATALOG_JOBS_PATH
     ):
         return True
+    if path in (
+        ADMITTED_OPERATIONS_INDEX_PATH,
+        ADMITTED_OPERATIONS_PROCESS_CONFIG_PATH,
+    ):
+        # 224-t: the two static operations read pages define NO query
+        # parameters at all; ANY query is refused (before session
+        # resolution or routing), like the 224-p form pages.
+        return not query_string
     if _KEY_READ_PAGE_RE.fullmatch(path) is not None:
         # 224-q: exact shape admitted only under the bounded query
         # law (the receipts page's single optional `operation`).

@@ -2889,3 +2889,96 @@ exposed - only per-copy remapped values.
   left the source renders the honest empty chooser state and carries
   exactly the one canary key (copy isolation - copy B does not see
   copy A's receipt or flow keys).
+
+## Operations index and captured process configuration (objective 224-t)
+
+The demo host admits two more exact GETs, after the same
+session/account/copy checks:
+
+* `GET /admin/operations/` - the static Operations index (REQUIRED
+  trailing slash), rendered with a narrow demo branch: it describes
+  the FROZEN copied data of this session, links only the read pages
+  this demo host already admits, and visibly marks the
+  not-yet-admitted operations read pages (request diagnostics, Codex
+  compatibility, replay maintenance, SMTP test) as
+  "unavailable in this demo" (no usability is implied; later
+  suffixes restore them);
+* `GET /admin/operations/process-configuration` - the captured
+  worker-observed process-configuration page (NO trailing slash).
+
+Every near miss, alternate slash shape, subpath and unknown query
+stays default-denied (fixed 404); both pages define NO query
+parameters at all, and every unsafe method on both paths remains the
+unchanged pre-body quiet 204 cut. Diagnostics, compatibility,
+replay-maintenance, branding, downloads and actions remain
+default-denied for later suffixes.
+
+### Capture source and timing (worker-owned, at copy time)
+
+The 223 worker-owned, per-login verified display-file manifest gains
+ONE finite projection leaf, `configuration/process-configuration.json`
+(kind `process_configuration`), captured by `capture_all` for EVERY
+copy: the existing reviewed `CONFIG_INSPECTION_ALLOWLIST` projection
+(`inspect_process_configuration`, "api" scope) of the WORKER
+process's cached `Settings` at capture time - each allowlisted
+numeric/nullable-numeric value plus its configured/default provenance
+(from the worker process's `model_fields_set`). There is no wildcard
+`model_dump`, no environment scan, no file read and no credential,
+host, path or free text in the projection. A missing, unknown,
+oversize or corrupt required projection fails the copy publication
+closed through the existing manifest/ingest law (no database schema
+change; the closed logical name is added to the existing display
+name law). The leaf's capture time is its OWN display-leaf capture
+time, separate from (not falsely simultaneous with) the PostgreSQL
+snapshot.
+
+### Scope difference from the normal API process
+
+The normal process-configuration page reads the CURRENT API
+process's cached `Settings` and the app-global loaded profiles. The
+snapshot worker is a DIFFERENT process and may hold different cached
+settings, so the demo page never reads `_settings(request)`, live
+`request.app.state.upstream_llm_profiles`, the live environment, the
+app filesystem, the provider network or the source database. It is
+labeled the **worker-observed deployment configuration captured at
+copy time**, with its own truthful capture time. The page is frozen
+for the session: changing ambient demo-web or deployment settings
+after the copy was built does not change the page. The package
+version row is explicitly labeled the demo web process's LIVE build
+identity (not a worker-captured value); the deployed revision and
+revision provenance were NOT captured in this stage and render as
+"not recorded in this demo snapshot"; the 223-captured upstream LLM
+profile identities and the worker-pinned Codex client reference are
+not displayed on this page yet - never fabricated, never read
+live.
+
+### Read law (demo process, verified copy only)
+
+The demo GET reads ONLY the verified per-login display projection
+from the session's exact bound disposable copy, in one request-local
+SELECT-only transaction on the gate-bound engine with the
+independent `current_database()` / `transaction_read_only` recheck.
+The closed metadata law (exact kind, nonnegative size under the
+1 MiB display cap, canonical SHA256, database-computed
+`octet_length(body)` equal to the claimed byte count, finite
+representable capture time) runs BEFORE any body fetch; the bounded
+body fetch re-asserts every condition as bound parameters and the
+fetched bytes are re-verified (exact length + SHA256) and re-proven
+against the 223 typed verifier law before projection. Any missing
+leaf, invalid metadata, bound violation, digest/size mismatch,
+verification failure or driver error is one fixed safe 503 with no
+input echo (a healthy worker-built copy always carries the leaf).
+No credential-shaped value, original operator identity, source path,
+copy name or DSN fragment appears in the response, logs or errors;
+every demo response stays private no-store.
+
+### Deployment needs and limits
+
+No new operator configuration, role, grant, administration UI or
+schema migration: the projection rides the existing worker file stage
+and display ingest. The displayed values are deployment-level
+operator bounds observed by the worker at copy time - they are not
+per-key policy, not the limits of every worker or the reverse proxy,
+and "configured" means explicitly supplied to the worker process at
+construction time (a configured database URL is not connectivity
+proof).

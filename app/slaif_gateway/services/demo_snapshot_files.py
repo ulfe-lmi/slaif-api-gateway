@@ -79,6 +79,9 @@ from slaif_gateway.services.catalog_refresh.errors import (
     CatalogRefreshSealError,
 )
 from slaif_gateway.services.catalog_refresh.sealing import CONTENT_FILES
+from slaif_gateway.services.configuration_inspection import (
+    CONFIG_INSPECTION_ALLOWLIST,
+)
 
 # ---------------------------------------------------------------------------
 # Safe finite failure codes (never echo paths/values)
@@ -153,6 +156,10 @@ KIND_LLM_PROFILES = "upstream_llm_profiles"
 KIND_COMPLETION_CHOICES = "completion_choices"
 KIND_BRANDING = "branding"
 KIND_JOB_RECORD = "job_record"
+# 224-t: the ONE finite worker-observed process-configuration
+# projection captured at copy time (the reviewed allowlist values +
+# configured/default provenance only).
+KIND_PROCESS_CONFIG = "process_configuration"
 
 _ALL_KINDS = frozenset(
     {
@@ -172,6 +179,7 @@ _ALL_KINDS = frozenset(
         KIND_COMPLETION_CHOICES,
         KIND_BRANDING,
         KIND_JOB_RECORD,
+        KIND_PROCESS_CONFIG,
     }
 )
 
@@ -2163,6 +2171,95 @@ def _san_branding(raw: bytes, seed: bytes, slot: str | None) -> bytes:
     return data
 
 
+# ---------------------------------------------------------------------------
+# 224-t: the finite worker-observed process-configuration projection
+# ---------------------------------------------------------------------------
+#
+# The worker captures the EXISTING reviewed `CONFIG_INSPECTION_ALLOWLIST`
+# projection from THIS worker process's cached Settings at copy time
+# (`inspect_process_configuration`, "api" scope): each allowlisted
+# numeric/nullable-numeric value plus its configured/default provenance.
+# No wildcard model_dump, no environment scan, no file read, no secret,
+# no host, no path and no free text can be represented. The worker
+# process may hold different cached settings than the live API process;
+# the demo page labels the display accordingly (worker-observed
+# deployment configuration captured at copy time).
+_PROC_CONFIG_LOGICAL_NAME = "configuration/process-configuration.json"
+_PROC_CONFIG_INT_MAX = 2**63 - 1  # closed nonnegative integer ceiling
+# The three default key-policy rate limits are nullable in Settings
+# (None = no default); every other allowlisted setting is a plain int.
+_PROC_CONFIG_NULLABLE = frozenset(
+    {
+        "DEFAULT_RATE_LIMIT_REQUESTS_PER_MINUTE",
+        "DEFAULT_RATE_LIMIT_TOKENS_PER_MINUTE",
+        "DEFAULT_RATE_LIMIT_CONCURRENT_REQUESTS",
+    }
+)
+_PROC_CONFIG_SOURCES = frozenset({"configured", "default"})
+
+
+def _proc_config_entry_closed(row: object, name: str, field: str) -> None:
+    """One allowlisted entry: exact keys, closed value/source types."""
+    entry = _dict_keys(row, field)
+    if set(entry) != {"value", "source"}:
+        raise _unsupported(f"A demo file field has an unexpected shape: {field}")
+    value = entry["value"]
+    if name in _PROC_CONFIG_NULLABLE:
+        if value is not None and (
+            type(value) is not int or not 0 <= value <= _PROC_CONFIG_INT_MAX
+        ):
+            raise _unsupported(f"A demo file field has an unexpected shape: {field}")
+    elif type(value) is not int or not 0 <= value <= _PROC_CONFIG_INT_MAX:
+        raise _unsupported(f"A demo file field has an unexpected shape: {field}")
+    if entry["source"] not in _PROC_CONFIG_SOURCES:
+        raise _unsupported(f"A demo file field has an unexpected shape: {field}")
+
+
+def _san_process_configuration(raw: bytes, seed: bytes) -> bytes:
+    """The closed typed law for the process-configuration leaf (224-t).
+
+    The raw document is the worker producer's projection of the finite
+    reviewed allowlist; the sanitizer re-proves the EXACT closed shape
+    (the same 45 names, no more no less, each a nonnegative integer -
+    nullable only for the three default rate limits - plus the closed
+    configured/default provenance) and re-dumps the canonical display
+    document. Any drift is a finite closed refusal.
+    """
+    doc = _json_strict(raw)
+    entries = _dict_keys(doc, "process_configuration")
+    if set(entries) != {"display_version", "settings"}:
+        raise _unsupported(
+            "A demo process configuration document has an unexpected shape."
+        )
+    if _int(entries["display_version"], "process_configuration.display_version", 1, 1) != 1:
+        raise _unsupported(
+            "A demo process configuration document has an unexpected shape."
+        )
+    settings = _dict_keys(entries["settings"], "process_configuration.settings")
+    if set(settings) != set(CONFIG_INSPECTION_ALLOWLIST):
+        raise _unsupported(
+            "A demo process configuration document has an unexpected shape."
+        )
+    for name in CONFIG_INSPECTION_ALLOWLIST:
+        _proc_config_entry_closed(
+            settings[name], name, f"process_configuration.settings.{name}"
+        )
+    return _dump(
+        {
+            "schema": DEMO_SCHEMA_VERSION,
+            "kind": KIND_PROCESS_CONFIG,
+            "schema_version": 1,
+            "settings": {
+                name: {
+                    "source": settings[name]["source"],
+                    "value": settings[name]["value"],
+                }
+                for name in sorted(settings)
+            },
+        }
+    )
+
+
 _SANITIZERS: dict[str, object] = {
     KIND_REFRESH_BUNDLE: _san_refresh_bundle,
     KIND_BASELINE_DOC: _san_baseline_document,
@@ -2179,6 +2276,7 @@ _SANITIZERS: dict[str, object] = {
     KIND_LLM_PROFILES: _san_llm_profiles,
     KIND_COMPLETION_CHOICES: _san_completion_choices,
     KIND_JOB_RECORD: _sanitize_job_record,
+    KIND_PROCESS_CONFIG: _san_process_configuration,
 }
 
 
@@ -2784,6 +2882,49 @@ def capture_completion_profiles(capture: _Capture, seed: bytes) -> None:
         handle.close()
 
 
+def capture_process_configuration(capture: _Capture) -> None:
+    """Capture the ONE finite worker-observed process-configuration
+    projection for this copy (224-t).
+
+    The source is the EXISTING reviewed allowlist projection
+    (`inspect_process_configuration`, "api" scope) of THIS worker
+    process's cached Settings: each allowlisted numeric/nullable-numeric
+    value plus its configured/default provenance. There is no wildcard
+    model_dump, no environment scan, no file read and no credential,
+    host, path or free text in the projection. The capture time is the
+    leaf's own capture time (separate from the PostgreSQL snapshot);
+    the worker process may hold different cached settings than the live
+    API process, and the demo page labels the display as the
+    worker-observed deployment configuration captured at copy time.
+    A missing, unknown, oversize or corrupt projection fails the copy
+    publication closed through the shared add_display law.
+    """
+    from slaif_gateway.services.configuration_inspection import (
+        inspect_process_configuration,
+    )
+
+    payload = inspect_process_configuration(capture.settings, process_scope="api")
+    entries = payload["config"]["settings"]
+    raw = json.dumps(
+        {
+            "display_version": 1,
+            "settings": {
+                name: {"value": entries[name]["value"], "source": entries[name]["source"]}
+                for name in sorted(CONFIG_INSPECTION_ALLOWLIST)
+            },
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    capture.add_display(
+        kind=KIND_PROCESS_CONFIG,
+        source="process_configuration",
+        source_ref="configuration:process-configuration",
+        logical_name=_PROC_CONFIG_LOGICAL_NAME,
+        raw=raw,
+    )
+
+
 def capture_pinned_references(capture: _Capture) -> None:
     """Record versioned identity references for packaged invariant data.
 
@@ -2847,6 +2988,7 @@ def capture_all(config: FileSnapshotConfig, settings: Settings, seed: bytes) -> 
     capture = _Capture(config, settings)
     capture_catalog(capture, seed)
     capture_branding(capture, seed)
+    capture_process_configuration(capture)
     capture_upstream_llm_profiles(capture, seed)
     capture_completion_profiles(capture, seed)
     capture_pinned_references(capture)
@@ -3899,6 +4041,41 @@ def _v_doc_job_record(document: dict[str, object]) -> None:
 
 
 
+# 224-t: the closed verifier law for the process-configuration leaf.
+# The EXACT reviewed allowlist names (nothing else), each entry a
+# nonnegative integer - nullable only for the three default rate
+# limits - plus the closed configured provenance vocabulary.
+def _proc_config_source_check(value: object) -> None:
+    if value not in _PROC_CONFIG_SOURCES:
+        raise _v_unexpected()
+
+
+def _v_doc_process_configuration(document: dict[str, object]) -> None:
+    _v_spec(
+        document,
+        {
+            "schema": _v_const(DEMO_SCHEMA_VERSION),
+            "kind": _v_const(KIND_PROCESS_CONFIG),
+            "schema_version": _v_const(1),
+            "settings": _v_row_spec(
+                {
+                    name: _v_row_spec(
+                        {
+                            "value": (
+                                _v_opt_int(0, _PROC_CONFIG_INT_MAX)
+                                if name in _PROC_CONFIG_NULLABLE
+                                else _v_int(0, _PROC_CONFIG_INT_MAX)
+                            ),
+                            "source": _proc_config_source_check,
+                        }
+                    )
+                    for name in CONFIG_INSPECTION_ALLOWLIST
+                }
+            ),
+        },
+    )
+
+
 _JSON_DOC_VALIDATORS: dict[str, object] = {
     KIND_REFRESH_BUNDLE: _v_doc_refresh_bundle,
     KIND_COMPLETION_CHOICES: _v_doc_completion_choices,
@@ -3910,6 +4087,7 @@ _JSON_DOC_VALIDATORS: dict[str, object] = {
     KIND_PACKAGE_MANIFEST: _v_doc_package_manifest,
     KIND_LLM_PROFILES: _v_doc_llm_profiles,
     KIND_JOB_RECORD: _v_doc_job_record,
+    KIND_PROCESS_CONFIG: _v_doc_process_configuration,
 }
 
 

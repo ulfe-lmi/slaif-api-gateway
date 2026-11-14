@@ -6067,3 +6067,578 @@ def test_q_zero_active_404():
             assert r.status_code == 404
 
     asyncio.run(run())
+
+
+# --- 224-t: Operations index + captured process configuration ---------------
+
+import hashlib as _t_hashlib  # noqa: E402
+import json as _t_json  # noqa: E402
+import re as _t_re  # noqa: E402
+
+from slaif_gateway.api import demo_admin_operations as dao  # noqa: E402
+from slaif_gateway.config import Settings as _t_Settings  # noqa: E402
+from slaif_gateway.services import demo_snapshot_files as _t_dsf  # noqa: E402
+from slaif_gateway.services.configuration_inspection import (  # noqa: E402
+    CONFIG_INSPECTION_ALLOWLIST as _T_ALLOWLIST,
+)
+
+T_IDX_URL = "/admin/operations/"
+T_PC_URL = "/admin/operations/process-configuration"
+_T_CAPTURED_AT = 1_763_000_000.0  # finite, representable capture time
+
+
+def _t_settings_doc(**overrides: object) -> dict[str, object]:
+    s = _t_Settings(**overrides)
+    return {
+        "schema": _t_dsf.DEMO_SCHEMA_VERSION,
+        "kind": _t_dsf.KIND_PROCESS_CONFIG,
+        "schema_version": 1,
+        "settings": {
+            name: {
+                "value": getattr(s, name),
+                "source": (
+                    "configured" if name in s.model_fields_set else "default"
+                ),
+            }
+            for name in sorted(_T_ALLOWLIST)
+        },
+    }
+
+
+def _t_canonical_body(**overrides: object) -> bytes:
+    """The canonical display document the worker sanitizer emits."""
+    return _t_dsf._dump(_t_settings_doc(**overrides))
+
+
+class _ProcConfigFakeSession:
+    """One fake request-local copy session: preflight scalars plus the
+    recorded parameterized statements (metadata with octet_length,
+    then the bounded body query)."""
+
+    def __init__(self, meta_rows, body_rows, db, ro) -> None:
+        self.meta_rows = meta_rows
+        self.body_rows = body_rows
+        self.db = db
+        self.ro = ro
+        self.executed: list[tuple[str, dict]] = []
+
+    def begin(self):
+        return self
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *a):
+        return False
+
+    async def scalar(self, clause):
+        text = str(clause)
+        if "current_database" in text:
+            return self.db
+        return self.ro
+
+    async def execute(self, clause, params=None):
+        text = str(clause)
+        params = dict(params or {})
+        self.executed.append((text, params))
+        if "octet_length(body) AS actual_bytes" in text:
+            return _ArtifactResult(self.meta_rows)
+        if text.lstrip().startswith("SELECT body"):
+            return _ArtifactResult(self.body_rows)
+        return _ArtifactResult([])
+
+
+def _t_meta_row(body: bytes, *, kind=None, size=None, sha=None,
+                actual=None, captured=_T_CAPTURED_AT) -> tuple:
+    if body is None:
+        body = _t_canonical_body()
+    if size is None:
+        size = len(body)
+    if actual is None:
+        actual = len(body)
+    if sha is None:
+        sha = _t_hashlib.sha256(body).hexdigest()
+    if kind is None:
+        kind = _t_dsf.KIND_PROCESS_CONFIG
+    return (kind, size, sha, captured, actual)
+
+
+def _t_patch_sessionmaker(monkeypatch, session):
+    monkeypatch.setattr(
+        dao, "get_sessionmaker_from_app", lambda _req: lambda: session
+    )
+
+
+def test_t_gate_admission_exact_paths():
+    async def run():
+        app = _app(FakeFacade())
+        async with _client(app) as client:
+            # The two EXACT paths are admitted (no session -> entry
+            # redirect, same law as the other admitted GETs)...
+            r = await client.get(T_IDX_URL)
+            assert r.status_code == 303
+            assert r.headers["location"] == "/fakeadmin/login"
+            r = await client.get(T_PC_URL)
+            assert r.status_code == 303
+            assert r.headers["location"] == "/fakeadmin/login"
+            # ...and every near miss, alternate slash shape and unknown
+            # query stays default-denied 404.
+            for p in (
+                "/admin/operations",            # missing required slash
+                "/admin/operations//",          # double slash
+                "/admin/operations/x",          # unknown first segment
+                "/admin/operations/diagnostics",
+                "/admin/operations/diagnostics/lookup",
+                "/admin/operations/compatibility/",
+                "/admin/operations/replay-maintenance/",
+                "/admin/email-operations/smtp-test",
+                T_PC_URL + "/",                 # trailing slash
+                T_PC_URL + "x",                 # prefix sibling
+                T_PC_URL + "/extra",            # deeper path
+                "/admin/operationsx/process-configuration",
+                T_IDX_URL + "?x=1",             # query on the index
+                T_IDX_URL + "?a=1&b=2",
+                T_PC_URL + "?x=1",              # query on the page
+                T_PC_URL + "?x=1&y=2",
+            ):
+                r = await client.get(p)
+                assert r.status_code == 404, p
+
+    asyncio.run(run())
+
+
+def test_t_gate_zero_active_404():
+    async def run():
+        fake = FakeFacade()
+        fake.active = 0
+        app = _app(fake)
+        async with _client(app) as client:
+            _session_cookie(client)
+            for p in (T_IDX_URL, T_PC_URL):
+                r = await client.get(p)
+                assert r.status_code == 404, p
+
+    asyncio.run(run())
+
+
+def test_t_unsafe_methods_quiet_noop_body_not_parsed():
+    async def run():
+        app = _app(FakeFacade())
+        async with _client(app) as client:
+            _session_cookie(client)
+            for method in ("POST", "PUT", "PATCH", "DELETE"):
+                for p in (T_IDX_URL, T_PC_URL):
+                    r = await client.request(
+                        method,
+                        p,
+                        content=b"x" * 200_000,
+                        headers={"content-type": "text/garbage"},
+                    )
+                    assert r.status_code == 204, (method, p)
+                    assert r.content == b""
+        async with _client(app) as anon:
+            for p in (T_IDX_URL, T_PC_URL):
+                r = await anon.post(
+                    p,
+                    content=b"y" * 200_000,
+                    headers={"content-type": "text/garbage"},
+                )
+                assert r.status_code == 404, p
+
+    asyncio.run(run())
+
+
+def test_t_index_page_from_verified_copy(monkeypatch):
+    async def run():
+        fake = FakeFacade()
+        fake.worker_target_db = COPY_OK
+        _preflight_case(monkeypatch, COPY_OK, "on")
+        session = _ProcConfigFakeSession([], [], COPY_OK, "on")
+        _t_patch_sessionmaker(monkeypatch, session)
+        app = _app(fake)
+        async with _client(app) as client:
+            await _verified_session_client(fake, client)
+            r = await client.get(T_IDX_URL)
+            assert r.status_code == 200
+            assert r.headers["cache-control"] == "private, no-store"
+            assert "Demo preview:" in r.text
+            assert "FROZEN copied data" in r.text
+            # Admitted read pages are linked...
+            assert 'href="/admin/operations/process-configuration"' in r.text
+            assert 'href="/admin/operations/catalog/"' in r.text
+            # ...and the not-yet-admitted pages are marked unavailable
+            # WITHOUT a usable link.
+            assert "unavailable in this demo" in r.text
+            assert 'href="/admin/operations/diagnostics"' not in r.text
+            assert 'href="/admin/operations/compatibility/"' not in r.text
+            assert 'href="/admin/email-operations/smtp-test"' not in r.text
+            # No copy name or credential material.
+            assert COPY_OK not in r.text
+            assert "postgresql" not in r.text.lower()
+            # The static index performs only the binding recheck.
+            assert len(session.executed) == 0
+
+    asyncio.run(run())
+
+
+def test_t_index_refusals(monkeypatch):
+    async def run():
+        # Wrong copy database: the recheck refuses before rendering.
+        fake = FakeFacade()
+        fake.worker_target_db = COPY_OK
+        _preflight_case(monkeypatch, COPY_OK, "on")
+        session = _ProcConfigFakeSession([], [], "some_other_db", "on")
+        _t_patch_sessionmaker(monkeypatch, session)
+        app = _app(fake)
+        async with _client(app) as client:
+            await _verified_session_client(fake, client)
+            r = await client.get(T_IDX_URL)
+            assert r.status_code == 503
+            assert COPY_OK not in r.text
+        # Read-only mode off: same fixed safe refusal.
+        fake2 = FakeFacade()
+        fake2.worker_target_db = COPY_OK
+        _preflight_case(monkeypatch, COPY_OK, "off")
+        session2 = _ProcConfigFakeSession([], [], COPY_OK, "off")
+        _t_patch_sessionmaker(monkeypatch, session2)
+        app2 = _app(fake2)
+        async with _client(app2) as client2:
+            await _verified_session_client(fake2, client2)
+            r = await client2.get(T_IDX_URL)
+            assert r.status_code == 503
+
+    asyncio.run(run())
+
+
+def test_t_pc_positive_from_copy(monkeypatch):
+    async def run():
+        body = _t_canonical_body(
+            CHAT_MAX_IMAGES_PER_REQUEST=7,
+            DEFAULT_RATE_LIMIT_REQUESTS_PER_MINUTE=99,
+        )
+        fake = FakeFacade()
+        fake.worker_target_db = COPY_OK
+        _preflight_case(monkeypatch, COPY_OK, "on")
+        session = _ProcConfigFakeSession(
+            [_t_meta_row(body)], [(body,)], COPY_OK, "on"
+        )
+        _t_patch_sessionmaker(monkeypatch, session)
+        app = _app(fake)
+        async with _client(app) as client:
+            await _verified_session_client(fake, client)
+            r = await client.get(T_PC_URL)
+            assert r.status_code == 200
+            assert r.headers["cache-control"] == "private, no-store"
+            text = r.text
+            assert "Demo preview:" in text
+            # Truthful worker-observed scope + capture time.
+            assert (
+                "worker-observed deployment configuration captured at "
+                "copy time" in " ".join(text.split())
+            )
+            from datetime import UTC, datetime
+
+            expected_utc = datetime.fromtimestamp(
+                _T_CAPTURED_AT, tz=UTC
+            ).strftime("%Y-%m-%d %H:%M:%S UTC")
+            assert "captured " + expected_utc in text
+            assert "Captured at (copy time)" in text
+            assert "Worker-observed settings (45 finite allowlist, " in text
+            # The CANARY values + configured provenance come from the
+            # captured copy (never the ambient process settings).
+            assert (
+                _t_re.search(
+                    r"CHAT_MAX_IMAGES_PER_REQUEST</code>.*?"
+                    r'title="7 count">7</td>\s*<td>configured</td>',
+                    text,
+                    _t_re.S,
+                )
+                is not None
+            )
+            assert (
+                _t_re.search(
+                    r"DEFAULT_RATE_LIMIT_REQUESTS_PER_MINUTE</code>.*?"
+                    r"99.*?<td>configured</td>",
+                    text,
+                    _t_re.S,
+                )
+                is not None
+            )
+            # ...while untouched names keep the default provenance.
+            assert (
+                _t_re.search(
+                    r"DEFAULT_MAX_OUTPUT_TOKENS</code>.*?"
+                    r'<td>default</td>',
+                    text,
+                    _t_re.S,
+                )
+                is not None
+            )
+            # A nullable rate limit renders as (none), not fabricated.
+            assert (
+                _t_re.search(
+                    r"DEFAULT_RATE_LIMIT_TOKENS_PER_MINUTE</code>.*?"
+                    r"\(none\).*?<td>default</td>",
+                    text,
+                    _t_re.S,
+                )
+                is not None
+            )
+            # Not-captured identities are honestly labeled...
+            assert "not recorded in this demo snapshot" in text
+            # ...the package version is explicitly the LIVE demo-web
+            # build, and captured-but-not-yet-displayed identities are
+            # labeled as such (never claimed absent).
+            assert "demo web process, live build" in text
+            assert "not displayed on this page yet" in text
+            # ...and the live app-global profile table never renders.
+            assert 'aria-label="Upstream LLM profiles"' not in text
+            # No copy name, DSN fragment or credential material.
+            assert COPY_OK not in text
+            assert "postgresql" not in text.lower()
+            # The closed read law: metadata with octet_length FIRST,
+            # then the bounded body query with bound parameters.
+            assert len(session.executed) == 2
+            meta_text, meta_params = session.executed[0]
+            assert "octet_length(body) AS actual_bytes" in meta_text
+            assert meta_params == {
+                "name": "configuration/process-configuration.json"
+            }
+            body_text, body_params = session.executed[1]
+            assert body_text.lstrip().startswith("SELECT body")
+            assert body_params["name"] == (
+                "configuration/process-configuration.json"
+            )
+            assert body_params["size"] == len(body)
+            assert body_params["digest"] == _t_hashlib.sha256(body).hexdigest()
+            assert body_params["kind"] == _t_dsf.KIND_PROCESS_CONFIG
+            assert body_params["cap"] == 1024 * 1024
+
+    asyncio.run(run())
+
+
+def test_t_pc_ignores_ambient_settings_after_capture(monkeypatch):
+    # Changing the AMBIENT demo-web/deployment settings AFTER the copy
+    # was built must NOT change the page (no live fallback): the page
+    # is frozen at capture time.
+    async def run():
+        body = _t_canonical_body(
+            CHAT_MAX_IMAGES_PER_REQUEST=7,
+            DEFAULT_RATE_LIMIT_REQUESTS_PER_MINUTE=99,
+        )
+        fake = FakeFacade()
+        fake.worker_target_db = COPY_OK
+        _preflight_case(monkeypatch, COPY_OK, "on")
+        session = _ProcConfigFakeSession(
+            [_t_meta_row(body)], [(body,)], COPY_OK, "on"
+        )
+        _t_patch_sessionmaker(monkeypatch, session)
+        app = _app(fake)
+        async with _client(app) as client:
+            await _verified_session_client(fake, client)
+            r = await client.get(T_PC_URL)
+            assert r.status_code == 200
+            before = r.text
+            # Ambient change AFTER the read: a different value than the
+            # captured canary, plus the live API-process settings cache
+            # cleared so any live fallback would pick it up.
+            monkeypatch.setenv("CHAT_MAX_IMAGES_PER_REQUEST", "999")
+            monkeypatch.setenv("DEFAULT_RATE_LIMIT_REQUESTS_PER_MINUTE", "42")
+            from slaif_gateway.config import get_settings as _t_get_settings
+
+            _t_get_settings.cache_clear()
+            try:
+                r2 = await client.get(T_PC_URL)
+            finally:
+                _t_get_settings.cache_clear()
+            assert r2.status_code == 200
+            assert r2.text == before
+            assert 'title="7 count"' in r2.text
+            assert "999" not in _t_re.findall(
+                r'title="999[^"]*"', r2.text
+            )
+
+    asyncio.run(run())
+
+
+def test_t_pc_missing_leaf_503(monkeypatch):
+    async def run():
+        fake = FakeFacade()
+        fake.worker_target_db = COPY_OK
+        _preflight_case(monkeypatch, COPY_OK, "on")
+        session = _ProcConfigFakeSession([], [], COPY_OK, "on")
+        _t_patch_sessionmaker(monkeypatch, session)
+        app = _app(fake)
+        async with _client(app) as client:
+            await _verified_session_client(fake, client)
+            r = await client.get(T_PC_URL)
+            assert r.status_code == 503
+            assert "unavailable" in r.text
+            assert COPY_OK not in r.text
+            # No body query after a missing leaf.
+            assert len(session.executed) == 1
+
+    asyncio.run(run())
+
+
+def test_t_pc_corrupt_metadata_503(monkeypatch):
+    async def run():
+        good_body = _t_canonical_body()
+        cases = {
+            "wrong kind": _t_meta_row(good_body, kind="job_record"),
+            "actual over cap": _t_meta_row(
+                good_body, actual=2 * 1024 * 1024
+            ),
+            "actual disagrees with size": _t_meta_row(
+                good_body, actual=len(good_body) + 1
+            ),
+            "negative size": _t_meta_row(good_body, size=-1),
+            "size over cap": _t_meta_row(good_body, size=2 * 1024 * 1024),
+            "invalid sha": _t_meta_row(good_body, sha="zz" * 32),
+            "short sha": _t_meta_row(good_body, sha="ab" * 16),
+            "over-range capture time": _t_meta_row(
+                good_body, captured=1e18
+            ),
+            "non-finite capture time": _t_meta_row(good_body, captured=float("inf")),
+        }
+        for label, meta in cases.items():
+            fake = FakeFacade()
+            fake.worker_target_db = COPY_OK
+            _preflight_case(monkeypatch, COPY_OK, "on")
+            session = _ProcConfigFakeSession(
+                [meta], [(good_body,)], COPY_OK, "on"
+            )
+            _t_patch_sessionmaker(monkeypatch, session)
+            app = _app(fake)
+            async with _client(app) as client:
+                await _verified_session_client(fake, client)
+                r = await client.get(T_PC_URL)
+                assert r.status_code == 503, label
+                assert COPY_OK not in r.text
+                # Metadata refused BEFORE any body fetch.
+                assert len(session.executed) == 1, label
+
+    asyncio.run(run())
+
+
+def test_t_pc_body_mismatch_503(monkeypatch):
+    async def run():
+        good_body = _t_canonical_body()
+        for label, bad_body in (
+            ("different bytes", _t_canonical_body(HARD_MAX_INPUT_TOKENS=7)),
+            ("truncated", good_body[: len(good_body) // 2]),
+        ):
+            fake = FakeFacade()
+            fake.worker_target_db = COPY_OK
+            _preflight_case(monkeypatch, COPY_OK, "on")
+            session = _ProcConfigFakeSession(
+                [_t_meta_row(good_body)],
+                [(bad_body,)],
+                COPY_OK,
+                "on",
+            )
+            _t_patch_sessionmaker(monkeypatch, session)
+            app = _app(fake)
+            async with _client(app) as client:
+                await _verified_session_client(fake, client)
+                r = await client.get(T_PC_URL)
+                assert r.status_code == 503, label
+                assert COPY_OK not in r.text
+
+    asyncio.run(run())
+
+
+def test_t_pc_typed_law_refused_503(monkeypatch):
+    # Metadata consistent with a body that BREAKS the closed typed law
+    # (extra settings key / string value / wrong source) is refused
+    # after the digest/size re-check, before projection.
+    async def run():
+        from slaif_gateway.services.configuration_inspection import (
+            inspect_process_configuration,
+        )
+
+        payload = inspect_process_configuration(
+            _t_Settings(), process_scope="api"
+        )
+        settings = {
+            name: {"value": payload["config"]["settings"][name]["value"],
+                   "source": payload["config"]["settings"][name]["source"]}
+            for name in sorted(_T_ALLOWLIST)
+        }
+        doc_extra = {
+            "schema": _t_dsf.DEMO_SCHEMA_VERSION,
+            "kind": _t_dsf.KIND_PROCESS_CONFIG,
+            "schema_version": 1,
+            "settings": dict(settings, EVIL_SETTING={"value": 1, "source": "default"}),
+        }
+        bad_str = _t_json.loads(_t_json.dumps(doc_extra))
+        bad_str["settings"]["HARD_MAX_INPUT_TOKENS"]["value"] = "128000"
+        bad_src = _t_json.loads(_t_json.dumps(doc_extra))
+        bad_src["settings"]["HARD_MAX_INPUT_TOKENS"]["source"] = "live"
+        for label, doc in (
+            ("extra settings key", doc_extra),
+            ("string value", bad_str),
+            ("wrong source", bad_src),
+        ):
+            body = _t_dsf._dump(doc)
+            fake = FakeFacade()
+            fake.worker_target_db = COPY_OK
+            _preflight_case(monkeypatch, COPY_OK, "on")
+            session = _ProcConfigFakeSession(
+                [_t_meta_row(body)], [(body,)], COPY_OK, "on"
+            )
+            _t_patch_sessionmaker(monkeypatch, session)
+            app = _app(fake)
+            async with _client(app) as client:
+                await _verified_session_client(fake, client)
+                r = await client.get(T_PC_URL)
+                assert r.status_code == 503, label
+                assert "EVIL" not in r.text
+                assert COPY_OK not in r.text
+
+    asyncio.run(run())
+
+
+def test_t_pc_query_refused_before_copy(monkeypatch):
+    # The demo page defines NO query parameters: ANY parameter refuses
+    # with fixed 404 BEFORE any copy access (structurally, like the
+    # 224-l name law).
+    async def run():
+        from types import SimpleNamespace
+
+        from starlette.requests import Request
+
+        app = _app(FakeFacade())
+        demo = SimpleNamespace(target_db=COPY_OK)
+        session = _ProcConfigFakeSession([], [], COPY_OK, "on")
+        _t_patch_sessionmaker(monkeypatch, session)
+        for query in (b"x=1", b"name=a", b"a=1&b=2"):
+            scope = {
+                "type": "http",
+                "app": app,
+                "state": {"demo_admin": demo},
+                "query_string": query,
+            }
+            response = await dao.demo_operations_process_configuration(
+                Request(scope)
+            )
+            assert response.status_code == 404, query
+            assert response.body == b"Not Found"
+        assert session.executed == []
+
+    asyncio.run(run())
+
+
+def test_t_pc_no_demo_state_404():
+    async def run():
+        from starlette.requests import Request
+
+        app = _app(FakeFacade())
+        scope = {"type": "http", "app": app, "state": {}}
+        response = await dao.demo_operations_process_configuration(
+            Request(scope)
+        )
+        assert response.status_code == 404
+        assert response.body == b"Not Found"
+
+    asyncio.run(run())

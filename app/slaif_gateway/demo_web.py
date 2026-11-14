@@ -865,6 +865,9 @@ def _mount_demo_admin_routers(app: FastAPI) -> None:
     )
     from slaif_gateway.api.admin_key_batch import router as admin_key_batch_router
     from slaif_gateway.api.admin_key_clone import router as admin_key_clone_router
+    from slaif_gateway.api.demo_admin_operations import (
+        router as demo_admin_operations_router,
+    )
     from slaif_gateway.api.admin_operations import router as admin_operations_router
     from slaif_gateway.api.admin_record_choices import (
         router as admin_record_choices_router,
@@ -896,6 +899,9 @@ def _mount_demo_admin_routers(app: FastAPI) -> None:
     app.include_router(admin_key_clone_router)
     app.include_router(admin_key_batch_router)
     app.include_router(admin_provider_route_configuration_router)
+    # Demo-specific operations index + captured process-configuration
+    # pages win over the normal live-Settings operations routes (224-t).
+    app.include_router(demo_admin_operations_router)
     app.include_router(admin_operations_router)
     app.include_router(admin_compatibility_router)
     app.include_router(admin_replay_maintenance_router)

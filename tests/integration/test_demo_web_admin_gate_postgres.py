@@ -281,7 +281,19 @@ def test_e2e_admin_gate_two_sessions_distinct_copies(
 
     # Phase 2: worker processes copy A (real worker role, real chain).
     cli_env = _worker_cli_env(san_env, env, custody)
-    out_a = _run_worker_cli(["process-request", str(rid_a), "--json"], cli_env, monkeypatch)
+    # 224-t: copy A's worker captures a CUSTOM non-default
+    # process-configuration projection (canaries, not secrets): the
+    # per-login page must show these captured values, and copy B (built
+    # WITHOUT them) must show the built-in defaults - copy isolation
+    # for the worker-observed projection.
+    _T_CANARY_ENV = {
+        "CHAT_MAX_IMAGES_PER_REQUEST": "7",
+        "DEFAULT_RATE_LIMIT_REQUESTS_PER_MINUTE": "99",
+    }
+    cli_env_a = {**cli_env, **_T_CANARY_ENV}
+    out_a = _run_worker_cli(
+        ["process-request", str(rid_a), "--json"], cli_env_a, monkeypatch
+    )
     assert "verified_unpublished" in out_a
     row_a = _request_row(env, rid_a)
     target_a = row_a["worker_target_db"]
@@ -335,6 +347,11 @@ def test_e2e_admin_gate_two_sessions_distinct_copies(
     request.addfinalizer(_remove_marker)
 
     # Phase 4: worker processes copy B (includes the marker).
+    # 224-t: the canary env vars were set for worker A's call only;
+    # remove them from the ambient environment so worker B captures
+    # the BUILT-IN defaults (copy isolation for the projection).
+    for _k in _T_CANARY_ENV:
+        monkeypatch.delenv(_k, raising=False)
     out_b = _run_worker_cli(["process-request", str(rid_b), "--json"], cli_env, monkeypatch)
     assert "verified_unpublished" in out_b
     row_b = _request_row(env, rid_b)
@@ -1806,6 +1823,144 @@ def test_e2e_admin_gate_two_sessions_distinct_copies(
                         r = await client_a.get(f"/admin/keys/{_q_cal_key}")
                         assert r.status_code == 404
 
+                    # --- 224-t: operations index + captured
+                    # process-configuration (worker-built copies) ---
+                    # Copy A's worker ran with CUSTOM non-default canary
+                    # env vars; copy B's worker ran WITHOUT them. Each
+                    # session's page must show ONLY its own copy's
+                    # captured values (captured at copy time, frozen for
+                    # the session - no live fallback).
+                    for client, target, is_a in (
+                        (client_a, target_a, True),
+                        (client_b, target_b, False),
+                    ):
+                        r = await client.get("/admin/operations/")
+                        assert r.status_code == 200
+                        assert r.headers["cache-control"] == "private, no-store"
+                        assert "Demo preview:" in r.text
+                        assert "FROZEN copied data" in r.text
+                        assert "unavailable in this demo" in r.text
+                        assert (
+                            'href="/admin/operations/process-configuration"'
+                            in r.text
+                        )
+                        # Not-yet-admitted pages are marked unavailable
+                        # WITHOUT a usable link.
+                        assert 'href="/admin/operations/diagnostics"' not in r.text
+                        assert 'href="/admin/operations/compatibility/"' not in r.text
+                        assert target not in r.text
+                        r = await client.get(
+                            "/admin/operations/process-configuration"
+                        )
+                        assert r.status_code == 200
+                        assert r.headers["cache-control"] == "private, no-store"
+                        assert "Demo preview:" in r.text
+                        text = " ".join(r.text.split())
+                        assert (
+                            "worker-observed deployment configuration" in text
+                        )
+                        assert "Captured at (copy time)" in r.text
+                        assert "not recorded in this demo snapshot" in text
+                        # The package version is explicitly the LIVE
+                        # demo-web build; captured identities not yet
+                        # displayed are labeled as such.
+                        assert "demo web process, live build" in r.text
+                        assert "not displayed on this page yet" in text
+                        if is_a:
+                            # The custom non-default canary value +
+                            # configured provenance come from A's own
+                            # per-login capture...
+                            m = re.search(
+                                r"CHAT_MAX_IMAGES_PER_REQUEST</code>.*?"
+                                r'title="(\d+) count"',
+                                r.text,
+                                re.S,
+                            )
+                            assert m is not None and m.group(1) == "7", r.text[:800]
+                            assert (
+                                re.search(
+                                    r"DEFAULT_RATE_LIMIT_REQUESTS_PER_MINUTE"
+                                    r"</code>.*?"
+                                    r'title="99 requests/minute or none"',
+                                    r.text,
+                                    re.S,
+                                )
+                                is not None
+                            )
+                        else:
+                            # ...and copy B (built WITHOUT the canaries)
+                            # shows the built-in defaults + default
+                            # provenance: copy B never borrows copy A's
+                            # projection.
+                            m = re.search(
+                                r"CHAT_MAX_IMAGES_PER_REQUEST</code>.*?"
+                                r'title="(\d+) count"',
+                                r.text,
+                                re.S,
+                            )
+                            assert m is not None and m.group(1) == "8", r.text[:800]
+                            assert (
+                                re.search(
+                                    r"DEFAULT_RATE_LIMIT_REQUESTS_PER_MINUTE"
+                                    r"</code>.*?\(none\)",
+                                    r.text,
+                                    re.S,
+                                )
+                                is not None
+                            )
+                        assert target not in r.text
+                        assert "postgresql" not in r.text.lower()
+                    # Ambient changes AFTER capture must not change the
+                    # frozen page (no live fallback): different values,
+                    # cleared settings cache, byte-identical re-read.
+                    r = await client_a.get(
+                        "/admin/operations/process-configuration"
+                    )
+                    assert r.status_code == 200
+                    before = r.text
+                    monkeypatch.setenv("CHAT_MAX_IMAGES_PER_REQUEST", "999")
+                    monkeypatch.setenv(
+                        "DEFAULT_RATE_LIMIT_REQUESTS_PER_MINUTE", "42"
+                    )
+                    from slaif_gateway.config import (
+                        get_settings as _t_get_settings,
+                    )
+
+                    _t_get_settings.cache_clear()
+                    try:
+                        r2 = await client_a.get(
+                            "/admin/operations/process-configuration"
+                        )
+                    finally:
+                        _t_get_settings.cache_clear()
+                    assert r2.status_code == 200
+                    assert r2.text == before
+                    # Near misses and queries stay default-denied; the
+                    # newly admitted exact paths are the SAME pre-body
+                    # quiet 204 cut for unsafe methods.
+                    for client in (client_a, client_b):
+                        for p in (
+                            "/admin/operations",
+                            "/admin/operations//",
+                            "/admin/operations/diagnostics",
+                            "/admin/operations/compatibility/",
+                            "/admin/operations/replay-maintenance/",
+                            "/admin/operations/process-configuration/",
+                            "/admin/operations/process-configuration?x=1",
+                            "/admin/operations/?x=1",
+                        ):
+                            r = await client.get(p)
+                            assert r.status_code == 404, p
+                        for method in ("POST", "PUT", "DELETE"):
+                            r = await client.request(
+                                method,
+                                "/admin/operations/process-configuration",
+                                content=b"x" * 200_000,
+                                headers={"content-type": "text/garbage"},
+                            )
+                            assert r.status_code == 204, method
+                            assert r.content == b""
+
                     # --- operational POST families: quiet 204 no-ops -----
                     key_id = await _first_id(san_env, target_b, "gateway_keys")
                     for client in (client_a, client_b):
@@ -2235,7 +2390,17 @@ def test_browser_smoke_demo_copy_pages(
     # One login -> one real worker-processed copy -> one demo session.
     rid, pending = asyncio.run(_login_phase(cfg, env))
     cli_env = _worker_cli_env(san_env, env, custody)
-    out = _run_worker_cli(["process-request", str(rid), "--json"], cli_env, monkeypatch)
+    # 224-t: copy A's worker captures a CUSTOM non-default
+    # process-configuration projection (canaries, not secrets); copy
+    # B (built below WITHOUT them) must show the defaults.
+    _T_CANARY_BROWSER_ENV = {
+        "CHAT_MAX_IMAGES_PER_REQUEST": "7",
+        "DEFAULT_RATE_LIMIT_REQUESTS_PER_MINUTE": "99",
+    }
+    cli_env_a = {**cli_env, **_T_CANARY_BROWSER_ENV}
+    out = _run_worker_cli(
+        ["process-request", str(rid), "--json"], cli_env_a, monkeypatch
+    )
     assert "verified_unpublished" in out
     target = _request_row(env, rid)["worker_target_db"]
     assert isinstance(target, str) and target.startswith("demo_snap_")
@@ -2247,6 +2412,10 @@ def test_browser_smoke_demo_copy_pages(
     # or the receipt.
     asyncio.run(_r_source_flow_cleanup(san_env, flow))
     rid_b, pending_b = asyncio.run(_login_phase(cfg, env))
+    # 224-t: remove the canary env vars so copy B's worker captures
+    # the BUILT-IN defaults (copy isolation for the projection).
+    for _k in _T_CANARY_BROWSER_ENV:
+        monkeypatch.delenv(_k, raising=False)
     out_b = _run_worker_cli(
         ["process-request", str(rid_b), "--json"], cli_env, monkeypatch
     )
@@ -2560,6 +2729,64 @@ def test_browser_smoke_demo_copy_pages(
             )
             page.screenshot(path=str(shot_cat))
             print(f"DEMO_BROWSER_CATALOG_SCREENSHOT={shot_cat}")
+
+            # --- 224-t: operations index + captured process
+            # configuration in the real browser ------------------------
+            # Copy A's worker ran with custom non-default canary env
+            # vars: the real Chromium page must show the captured
+            # worker-observed values (frozen at copy time, never the
+            # live process settings), plus the demo index with its
+            # unavailable markers.
+            r = page.goto("/admin/operations/")
+            assert r is not None and r.status == 200
+            assert r.headers["cache-control"] == "private, no-store"
+            content = page.content()
+            assert "Demo preview:" in content
+            assert "FROZEN copied data" in content
+            assert "unavailable in this demo" in content
+            assert 'href="/admin/operations/process-configuration"' in content
+            assert 'href="/admin/operations/diagnostics"' not in content
+            assert target not in content
+            r = page.goto("/admin/operations/process-configuration")
+            assert r is not None and r.status == 200
+            assert r.headers["cache-control"] == "private, no-store"
+            content = page.content()
+            assert "Demo preview:" in content
+            _t_flat = " ".join(content.split())
+            assert (
+                "worker-observed deployment configuration" in _t_flat
+            )
+            assert "Captured at (copy time)" in content
+            assert "not recorded in this demo snapshot" in _t_flat
+            assert "demo web process, live build" in content
+            assert "not displayed on this page yet" in _t_flat
+            # The canary value + configured provenance from copy A's
+            # own per-login capture (never the live process settings).
+            assert (
+                re.search(
+                    r"CHAT_MAX_IMAGES_PER_REQUEST</code>.*?"
+                    r'title="7 count"',
+                    content,
+                    re.S,
+                )
+                is not None
+            )
+            assert (
+                re.search(
+                    r"DEFAULT_RATE_LIMIT_REQUESTS_PER_MINUTE</code>.*?"
+                    r'title="99 requests/minute or none"',
+                    content,
+                    re.S,
+                )
+                is not None
+            )
+            assert target not in content
+            assert "postgresql" not in content.lower()
+            shot_t = Path(
+                f"/tmp/slaif-224t-browser-procconfig-{os.getpid()}-{uuid.uuid4().hex[:10]}.png"
+            )
+            page.screenshot(path=str(shot_t))
+            print(f"DEMO_BROWSER_224T_SCREENSHOT={shot_t}")
 
             # --- 224-r: chooser + positive selection against copy A,
             # then copy-B isolation --------------------------------------

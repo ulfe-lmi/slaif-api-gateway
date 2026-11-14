@@ -600,8 +600,11 @@ def test_completion_profiles_fictionalized_and_bodies_never_copied(tmp_path, uma
     (prof / "not-a-profile.txt").write_text(CANARY)
     config = _config(tmp_path, completion_profile_dir=prof)
     capture = dsf.capture_all(config, _settings(), b"seed-1")
-    leaf = capture.leaves[0]
-    assert leaf.logical_name == "profiles/completion-choices.json"
+    leaf = next(
+        leaf_cand
+        for leaf_cand in capture.leaves
+        if leaf_cand.logical_name == "profiles/completion-choices.json"
+    )
     doc = json.loads(leaf.data)
     profiles = doc["profiles"]
     assert len(profiles) == 2
@@ -618,7 +621,13 @@ def test_completion_profiles_fictionalized_and_bodies_never_copied(tmp_path, uma
     # A second copy (different job seed) gets a DIFFERENT fictional
     # mapping: no cross-copy reuse of the first copy's IDs.
     capture2 = dsf.capture_all(config, _settings(), b"seed-2")
-    profiles2 = json.loads(capture2.leaves[0].data)["profiles"]
+    profiles2 = json.loads(
+        next(
+            leaf_cand
+            for leaf_cand in capture2.leaves
+            if leaf_cand.logical_name == "profiles/completion-choices.json"
+        ).data
+    )["profiles"]
     assert set(profiles2).isdisjoint(set(profiles))
     # bindings.json is excluded by the admin loader law.
     assert "bindings" not in capture.source_records["completion_profiles"]["id_map"].values()
@@ -1736,7 +1745,15 @@ def test_capture_sealed_catalog_run_read_only_and_display_not_applicable(
     seed = b"seed-sealed-run"
     capture = dsf.capture_all(config, _settings(), seed)
     assert "catalog" not in capture.not_configured
-    assert len(capture.leaves) == len(sealing.CONTENT_FILES)
+    # 224-t: EVERY capture also carries the required worker-observed
+    # process-configuration projection leaf.
+    assert any(
+        leaf.logical_name == "configuration/process-configuration.json"
+        for leaf in capture.leaves
+    )
+    assert (
+        len(capture.leaves) == len(sealing.CONTENT_FILES) + 1
+    )
 
     # The source custody is byte-for-byte untouched (worker is read-only).
     for name, data in before.items():
@@ -1746,7 +1763,11 @@ def test_capture_sealed_catalog_run_read_only_and_display_not_applicable(
 
     # Every leaf is a sanitized display copy under the demo run id; the
     # original run id and the sealed report never appear in a display leaf.
-    by_name = {leaf.logical_name.rsplit("/", 1)[1]: leaf for leaf in capture.leaves}
+    by_name = {
+        leaf.logical_name.rsplit("/", 1)[1]: leaf
+        for leaf in capture.leaves
+        if leaf.logical_name.startswith("catalog/")
+    }
     assert set(by_name) == set(sealing.CONTENT_FILES)
     demo_run_id = dsf._demo_run_id(seed, "fixture-first-install-001")
     for name, leaf in by_name.items():
@@ -1795,7 +1816,9 @@ def test_upload_artifact_names_never_reach_private_manifest(tmp_path, umask_022)
     seed = b"seed-uploads"
     capture = dsf.capture_all(config, _settings(), seed)
     assert "catalog" not in capture.not_configured
-    assert len(capture.leaves) == 1
+    # 224-t: the required process-configuration leaf joins the
+    # catalog capture.
+    assert len(capture.leaves) == 2
 
     job_dir, _manifest = _seeded_job(tmp_path, config)
     dsf._write_files(job_dir, capture)
@@ -1807,3 +1830,213 @@ def test_upload_artifact_names_never_reach_private_manifest(tmp_path, umask_022)
     # The source artifact is byte-for-byte untouched (read-only capture).
     assert (src_job_dir / original_artifact).read_bytes() == bundle_bytes
 
+
+
+# ---------------------------------------------------------------------------
+# 224-t: the finite worker-observed process-configuration projection
+# ---------------------------------------------------------------------------
+
+
+def test_process_configuration_capture_projects_allowlist_with_provenance() -> None:
+    capture = dsf._Capture(
+        _bare_config(),
+        Settings(
+            CHAT_MAX_IMAGES_PER_REQUEST=7,
+            DEFAULT_RATE_LIMIT_REQUESTS_PER_MINUTE=99,
+        ),
+    )
+    dsf.capture_process_configuration(capture)
+    assert len(capture.leaves) == 1
+    leaf = capture.leaves[0]
+    assert leaf.kind == dsf.KIND_PROCESS_CONFIG
+    assert leaf.logical_name == "configuration/process-configuration.json"
+    assert leaf.source == "process_configuration"
+    assert leaf.source_ref == "configuration:process-configuration"
+    doc = json.loads(leaf.data)
+    assert doc["schema"] == dsf.DEMO_SCHEMA_VERSION
+    assert doc["kind"] == dsf.KIND_PROCESS_CONFIG
+    assert doc["schema_version"] == 1
+    assert len(doc["settings"]) == 45
+    # Canary configured values keep their configured provenance...
+    assert doc["settings"]["CHAT_MAX_IMAGES_PER_REQUEST"] == {
+        "value": 7, "source": "configured"
+    }
+    assert doc["settings"]["DEFAULT_RATE_LIMIT_REQUESTS_PER_MINUTE"] == {
+        "value": 99, "source": "configured"
+    }
+    # ...and untouched names keep the built-in default + provenance.
+    assert doc["settings"]["DEFAULT_MAX_OUTPUT_TOKENS"] == {
+        "value": 1024, "source": "default"
+    }
+    assert doc["settings"]["DEFAULT_RATE_LIMIT_TOKENS_PER_MINUTE"] == {
+        "value": None, "source": "default"
+    }
+    # No free text, no path, no host, no credential-shaped value: the
+    # whole document is the closed 45-name projection.
+    assert set(doc["settings"]) == set(
+        __import__(
+            "slaif_gateway.services.configuration_inspection",
+            fromlist=["CONFIG_INSPECTION_ALLOWLIST"],
+        ).CONFIG_INSPECTION_ALLOWLIST
+    )
+    # The independent verifier law accepts the captured display bytes.
+    dsf._verify_leaf_policy(dsf.KIND_PROCESS_CONFIG, leaf.data, None)
+
+
+def test_process_configuration_capture_fails_closed_on_drift() -> None:
+    # A worker Settings that could not be projected (a monkeypatched
+    # allowlist drift) must fail the capture closed, not publish a
+    # partial projection.
+    from slaif_gateway.services.configuration_inspection import (
+        CONFIG_INSPECTION_ALLOWLIST,
+    )
+
+    capture = dsf._Capture(_bare_config(), Settings())
+    with pytest.raises(ds.DemoSnapshotError):
+        doc = {
+            "display_version": 1,
+            "settings": {
+                name: {"value": 1, "source": "default"}
+                for name in CONFIG_INSPECTION_ALLOWLIST
+            },
+        }
+        doc["settings"]["EVIL_SETTING"] = {"value": 1, "source": "default"}
+        dsf._san_process_configuration(
+            json.dumps(doc, sort_keys=True).encode(), b""
+        )
+    assert capture.leaves == []
+
+
+def test_process_configuration_sanitizer_refuses_drift() -> None:
+    from slaif_gateway.services.configuration_inspection import (
+        CONFIG_INSPECTION_ALLOWLIST,
+    )
+
+    def _base() -> dict[str, object]:
+        s = Settings()
+        return {
+            "display_version": 1,
+            "settings": {
+                name: {"value": getattr(s, name), "source": "default"}
+                for name in sorted(CONFIG_INSPECTION_ALLOWLIST)
+            },
+        }
+
+    def _raw(doc: object) -> bytes:
+        return json.dumps(doc, sort_keys=True, separators=(",", ":")).encode()
+
+    good = _base()
+    assert dsf._san_process_configuration(_raw(good), b"")
+
+    def _with(mutate) -> bytes:
+        doc = json.loads(json.dumps(good))
+        mutate(doc)
+        return _raw(doc)
+
+    cases = [
+        # top-level shape drift
+        lambda d: d.update({"extra": 1}),
+        lambda d: d.pop("settings"),
+        lambda d: d.__setitem__("display_version", 2),
+        # closed name-set drift
+        lambda d: d["settings"].update({"EVIL_SETTING": {"value": 1, "source": "default"}}),  # type: ignore[union-attr]
+        lambda d: d["settings"].pop("HARD_MAX_INPUT_TOKENS"),  # type: ignore[union-attr]
+        # per-entry shape drift
+        lambda d: d["settings"]["HARD_MAX_INPUT_TOKENS"].update({"extra": 1}),  # type: ignore[union-attr]
+        lambda d: d["settings"]["HARD_MAX_INPUT_TOKENS"].__setitem__("value", True),  # type: ignore[union-attr]
+        lambda d: d["settings"]["HARD_MAX_INPUT_TOKENS"].__setitem__("value", -1),  # type: ignore[union-attr]
+        lambda d: d["settings"]["HARD_MAX_INPUT_TOKENS"].__setitem__("value", "128000"),  # type: ignore[union-attr]
+        lambda d: d["settings"]["HARD_MAX_INPUT_TOKENS"].__setitem__("value", 1.5),  # type: ignore[union-attr]
+        lambda d: d["settings"]["HARD_MAX_INPUT_TOKENS"].__setitem__("value", None),  # type: ignore[union-attr]
+        lambda d: d["settings"]["HARD_MAX_INPUT_TOKENS"].__setitem__("source", "env"),  # type: ignore[union-attr]
+        lambda d: d["settings"]["HARD_MAX_INPUT_TOKENS"].__setitem__("source", None),  # type: ignore[union-attr]
+    ]
+    for case in cases:
+        with pytest.raises(ds.DemoSnapshotError):
+            dsf._san_process_configuration(_with(case), b"")
+
+    # A null value is legal ONLY for the three default rate limits.
+    for name in (
+        "DEFAULT_RATE_LIMIT_REQUESTS_PER_MINUTE",
+        "DEFAULT_RATE_LIMIT_TOKENS_PER_MINUTE",
+        "DEFAULT_RATE_LIMIT_CONCURRENT_REQUESTS",
+    ):
+        out = dsf._san_process_configuration(
+            _with(lambda d: d["settings"][name].__setitem__("value", None)),  # type: ignore[union-attr]
+            b"",
+        )
+        assert json.loads(out)["settings"][name]["value"] is None
+
+    # Invalid JSON / non-UTF-8 / duplicate keys fail closed too.
+    with pytest.raises(ds.DemoSnapshotError):
+        dsf._san_process_configuration(b"{", b"")
+    with pytest.raises(ds.DemoSnapshotError):
+        dsf._san_process_configuration(b"\xff\xfe{", b"")
+    dup = (
+        b'{"display_version": 1, "display_version": 1, "settings": {}}'
+    )
+    with pytest.raises(ds.DemoSnapshotError):
+        dsf._san_process_configuration(dup, b"")
+
+
+def test_process_configuration_verifier_law_is_independent() -> None:
+    from slaif_gateway.services.configuration_inspection import (
+        CONFIG_INSPECTION_ALLOWLIST,
+    )
+
+    def _doc(**over: object) -> bytes:
+        s = Settings()
+        doc = {
+            "schema": dsf.DEMO_SCHEMA_VERSION,
+            "kind": dsf.KIND_PROCESS_CONFIG,
+            "schema_version": 1,
+            "settings": {
+                name: {"value": getattr(s, name), "source": "default"}
+                for name in sorted(CONFIG_INSPECTION_ALLOWLIST)
+            },
+        }
+        for key, value in over.items():
+            doc[key] = value
+        return json.dumps(doc, sort_keys=True).encode()
+
+    # Canonical document (with a nullable default rate limit) verifies.
+    doc = json.loads(_doc())
+    doc["settings"]["DEFAULT_RATE_LIMIT_CONCURRENT_REQUESTS"]["value"] = None
+    dsf._verify_leaf_policy(
+        dsf.KIND_PROCESS_CONFIG, json.dumps(doc, sort_keys=True).encode(), None
+    )
+
+    def _bad(mutate) -> None:
+        d = json.loads(_doc())
+        mutate(d)
+        with pytest.raises(ds.DemoSnapshotError):
+            dsf._verify_leaf_policy(
+                dsf.KIND_PROCESS_CONFIG,
+                json.dumps(d, sort_keys=True).encode(),
+                None,
+            )
+
+    _bad(lambda d: d.__setitem__("schema", "other-schema"))
+    _bad(lambda d: d.__setitem__("kind", "job_record"))
+    _bad(lambda d: d.__setitem__("schema_version", 2))
+    _bad(lambda d: d.update({"extra": 1}))
+    _bad(lambda d: d.pop("settings"))
+    _bad(lambda d: d["settings"].update({"EVIL": {"value": 1, "source": "default"}}))
+    _bad(lambda d: d["settings"].pop("HARD_MAX_INPUT_TOKENS"))
+    _bad(lambda d: d["settings"]["HARD_MAX_INPUT_TOKENS"].__setitem__("value", True))
+    _bad(lambda d: d["settings"]["HARD_MAX_INPUT_TOKENS"].__setitem__("value", -1))
+    _bad(lambda d: d["settings"]["HARD_MAX_INPUT_TOKENS"].__setitem__("value", "x"))
+    _bad(lambda d: d["settings"]["HARD_MAX_INPUT_TOKENS"].__setitem__("value", None))
+    _bad(lambda d: d["settings"]["HARD_MAX_INPUT_TOKENS"].__setitem__("source", "live"))
+    _bad(lambda d: d["settings"]["DEFAULT_RATE_LIMIT_REQUESTS_PER_MINUTE"].__setitem__("value", True))
+
+
+def test_process_configuration_capture_all_includes_required_leaf() -> None:
+    # capture_all (the worker's real entry point) must ALWAYS carry the
+    # required projection leaf, even with no configured file sources.
+    config = _bare_config(custody_dir=Path("/nonexistent-custody"))
+    capture = dsf._Capture(config, Settings())
+    capture_process_configuration = dsf.capture_process_configuration
+    capture_process_configuration(capture)
+    names = [leaf.logical_name for leaf in capture.leaves]
+    assert names == ["configuration/process-configuration.json"]

@@ -200,6 +200,11 @@ _DISPLAY_NAME_LAW: dict[str, tuple[re.Pattern[str], ...]] = {
     dsf.KIND_JOB_RECORD: (
         re.compile(rf"^catalog/jobs/{_DEMO_JOB}\.json$"),
     ),
+    # 224-t: the ONE finite worker-observed process-configuration
+    # projection (fixed vocabulary name, no per-copy component).
+    dsf.KIND_PROCESS_CONFIG: (
+        re.compile(r"^configuration/process-configuration\.json$"),
+    ),
     dsf.KIND_BRANDING: (
         re.compile(rf"^branding/{_DEMO_BRAND_SLOT}$"),
     ),

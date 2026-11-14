@@ -8,7 +8,10 @@
     <div>
       <p class="eyebrow">Operations</p>
       <h1 id="proc-config-heading">Process Configuration</h1>
-      <p class="muted">{{ snapshot_scope }} — a finite reviewed allowlist of numeric/boolean settings, profile identities, and module identity. Values are not per-key policy and are not the limits of every worker or the reverse proxy.</p>
+      <p class="muted">{{ snapshot_scope }} — {% if demo_admin %}a finite reviewed allowlist of numeric/boolean settings captured by the snapshot worker (profile and Codex identities are not displayed on this page yet). Values are not per-key policy and are not the limits of every worker or the reverse proxy.{% else %}a finite reviewed allowlist of numeric/boolean settings, profile identities, and module identity. Values are not per-key policy and are not the limits of every worker or the reverse proxy.{% endif %}</p>
+      {%- if demo_admin %}
+      <p class="muted">Demo snapshot: these values were observed by the snapshot worker process at copy time (captured {{ demo_captured_utc }}) and are frozen for this session. This page does not read the live API process's cached settings, profiles or environment, and changing settings after the copy was built does not change this page.</p>
+      {%- endif %}
     </div>
     <div class="header-actions">
       <a class="button-link secondary" href="/admin/operations/">Operations</a>
@@ -22,17 +25,31 @@
   <section class="action-panel" aria-labelledby="proc-config-identity-heading">
     <h2 id="proc-config-identity-heading">Package and deployment identity</h2>
     <dl>
+      {%- if demo_admin %}
+      <dt>Package version (demo web process, live build)</dt><dd><code>{{ package_version }}</code></dd>
+      <dt>Captured at (copy time)</dt><dd>{{ demo_captured_utc }}</dd>
+      <dt>Deployed revision</dt><dd>not recorded in this demo snapshot</dd>
+      <dt>Revision provenance</dt><dd>not recorded in this demo snapshot</dd>
+      {%- else %}
       <dt>Package version</dt><dd><code>{{ package_version }}</code></dd>
       <dt>Deployed revision</dt><dd>{% if deployed_revision %}<code>{{ deployed_revision }}</code>{% else %}not recorded (not declared, not a safe revision value, or withheld){% endif %}</dd>
       <dt>Revision provenance</dt><dd>{% if revision_provenance %}{{ revision_provenance }}{% else %}not recorded{% endif %}</dd>
+      {%- endif %}
       <dt>Restart scope for every listed setting</dt><dd>{{ restart_scope }}</dd>
     </dl>
     <p class="field-help">The revision is operator-declared metadata shown as-is when it is a safe value; this page never inspects Git or the filesystem at request time, and it never arms request capture.</p>
+    {%- if demo_admin %}
+    <p class="field-help">The package version above is the build of the demo web process serving this page (live build identity), not a worker-captured value; the settings table below is the worker's captured projection.</p>
+    {%- endif %}
   </section>
 
   <section class="action-panel" aria-labelledby="proc-config-settings-heading">
+    {%- if demo_admin %}
+    <h2 id="proc-config-settings-heading">Worker-observed settings (45 finite allowlist, captured at copy time)</h2>
+    {%- else %}
     <h2 id="proc-config-settings-heading">API process settings (45 finite allowlist)</h2>
-    <div class="table-wrap" role="region" tabindex="0" aria-label="API process configuration settings">
+    {%- endif %}
+    <div class="table-wrap" role="region" tabindex="0" aria-label="{% if demo_admin %}Worker-observed process configuration settings{% else %}API process configuration settings{% endif %}">
       <table data-sortable>
         <thead>
           <tr>
@@ -65,6 +82,9 @@
 
   <section class="action-panel" aria-labelledby="proc-config-profiles-heading">
     <h2 id="proc-config-profiles-heading">Upstream LLM profiles</h2>
+    {%- if demo_admin %}
+    <p class="muted">The upstream LLM profile identities of this snapshot are captured as sanitized display copies, but they are not displayed on this page yet. The live app-global profiles of this process are never read by the demo page.</p>
+    {%- else %}
     <p class="muted">Startup-validated profile identities only (data content is not rendered). The route selector is the exact version / profile / revision / sha256 object the adapter consumes.</p>
     <div class="table-wrap" role="region" tabindex="0" aria-label="Upstream LLM profiles">
       <table data-sortable>
@@ -97,10 +117,14 @@
         </tbody>
       </table>
     </div>
+    {%- endif %}
   </section>
 
   <section class="action-panel" aria-labelledby="proc-config-codex-heading">
     <h2 id="proc-config-codex-heading">Codex client identity</h2>
+    {%- if demo_admin %}
+    <p class="muted">The Codex client identity is pinned by the snapshot worker in the private custody manifest, but it is not published as display data to this page yet. The live API-process Codex profile snapshot is never read by the demo page.</p>
+    {%- else %}
     {% if codex_facts %}
     <dl>
       <dt>Module ID</dt><dd>{% if codex_facts.module_id %}<code>{{ codex_facts.module_id }}</code>{% else %}not recorded{% endif %}</dd>
@@ -113,6 +137,7 @@
     {% else %}
     <p class="muted">Not recorded: no Codex compatibility profile snapshot is bound to this process.</p>
     {% endif %}
+    {%- endif %}
   </section>
 
   <section class="action-panel" aria-labelledby="proc-config-limits-heading">
