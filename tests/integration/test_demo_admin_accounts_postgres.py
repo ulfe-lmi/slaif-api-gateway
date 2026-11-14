@@ -205,7 +205,9 @@ async def test_migration_created_demo_control_schema_tables_and_no_grants(
     revision = await _scalar(
         owned_pg_url, "SELECT version_num FROM alembic_version"
     )
-    assert revision == "0027_demo_admin_accounts"
+    # Objective 224-a: 0028_demo_web_control supersedes the 0027 head in
+    # the same chain; the 0027 schema/tables/grant law is unchanged.
+    assert revision == "0028_demo_web_control"
 
     schema_exists = await _scalar(
         owned_pg_url,

@@ -42,9 +42,9 @@ def test_alembic_has_exactly_one_head_revision_after_fence_migration() -> None:
 
     heads = script.get_heads()
 
-    # Objective 220: 0027_demo_admin_accounts is the single successor
+    # Objective 224-a: 0028_demo_web_control is the single successor
     # head of the chain (still exactly one head).
-    assert heads == ["0027_demo_admin_accounts"]
+    assert heads == ["0028_demo_web_control"]
 
 
 def test_fence_migration_adds_only_the_fence_foundation_columns() -> None:

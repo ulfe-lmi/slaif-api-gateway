@@ -320,7 +320,18 @@ def test_table_wrappers_are_labeled_and_focusable() -> None:
     # jobs + sealed runs; run warnings, dispositions, price comparisons,
     # and the apply-plan projection).
     # 218-a: +1 for the administrator accounts list scroll region (G17).
-    assert wrappers == 51
+    # 224-k: +1 for the demo catalog snapshot artifact index table scroll
+    # region (labeled "Demo catalog snapshot artifacts", role="region" and
+    # tabindex="0" in demo_catalog_index.html).
+    # 224-m: +1 for the demo catalog run detail captured-artifacts table
+    # scroll region (labeled "Captured run artifacts", role="region" and
+    # tabindex="0" in demo_catalog_run_detail.html).
+    # 224-v: +4 for the demo copy-backed scroll regions: the diagnostics
+    # "Recent copied diagnostic records" table, and the replay scope
+    # "Per-key copied reference aggregates", "Route and model reference
+    # groups" and "Newest copied reference metadata rows" tables (each
+    # role="region", tabindex="0", aria-labeled).
+    assert wrappers == 57
 
 
 def test_templates_css_and_js_reference_no_external_assets() -> None:

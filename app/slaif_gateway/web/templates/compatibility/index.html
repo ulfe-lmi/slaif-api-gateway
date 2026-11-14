@@ -9,6 +9,9 @@
       <p class="eyebrow">Operations</p>
       <h1 id="compatibility-heading">Codex Compatibility</h1>
       <p class="muted">Registered qualification and compatibility data, validated presets, and reviewed per-key migrations. Configuration inspection only: no live client or provider proof.</p>
+      {%- if demo_admin %}
+      <p class="muted">Demo snapshot: the facts on this page are a FROZEN read of this session's verified copy. Compatibility operations are illustrative - the forms and buttons have no effect, no review is signed, nothing is applied, and no compatibility or replay authority is granted. No runnable profile artifact is offered from the copy, and the shipped presets below are package-owned credential-free reference material (not a per-login operator file).</p>
+      {%- endif %}
     </div>
     <div class="header-actions">
       <a class="button-link secondary" href="/admin/operations/">Operations</a>
@@ -79,7 +82,11 @@
     <h2 id="compatibility-startup-heading">API startup data identity</h2>
     <p class="muted">The validated compatibility data snapshot THIS API process adopted at startup (module, data revision, digest, provenance). It is distinct from the qualification profile column above and from the upstream LLM profiles. A configured-file inspection by another process is not API adoption: updating the file requires an operator restart to take effect here.</p>
     {% if startup_profile_facts is none %}
+    {%- if demo_admin %}
+    <p class="muted">The demo web process adopts no API startup compatibility profile. The snapshot worker's pinned Codex client identity is captured in the private custody manifest, but it is not published as display data to this page yet.</p>
+    {%- else %}
     <p class="warning-text">Startup compatibility snapshot unavailable: the API has no validated 0.162 profile loaded. Key data-profile migration to "active" is refused until the API restarts with a valid profile.</p>
+    {%- endif %}
     {% else %}
     <dl>
       {% for key, value in startup_profile_facts.items() %}

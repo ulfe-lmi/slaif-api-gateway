@@ -1,0 +1,103 @@
+{% extends "base.html" %}
+
+{% block title %}Catalog snapshot index - SLAIF API Gateway{% endblock %}
+
+{% block body %}
+<section class="dashboard-shell wide" aria-labelledby="demo-catalog-heading">
+  <header class="dashboard-header">
+    <div>
+      <p class="eyebrow">Catalog snapshot</p>
+      <h1 id="demo-catalog-heading">Catalog snapshot index</h1>
+      <p class="muted">
+        Read-only metadata of the catalog artifacts captured into your
+        private demo copy. Names are remapped display names; source
+        paths, original run/job identifiers, seals, HMAC values and
+        secrets are not part of this index and are never shown. These
+        display copies carry no original seal or apply authority, and
+        they prove nothing about live operator state. Each artifact
+        name links to its sanitized display copy as a forced file
+        download only (never rendered as active content).
+      </p>
+      <p class="muted">
+        File capture was a separate, bounded phase from the database
+        snapshot. Each captured time below belongs to that individual
+        file's capture, not to the database snapshot time.
+      </p>
+    </div>
+    <div class="header-actions">
+      <a class="button-link secondary" href="/admin">Dashboard</a>
+      <a class="button-link secondary" href="/admin/operations/catalog/proposals">Captured proposals</a>
+      <a class="button-link secondary" href="/admin/operations/catalog/collect">Captured runs</a>
+      <a class="button-link secondary" href="/admin/operations/catalog/review">Review</a>
+      <a class="button-link secondary" href="/admin/operations/catalog/export-baseline">Export baseline</a>
+      <a class="button-link secondary" href="/admin/operations/catalog/jobs/">Job records</a>
+      <form method="post" action="/admin/logout">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <button type="submit" class="signout">Sign out</button>
+      </form>
+    </div>
+  </header>
+
+  {% if catalog_rows is none %}
+  <div class="admin-flash admin-flash-error" role="status">{{ unavailable_note }}</div>
+  {% else %}
+  <div class="table-toolbar" aria-label="Catalog snapshot index count">
+    <span class="rows-shown" id="demo-catalog-count">
+      {{ catalog_rows | length | num }} captured catalog artifact{{ "s" if catalog_rows | length != 1 else "" }}
+      in this bounded index (at most {{ index_limit | num }} entries; no
+      completeness claim beyond that bound).
+    </span>
+  </div>
+  <div class="table-wrap" tabindex="0" role="region" aria-label="Demo catalog snapshot artifacts">
+    <table data-sortable>
+      <thead><tr>
+        <th data-ordinal aria-hidden="true">#</th>
+        <th scope="col">Area</th>
+        <th scope="col">Demo ID</th>
+        <th scope="col">Artifact</th>
+        <th scope="col">Kind</th>
+        <th scope="col" class="num" data-sort-type="number">Bytes</th>
+        <th scope="col" data-sort-type="datetime">Captured (UTC)</th>
+      </tr></thead>
+      <tbody>
+      {% for row in catalog_rows %}
+      <tr>
+        <td class="row-ordinal">{{ loop.index }}</td>
+        <td>{{ row.area }}</td>
+        {% if row.area == "runs" %}
+        <td>
+          <a href="/admin/operations/catalog/runs/{{ row.demo_id }}/">
+            <code>{{ row.demo_id }}</code>
+          </a>
+        </td>
+        {% else %}
+        <td><code>{{ row.demo_id }}</code></td>
+        {% endif %}
+        <td>
+          <a href="/admin/operations/catalog/artifact?name={{ row.name | urlencode }}">
+            <code>{{ row.artifact }}</code>
+          </a>
+        </td>
+        <td>{{ row.kind }}</td>
+        <td class="num" data-sort-value="{{ row.byte_count }}">{{ row.byte_count | num }}</td>
+        <td class="nowrap" data-sort-value="{{ row.captured_sort }}">{{ row.captured_utc }}</td>
+      </tr>
+      {% else %}
+      <tr data-no-sort>
+        <td colspan="7" class="empty-state">This copy has no captured catalog artifacts.</td>
+      </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% if not catalog_rows %}
+  <div class="table-toolbar">
+    <p class="muted" role="note">
+      This does not establish whether operator catalog storage was
+      configured.
+    </p>
+  </div>
+  {% endif %}
+  {% endif %}
+</section>
+{% endblock %}

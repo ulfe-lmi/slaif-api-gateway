@@ -60,7 +60,7 @@
   <p class="field-help" id="routes-help-filter">Filters narrow the model route list: within one field, rows match any selected value (OR); different fields combine with AND. Blank fields are unrestricted. Match type is how the route matches requested models (exact, prefix, or glob); Enabled is routing eligibility and Visible controls listing in <code>/v1/models</code>.</p>
 
   <div class="table-toolbar" aria-label="Model routes rows">
-    <span class="rows-shown" id="routes-rows-shown">{{ routes|length }} rows shown</span>
+    <span class="rows-shown" id="routes-rows-shown">{{ rows_shown_label(routes|length) }}</span>
     <label>Rows
       <select name="limit" id="routes-limit" form="routes-filter" aria-describedby="routes-help-rows">
         {% for n in (10, 25, 50, 100, 200) %}

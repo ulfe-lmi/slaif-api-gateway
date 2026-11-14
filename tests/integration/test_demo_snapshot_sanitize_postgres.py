@@ -1062,11 +1062,724 @@ def test_full_chain_promotes_sanitized_copy(san_env: _Env, custody: Path) -> Non
             }
             assert _RC_CANARY_PROFILE not in route_row["capabilities"]
 
-            # alembic_version untouched (descriptive head marker).
+            # alembic_version untouched (descriptive head marker;
+            # objective 224-a moved the single head to 0028).
             head = await conn.fetchval("SELECT version_num FROM alembic_version")
-            assert head == "0027_demo_admin_accounts"
+            assert head == "0028_demo_web_control"
         finally:
             await conn.close()
+
+    asyncio.run(scenario())
+
+
+# ---------------------------------------------------------------------------
+# 224-r: a clone receipt WRITTEN BY THE SUPPORTED CLONE FLOW (208) in the
+# source -> worker-built copy carries the projected receipt with per-copy
+# remapped links (source -> worker -> sanitizer -> verified copy).
+#
+# The positive case reuses the existing clone integration fixture: a
+# login-able admin plus the live guided flow (create key -> review ->
+# apply) run against the SAME owner as the seeded canary key, so the copy
+# also proves the two-keys-of-one-owner U-remap law (repeated FK values
+# keep the same per-copy mapping; the old blanket U-distinctness law was
+# a false positive for exactly this shape). The receipt ground truth is
+# the row the flow itself persisted - not a hand-built seed - and its
+# flow-shape relationships (source public id, target-linked one-time
+# secret) are asserted before the snapshot. Every flow-owned row is
+# removed by exact id-set diff in `finally`, so the shared module seed is
+# left byte-identical.
+# ---------------------------------------------------------------------------
+
+# Children first: every referencing table is deleted before the table it
+# points at (same order prefix as the module seed teardown).
+_FLOW_AFFECTED_TABLES = (
+    "audit_log",
+    "background_jobs",
+    "email_deliveries",
+    "admin_sessions",
+    "one_time_secrets",
+    "gateway_keys",
+    "admin_users",
+)
+
+
+async def _flow_table_ids(conn: asyncpg.Connection, table: str) -> set[str]:
+    return {str(r["id"]) for r in await conn.fetch(f"SELECT id FROM {table}")}
+
+
+async def _flow_delete_ids(
+    conn: asyncpg.Connection, table: str, ids: set[str]
+) -> None:
+    for row_id in sorted(ids):
+        await conn.execute(f"DELETE FROM {table} WHERE id = $1", uuid.UUID(row_id))
+
+
+def test_full_chain_promotes_cloned_receipt_copy(san_env: _Env, custody: Path) -> None:
+    env = san_env
+    config = _config_for(env, custody)
+    ids = env.ids
+
+    async def scenario() -> None:
+        sconn = await _connect(env.source)
+        flow_ids: dict[str, set[str]] = {}
+        flow: dict[str, object] = {}
+        try:
+            # ---- Phase 1: the SUPPORTED clone flow writes the receipt on
+            # the SOURCE (real guided flow; same owner as the canary key).
+            from fastapi.testclient import TestClient
+            from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+            from slaif_gateway.db.repositories.admin_users import AdminUsersRepository
+            from slaif_gateway.main import create_app
+            from slaif_gateway.utils.passwords import hash_admin_password
+
+            from tests.integration.test_admin_key_clone_208_postgres import (
+                ADMIN_PASSWORD,
+                TOKEN_RE,
+                _apply,
+                _create_key,
+                _login,
+                _review,
+                _settings,
+            )
+
+            # Exact cleanup baseline BEFORE any flow-owned row exists.
+            for table in _FLOW_AFFECTED_TABLES:
+                flow_ids[table] = await _flow_table_ids(sconn, table)
+
+            # A login-able admin (the canary admin carries a canary hash).
+            admin: object = None
+            engine = create_async_engine(str(env.source["url"]))
+            factory = async_sessionmaker(engine, expire_on_commit=False)
+            try:
+                async with factory() as session:
+                    async with session.begin():
+                        admin = await AdminUsersRepository(session).create_admin_user(
+                            email=f"clone-flow-{_RUN_TAG}@example.org",
+                            display_name=f"224r Flow Admin {_RUN_TAG}",
+                            password_hash=hash_admin_password(ADMIN_PASSWORD),
+                            role="superadmin",
+                            is_active=True,
+                        )
+            finally:
+                await engine.dispose()
+
+            app = create_app(_settings(str(env.source["url"])))
+            with TestClient(app) as client:
+                _login(client, {"admin_email": str(admin.email)})
+                # Same owner as the seeded canary key: after the clone the
+                # owner has THREE keys (two of them the flow's).
+                _create_key(
+                    client,
+                    owner_id=ids["owner"],
+                    extra={
+                        "reason": "224-r demo clone flow source key",
+                        # The canary seed's single provider row: the create
+                        # form refuses an empty provider selection.
+                        "allowed_providers": PROVIDER,
+                    },
+                )
+                source_ids = await _flow_table_ids(sconn, "gateway_keys")
+                new_source_ids = source_ids - flow_ids["gateway_keys"]
+                assert len(new_source_ids) == 1
+                source2_id = uuid.UUID(next(iter(new_source_ids)))
+
+                review = _review(
+                    client,
+                    source2_id,
+                    validity_mode="duration-from-now",
+                    duration_value="3601",
+                    duration_unit="seconds",
+                    delivery_mode="none",
+                    target_owner_id=str(ids["owner"]),
+                )
+                assert review.status_code == 200, review.text[:800]
+                token_match = TOKEN_RE.search(review.text)
+                assert token_match is not None
+                applied = _apply(
+                    client, source2_id, token_match.group(1), "224-r demo clone flow"
+                )
+                assert applied.status_code == 200, applied.text[:800]
+
+            # Ground truth: the receipt the FLOW persisted on the new
+            # target key (never a hand-built seed).
+            post_ids = await _flow_table_ids(sconn, "gateway_keys")
+            new_target_ids = post_ids - source_ids
+            assert len(new_target_ids) == 1
+            target_id = uuid.UUID(next(iter(new_target_ids)))
+
+            receipt_row = await sconn.fetchrow(
+                "SELECT metadata FROM gateway_keys WHERE id = $1", target_id
+            )
+            receipt = json.loads(receipt_row["metadata"])["clone_receipt"]
+
+            # Flow-shape relationship law (not just UUID/hex shape): the
+            # receipt matches the SOURCE key's real public id, and its
+            # one-time secret is TARGET-linked (a real clone creates a new
+            # secret for the new key), never a source-linked row.
+            source2_pub = await sconn.fetchval(
+                "SELECT public_key_id FROM gateway_keys WHERE id = $1", source2_id
+            )
+            assert receipt["source_gateway_key_id"] == str(source2_id)
+            assert receipt["source_public_key_id"] == source2_pub
+            assert receipt["target_gateway_key_id"] == str(target_id)
+            assert receipt["target_owner_id"] == str(ids["owner"])
+            assert receipt["email_delivery_id"] is None  # delivery mode "none"
+            ots_row = await sconn.fetchrow(
+                "SELECT owner_id, gateway_key_id FROM one_time_secrets "
+                "WHERE id = $1",
+                receipt["one_time_secret_id"],
+            )
+            assert ots_row is not None
+            assert str(ots_row["owner_id"]) == str(ids["owner"])
+            assert str(ots_row["gateway_key_id"]) == str(target_id)
+            assert receipt["validity_mode"] == "duration-from-now"
+            assert receipt["validity_duration_seconds"] == 3601
+            assert receipt["status"] == "created"
+            flow["source2_id"] = source2_id
+            flow["source2_pub"] = source2_pub
+            flow["target_id"] = target_id
+            flow["ots_id"] = uuid.UUID(receipt["one_time_secret_id"])
+
+            # ---- Phase 2: worker snapshot + sanitize (the 222 chain).
+            before = await _run_row_fingerprint(env.source, ids)
+            result = await asyncio.to_thread(ds.run_snapshot_job, config)
+            assert result.state == ds.STATE_RAW_UNVERIFIED, result.failure_code
+            raw_db = result.target_db
+            assert raw_db
+            san_result = await asyncio.to_thread(dsan.sanitize_copies, config)
+            assert san_result.state == "SANITIZED", (
+                san_result.state,
+                san_result.failure_code,
+            )
+            after = await _run_row_fingerprint(env.source, ids)
+            assert after == before, "source DML during receipt sanitization"
+
+            manifests = [
+                ds._read_manifest(job_dir)
+                for job_dir in ds._list_job_dirs(config.custody_dir)
+            ]
+            assert len(manifests) == 1 and manifests[0] is not None
+            seed = manifests[0].job_id.encode("utf-8")
+
+            # ---- Phase 3: verify the copy.
+            conn = await _connect_target_db(env, raw_db)
+            try:
+                # Three keys are copied (canary + flow source + flow
+                # target) and ALL share the one remapped owner: the
+                # two-keys-of-one-owner regression (repeated FK values
+                # keep the same per-copy mapping).
+                assert await _copy_row_count(conn, "gateway_keys") == 3
+                owner_stats = await conn.fetchrow(
+                    "SELECT count(*) AS n, count(DISTINCT owner_id) AS d "
+                    "FROM gateway_keys WHERE owner_id IS NOT NULL"
+                )
+                assert owner_stats["n"] == 3 and owner_stats["d"] == 1
+                expected_owner = dsan.remap_uuid(seed, ids["owner"])
+                owner_rows = await conn.fetchrow(
+                    "SELECT count(*) AS n FROM gateway_keys WHERE owner_id = $1",
+                    expected_owner,
+                )
+                assert owner_rows["n"] == 3
+
+                # Exactly ONE row still carries metadata (the flow
+                # target); the canary key's ordinary metadata and the
+                # flow source key's metadata are cleared to {}.
+                receipt_rows = await conn.fetch(
+                    "SELECT id, metadata FROM gateway_keys "
+                    "WHERE metadata IS NOT NULL AND metadata <> '{}'::jsonb"
+                )
+                assert len(receipt_rows) == 1
+                row = receipt_rows[0]
+                stored_id = str(row["id"])
+                metadata = json.loads(row["metadata"])
+                assert set(metadata) == {"clone_receipt"}
+                r = metadata["clone_receipt"]
+
+                # The containing row IS the remapped flow target, and the
+                # receipt's target id matches it (link consistency).
+                assert stored_id == str(dsan.remap_uuid(seed, target_id))
+                assert r["target_gateway_key_id"] == stored_id
+                # Every identifying UUID is per-copy remapped (link-
+                # preserving, never the raw source value).
+                assert r["source_gateway_key_id"] == str(
+                    dsan.remap_uuid(seed, source2_id)
+                )
+                assert r["target_owner_id"] == str(expected_owner)
+                assert r["one_time_secret_id"] == str(
+                    dsan.remap_uuid(seed, flow["ots_id"])
+                )
+                assert r["email_delivery_id"] is None
+                assert r["target_cohort_id"] is None
+                # The public key id is the string remap of the SOURCE
+                # key's real public id (never the raw value).
+                assert r["source_public_key_id"] == dsan.remap_str_id(
+                    seed, source2_pub
+                )
+                assert r["source_public_key_id"] != source2_pub
+                # Fingerprints: the column-salted 64-hex remaps of the
+                # FLOW's real fingerprints (never the raw digests).
+                assert r["source_fingerprint"] == dsan.remap_hex64(
+                    seed, b"kr_source_fingerprint", receipt["source_fingerprint"]
+                )
+                assert r["policy_fingerprint"] == dsan.remap_hex64(
+                    seed, b"kr_policy_fingerprint", receipt["policy_fingerprint"]
+                )
+                assert r["source_fingerprint"] != r["policy_fingerprint"]
+                # Bounded nonsecret validity members + status preserved.
+                assert r["validity_mode"] == "duration-from-now"
+                assert r["validity_duration_seconds"] == 3601
+                assert r["validity_from"] is None
+                assert r["validity_until"] is None
+                assert r["source_valid_until"] == receipt["source_valid_until"]
+                assert r["status"] == "created"
+                # The one-time secret row in the copy is still TARGET-
+                # linked (remapped links, never dangling, never source-
+                # linked).
+                ots_copy = await conn.fetchrow(
+                    "SELECT owner_id, gateway_key_id FROM one_time_secrets "
+                    "WHERE id = $1",
+                    dsan.remap_uuid(seed, flow["ots_id"]),
+                )
+                assert ots_copy is not None
+                assert str(ots_copy["owner_id"]) == str(expected_owner)
+                assert str(ots_copy["gateway_key_id"]) == stored_id
+                # The raw flow identifiers are gone from the copied keys.
+                for tok in (
+                    source2_pub,
+                    str(source2_id),
+                    str(target_id),
+                    str(flow["ots_id"]),
+                    receipt["source_fingerprint"],
+                ):
+                    n = await conn.fetchval(
+                        "SELECT count(*) FROM gateway_keys AS t "
+                        "WHERE row_to_json(t)::text LIKE '%' || $1 || '%'",
+                        tok,
+                    )
+                    assert int(n) == 0, f"raw flow identifier survived: {tok}"
+                # The canary key's ordinary metadata is cleared to {}.
+                source_row = await conn.fetchrow(
+                    "SELECT metadata FROM gateway_keys WHERE id = $1",
+                    dsan.remap_uuid(seed, ids["key"]),
+                )
+                assert source_row is not None
+                assert json.loads(source_row["metadata"]) == {}
+            finally:
+                await conn.close()
+        finally:
+            # Exact cleanup: remove ONLY the flow-owned rows (id-set diff
+            # against the pre-flow baseline), children first, so the
+            # shared module seed is left byte-identical.
+            for table in _FLOW_AFFECTED_TABLES:
+                baseline = flow_ids.get(table)
+                if baseline is None:
+                    continue
+                try:
+                    current = await _flow_table_ids(sconn, table)
+                except Exception:
+                    continue
+                try:
+                    await _flow_delete_ids(sconn, table, current - baseline)
+                except Exception:
+                    pass
+            await sconn.close()
+
+    asyncio.run(scenario())
+
+
+# ---------------------------------------------------------------------------
+# 224-s: S repeated-actor law and the KR bare-date producer law
+# ---------------------------------------------------------------------------
+
+
+def test_full_chain_promotes_s_repeated_actor_copy(san_env: _Env, custody: Path) -> None:
+    # 224-s: the S verifier's blanket distinctness assumption was a false
+    # positive for naturally repeating text fields. Two catalog applies
+    # by the SAME operator (same operator_actor and db_actor, separate
+    # valid row identities) must let the worker's real copy/sanitize/
+    # verify path PUBLISH the copy and retain two corresponding per-copy
+    # remapped actor values. A distinctness-only or mocked-only proof is
+    # insufficient: this runs the full owned chain on source data.
+    env = san_env
+    config = _config_for(env, custody)
+
+    async def scenario() -> None:
+        sconn = await _connect(env.source)
+        row_ids: list[uuid.UUID] = []
+        actor = f"src-actor-canary-{uuid.uuid4()}"
+        db_actor = f"src-db-actor-canary-{uuid.uuid4()}"
+        baseline = 0
+        try:
+            baseline = int(
+                await sconn.fetchval(
+                    "SELECT count(*) FROM catalog_refresh_applications"
+                )
+            )
+            # Test-owned rows (cleaned in finally): two applies, the SAME
+            # raw actor values, separate row identities and separate
+            # (bundle, plan) identities (the reviewed composite UNIQUE).
+            for i in (1, 2):
+                rid = uuid.uuid4()
+                row_ids.append(rid)
+                await sconn.execute(
+                    """
+                    INSERT INTO catalog_refresh_applications
+                        (id, run_id, bundle_sha256, receipt_hmac_sha256,
+                         plan_sha256, mode, operator_actor, db_actor,
+                         admin_user_id, reason, effective_at, outcome,
+                         created_at)
+                    VALUES ($1, $2, $3, $4, $5, 'refresh', $6, $7, NULL,
+                            $8, $9, 'committed', $9)
+                    """,
+                    rid,
+                    f"srun-{i}-{uuid.uuid4().hex[:16]}",
+                    f"aabbcc{i}{uuid.uuid4().hex}",
+                    f"dd{i}{uuid.uuid4().hex}",
+                    f"ee{i}{uuid.uuid4().hex}",
+                    actor,
+                    db_actor,
+                    f"s-reason-canary-{i}",
+                    _T0,
+                )
+
+            before = await _run_row_fingerprint(env.source, env.ids)
+            result = await asyncio.to_thread(ds.run_snapshot_job, config)
+            assert result.state == ds.STATE_RAW_UNVERIFIED, result.failure_code
+            raw_db = result.target_db
+            assert raw_db
+            # THE DEFECT: under the old blanket S-distinctness law this
+            # publish fails; the per-copy expected-value law publishes.
+            san_result = await asyncio.to_thread(dsan.sanitize_copies, config)
+            assert san_result.state == "SANITIZED", (
+                san_result.state,
+                san_result.failure_code,
+            )
+            after = await _run_row_fingerprint(env.source, env.ids)
+            assert after == before, "source DML during S sanitization"
+
+            manifests = [
+                ds._read_manifest(job_dir)
+                for job_dir in ds._list_job_dirs(config.custody_dir)
+            ]
+            assert len(manifests) == 1 and manifests[0] is not None
+            seed = manifests[0].job_id.encode("utf-8")
+
+            conn = await _connect_target_db(env, raw_db)
+            try:
+                rows = await conn.fetch(
+                    "SELECT id, run_id, operator_actor, db_actor "
+                    "FROM public.catalog_refresh_applications "
+                    "ORDER BY id"
+                )
+                assert len(rows) == baseline + 2
+                expected_actor = dsan.remap_str_id(seed, actor)
+                expected_db = dsan.remap_str_id(seed, db_actor)
+                mine = [
+                    r
+                    for r in rows
+                    if str(r["id"]) in {str(dsan.remap_uuid(seed, rid)) for rid in row_ids}
+                ]
+                assert len(mine) == 2, "both test-owned rows must be copied"
+                # THE LAW: the two applies keep the SAME per-copy
+                # remapped actor values (legitimate repeats retained),
+                # and their row identities are separately remapped.
+                assert all(r["operator_actor"] == expected_actor for r in mine)
+                assert all(r["db_actor"] == expected_db for r in mine)
+                # The seeded canary row is remapped to a DIFFERENT value.
+                others = [r for r in rows if r not in mine]
+                assert all(
+                    r["operator_actor"] != expected_actor for r in others
+                )
+                # Every raw canary token is absent from the copied table.
+                for tok in (actor, db_actor):
+                    n = await conn.fetchval(
+                        "SELECT count(*) FROM public.catalog_refresh_applications AS t "
+                        "WHERE row_to_json(t)::text LIKE '%' || $1 || '%'",
+                        tok,
+                    )
+                    assert int(n) == 0, f"raw S canary survived: {tok}"
+            finally:
+                await conn.close()
+        finally:
+            # Exact cleanup: remove ONLY the test-owned rows.
+            try:
+                if row_ids:
+                    await sconn.execute(
+                        "DELETE FROM catalog_refresh_applications "
+                        "WHERE id = ANY($1::uuid[])",
+                        row_ids,
+                    )
+            except Exception:
+                pass
+            await sconn.close()
+
+    asyncio.run(scenario())
+
+
+# Bare-date absolute window: past relative to the test clock, far enough
+# in the future for the flow's until>now law; the POINT is the bare
+# (date-only) spelling the operator plan text carries.
+_BARE_VALID_FROM = "2026-06-15"
+_BARE_VALID_UNTIL = "2027-02-15"
+
+
+def test_full_chain_promotes_bare_date_receipt_copy(san_env: _Env, custody: Path) -> None:
+    # 224-s: the absolute-mode clone plan text may retain a bare ISO
+    # date in validity_from/validity_until (the plan schema
+    # _iso_string accepts it; _aware_fromiso interprets it as midnight
+    # UTC; attach_clone_receipt persists the plan string). This proves
+    # the FULL chain on owned data: the supported service/CLI clone
+    # path (the same code the Typer CLI executes) writes a bare-date
+    # receipt to the source, the worker copy/sanitize/verify path
+    # PUBLISHES, and the copied receipt preserves the bare dates
+    # VERBATIM (not normalized, not rewritten). The GUI form path is
+    # proven separately (unit) to normalize to a full timestamp, so a
+    # bare date reaches a persisted receipt only through this path.
+    env = san_env
+    config = _config_for(env, custody)
+    ids = env.ids
+
+    async def scenario() -> None:
+        sconn = await _connect(env.source)
+        flow_ids: dict[str, set[str]] = {}
+        try:
+            from sqlalchemy.ext.asyncio import (
+                async_sessionmaker,
+                create_async_engine,
+            )
+
+            from slaif_gateway.db.repositories.audit import AuditRepository
+            from slaif_gateway.db.repositories.cohorts import CohortsRepository
+            from slaif_gateway.db.repositories.email import EmailDeliveriesRepository
+            from slaif_gateway.db.repositories.keys import GatewayKeysRepository
+            from slaif_gateway.db.repositories.one_time_secrets import (
+                OneTimeSecretsRepository,
+            )
+            from slaif_gateway.db.repositories.owners import OwnersRepository
+            from slaif_gateway.db.repositories.routing import ModelRoutesRepository
+            from slaif_gateway.schemas.key_clone import parse_clone_plan_document
+            from slaif_gateway.services.email_delivery_service import (
+                EmailDeliveryService,
+            )
+            from slaif_gateway.services.email_service import EmailService
+            from slaif_gateway.services.key_clone_service import KeyCloneService
+            from slaif_gateway.services.key_service import KeyService
+
+            from tests.integration.test_admin_key_clone_208_postgres import (
+                _create_key,
+                _login,
+                _settings,
+            )
+
+            for table in _FLOW_AFFECTED_TABLES:
+                flow_ids[table] = await _flow_table_ids(sconn, table)
+
+            # A login-able admin (the canary admin carries a canary
+            # hash) - also the audit actor for the service path.
+            from sqlalchemy.ext.asyncio import (
+                async_sessionmaker as _asm,
+                create_async_engine as _cae,
+            )
+
+            from slaif_gateway.db.repositories.admin_users import (
+                AdminUsersRepository,
+            )
+            from slaif_gateway.utils.passwords import hash_admin_password
+
+            from tests.integration.test_admin_key_clone_208_postgres import (
+                ADMIN_PASSWORD,
+            )
+
+            _engine = _cae(str(env.source["url"]))
+            _factory = _asm(_engine, expire_on_commit=False)
+            try:
+                async with _factory() as _session:
+                    async with _session.begin():
+                        admin = await AdminUsersRepository(_session).create_admin_user(
+                            email=f"bare-date-{_RUN_TAG}@example.org",
+                            display_name=f"224s Bare-Date Admin {_RUN_TAG}",
+                            password_hash=hash_admin_password(ADMIN_PASSWORD),
+                            role="superadmin",
+                            is_active=True,
+                        )
+            finally:
+                await _engine.dispose()
+            admin_id = admin.id
+
+            # Fresh standard source key (the shared canary key is not
+            # guaranteed in-window for a 30-day target window).
+            from fastapi.testclient import TestClient
+
+            from slaif_gateway.main import create_app
+
+            app = create_app(_settings(str(env.source["url"])))
+            with TestClient(app) as client:
+                _login(client, {"admin_email": str(admin.email)})
+                _create_key(
+                    client,
+                    owner_id=ids["owner"],
+                    extra={
+                        "reason": "224-s bare-date clone source key",
+                        "allowed_providers": PROVIDER,
+                    },
+                )
+            pre_ids = await _flow_table_ids(sconn, "gateway_keys")
+            new_source_ids = pre_ids - flow_ids["gateway_keys"]
+            assert len(new_source_ids) == 1
+            source_id = uuid.UUID(next(iter(new_source_ids)))
+
+            # THE SERVICE PATH (identical to the Typer CLI clone flow):
+            # build the plan with BARE-DATE absolute window text, then
+            # execute it - no form normalization anywhere in between.
+            settings = _settings(str(env.source["url"]))
+            engine = create_async_engine(str(env.source["url"]))
+            factory = async_sessionmaker(engine, expire_on_commit=False)
+            try:
+                async with factory() as session:
+                    async with session.begin():
+                        keys_repo = GatewayKeysRepository(session)
+                        ots_repo = OneTimeSecretsRepository(session)
+                        audit_repo = AuditRepository(session)
+                        owners_repo = OwnersRepository(session)
+                        key_service = KeyService(
+                            settings=settings,
+                            gateway_keys_repository=keys_repo,
+                            one_time_secrets_repository=ots_repo,
+                            audit_repository=audit_repo,
+                            model_routes_repository=ModelRoutesRepository(session),
+                        )
+                        email_delivery_service = EmailDeliveryService(
+                            settings=settings,
+                            one_time_secrets_repository=ots_repo,
+                            email_deliveries_repository=EmailDeliveriesRepository(
+                                session
+                            ),
+                            gateway_keys_repository=keys_repo,
+                            owners_repository=owners_repo,
+                            audit_repository=audit_repo,
+                            email_service=EmailService(settings),
+                        )
+                        clone_service = KeyCloneService(
+                            settings=settings,
+                            key_service=key_service,
+                            gateway_keys_repository=keys_repo,
+                            owners_repository=OwnersRepository(session),
+                            cohorts_repository=CohortsRepository(session),
+                            email_delivery_service=email_delivery_service,
+                            audit_repository=audit_repo,
+                        )
+                        document = await clone_service.build_plan(
+                            source_gateway_key_id=source_id,
+                            target_owner_id=ids["owner"],
+                            target_cohort_id=None,
+                            validity_mode="absolute",
+                            validity_from=_BARE_VALID_FROM,
+                            validity_until=_BARE_VALID_UNTIL,
+                        )
+                        plan = parse_clone_plan_document(document)
+                        await clone_service.execute_plan(
+                            plan=plan,
+                            reason="224-s bare-date service clone",
+                            actor_admin_id=admin_id,
+                            confirm_external_tool_fenced=False,
+                            create_email_delivery=False,
+                        )
+            finally:
+                await engine.dispose()
+
+            # Ground truth: the receipt the FLOW persisted on the new
+            # target key carries the BARE DATES VERBATIM (the plan
+            # string is not normalized by the supported service path).
+            post_ids = await _flow_table_ids(sconn, "gateway_keys")
+            new_target_ids = post_ids - pre_ids
+            assert len(new_target_ids) == 1
+            target_id = uuid.UUID(next(iter(new_target_ids)))
+            receipt_row = await sconn.fetchrow(
+                "SELECT metadata FROM gateway_keys WHERE id = $1", target_id
+            )
+            receipt = json.loads(receipt_row["metadata"])["clone_receipt"]
+            assert receipt["validity_mode"] == "absolute"
+            assert receipt["validity_from"] == _BARE_VALID_FROM
+            assert receipt["validity_until"] == _BARE_VALID_UNTIL
+            assert receipt["status"] == "created"
+            source_pub = await sconn.fetchval(
+                "SELECT public_key_id FROM gateway_keys WHERE id = $1", source_id
+            )
+
+            before = await _run_row_fingerprint(env.source, ids)
+            result = await asyncio.to_thread(ds.run_snapshot_job, config)
+            assert result.state == ds.STATE_RAW_UNVERIFIED, result.failure_code
+            raw_db = result.target_db
+            assert raw_db
+            # THE DEFECT: under the 224-r grammar this valid receipt
+            # failed the demo login (copy closed); it publishes now.
+            san_result = await asyncio.to_thread(dsan.sanitize_copies, config)
+            assert san_result.state == "SANITIZED", (
+                san_result.state,
+                san_result.failure_code,
+            )
+            after = await _run_row_fingerprint(env.source, ids)
+            assert after == before, "source DML during bare-date sanitization"
+
+            manifests = [
+                ds._read_manifest(job_dir)
+                for job_dir in ds._list_job_dirs(config.custody_dir)
+            ]
+            assert len(manifests) == 1 and manifests[0] is not None
+            seed = manifests[0].job_id.encode("utf-8")
+
+            conn = await _connect_target_db(env, raw_db)
+            try:
+                receipt_rows = await conn.fetch(
+                    "SELECT id, metadata FROM public.gateway_keys "
+                    "WHERE metadata IS NOT NULL AND metadata <> '{}'::jsonb"
+                )
+                assert len(receipt_rows) == 1
+                row = receipt_rows[0]
+                stored_id = str(row["id"])
+                metadata = json.loads(row["metadata"])
+                r = metadata["clone_receipt"]
+                assert stored_id == str(dsan.remap_uuid(seed, target_id))
+                assert r["target_gateway_key_id"] == stored_id
+                assert r["source_gateway_key_id"] == str(
+                    dsan.remap_uuid(seed, source_id)
+                )
+                assert r["target_owner_id"] == str(dsan.remap_uuid(seed, ids["owner"]))
+                assert r["source_public_key_id"] == dsan.remap_str_id(
+                    seed, source_pub
+                )
+                # THE LAW: bare dates preserved VERBATIM (never
+                # normalized to midnight timestamps, never rewritten);
+                # the full source_valid_until stays intact.
+                assert r["validity_mode"] == "absolute"
+                assert r["validity_from"] == _BARE_VALID_FROM
+                assert r["validity_until"] == _BARE_VALID_UNTIL
+                assert r["source_valid_until"] == receipt["source_valid_until"]
+                assert r["status"] == "created"
+                for tok in (source_pub, str(source_id), str(target_id)):
+                    n = await conn.fetchval(
+                        "SELECT count(*) FROM public.gateway_keys AS t "
+                        "WHERE row_to_json(t)::text LIKE '%' || $1 || '%'",
+                        tok,
+                    )
+                    assert int(n) == 0, f"raw flow identifier survived: {tok}"
+            finally:
+                await conn.close()
+        finally:
+            for table in _FLOW_AFFECTED_TABLES:
+                baseline = flow_ids.get(table)
+                if baseline is None:
+                    continue
+                try:
+                    current = await _flow_table_ids(sconn, table)
+                except Exception:
+                    continue
+                try:
+                    await _flow_delete_ids(sconn, table, current - baseline)
+                except Exception:
+                    pass
+            await sconn.close()
 
     asyncio.run(scenario())
 

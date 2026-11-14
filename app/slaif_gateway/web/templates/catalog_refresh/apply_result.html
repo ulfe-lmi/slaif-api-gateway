@@ -22,6 +22,80 @@
     </div>
   </header>
 
+  {%- if demo_admin %}
+  <div class="admin-flash" role="status">
+    <strong>Status at snapshot time:</strong> this page is a frozen
+    HISTORICAL display bound to the captured run
+    <code>{{ demo_apply_run_id }}</code>. It is NOT live
+    authoritative source status, no rollback or finality is inferred
+    beyond the captured facts, and this copy carries no apply
+    authority: the visible control below is a labeled demo no-op
+    that re-reads this same frozen page and changes nothing.
+  </div>
+  <div class="dash-groups">
+    <div class="dash-group">
+      <h2>Apply status (copied committed record)</h2>
+      {%- if demo_apply_records %}
+      <p>
+        A committed application record for this run's sanitized
+        identifier exists in the verified copy. The values below
+        are that copied record as stored at DB snapshot time; the
+        record's times are its OWN historical event times (UTC)
+        and the DB snapshot timestamp itself is not displayed.
+        Bundle/plan/receipt-HMAC identities are not shown in this
+        demo (seal/HMAC receipt authority is never presented).
+        This is historical display, not live authoritative source
+        status.
+      </p>
+      {%- for rec in demo_apply_records %}
+      <div class="dash-group">
+        <h3>Committed record {{ loop.index }} &mdash; {{ rec.outcome or 'committed' }}</h3>
+        <dl>
+          <dt>Run (sanitized)</dt><dd><code>{{ rec.run_id or 'n/a' }}</code></dd>
+          <dt>Mode</dt><dd>{{ rec.mode or 'n/a' }}</dd>
+          <dt>Effective at (record event time)</dt><dd>{{ rec.effective_at or 'n/a' }} (UTC)</dd>
+          <dt>Record created at (record event time)</dt><dd>{{ rec.created_at or 'n/a' }} (UTC)</dd>
+          <dt>Operator actor (sanitized)</dt><dd>{{ rec.operator_actor or 'n/a' }}</dd>
+          <dt>DB actor (sanitized)</dt><dd>{{ rec.db_actor or 'n/a' }}</dd>
+          <dt>Admin user (sanitized)</dt><dd><code>{{ rec.admin_user_id or 'n/a' }}</code></dd>
+        </dl>
+        <p class="muted">
+          Copied counts &mdash; created: providers {{ rec.created_providers | num }},
+          routes {{ rec.created_routes | num }}, pricing {{ rec.created_pricing | num }},
+          fx {{ rec.created_fx | num }}; superseded: pricing
+          {{ rec.superseded_pricing | num }}, fx {{ rec.superseded_fx | num }}.
+        </p>
+      </div>
+      {%- endfor %}
+      {%- else %}
+      <p>
+        Apply status is unknown (unavailable) for this run in this
+        copy: no copied committed application record matches this
+        run's sanitized identifier.
+      </p>
+      <p class="muted" role="note">
+        This is a display limitation of the sanitized snapshot,
+        NOT a statement that the run was never applied or that it
+        was rolled back. Pre-upgrade copies use an older display
+        slug domain that cannot join the copied records, so their
+        status stays unknown here.
+      </p>
+      {%- endif %}
+      {%- if demo_file_captured_at %}
+      <p class="muted" role="note">
+        File capture time (worker snapshot): {{ demo_file_captured_at }}
+        (UTC). It may differ from the copied record's own event
+        times shown above; each is displayed exactly as captured,
+        and neither is live.
+      </p>
+      {%- endif %}
+      <form method="get" action="/admin/operations/catalog/runs/{{ demo_apply_run_id }}/apply-status" class="inline-form">
+        <button type="submit">Check status (demo no-op: re-reads this same frozen snapshot page; nothing changes)</button>
+      </form>
+    </div>
+  </div>
+  {%- else %}
+
   <div class="admin-flash" role="status" aria-live="polite">
     <strong>Status:</strong> {{ apply_status_value }}
   </div>
@@ -85,5 +159,6 @@
       </form>
     </div>
   </div>
+  {%- endif %}
 </section>
 {% endblock %}

@@ -106,6 +106,13 @@ CODE_TARGET_RESTORE_CAP_ELAPSED = "TARGET_RESTORE_CAP_ELAPSED"
 CODE_TARGET_NOT_SEPARATE = "TARGET_NOT_SEPARATE"
 CODE_CLEANUP_FAILED = "CLEANUP_FAILED"
 CODE_UNEXPECTED = "UNEXPECTED"
+#: A new copy was refused BEFORE anything was created: the finite copy
+#: budget is full of protected (published, still-usable) copies and
+#: fail-closed admission prefers refusing over unsafe eviction.
+CODE_SNAPSHOT_BUDGET_FULL = "SNAPSHOT_BUDGET_FULL"
+#: An exact-job selector (224-b worker) addressed a custody job that is
+#: missing, unreadable, inconsistent or not in the expected state.
+CODE_EXACT_COPY_UNAVAILABLE = "EXACT_COPY_UNAVAILABLE"
 #: The restored copy's catalog differs from the reviewed field policy
 #: (unknown table/column/type/extension/constraint): fail closed before
 #: any modification.
@@ -296,6 +303,13 @@ class SnapshotManifest:
     files_verified_at: float | None = None
     files_bytes: int = 0
     files_count: int = 0
+    # Objective 224-b: the private request-to-job ownership association,
+    # written BEFORE the target database is created so a failed or
+    # interrupted worker job is exactly recoverable (the bounded
+    # recovery path finds and removes ONLY this owned job). Private
+    # custody only; never rendered to output. Absent (None) for legacy
+    # operator-run jobs without a bound request.
+    request_id: str | None = None
 
     def to_json(self) -> dict[str, object]:
         return {
@@ -314,6 +328,7 @@ class SnapshotManifest:
             "files_verified_at": self.files_verified_at,
             "files_bytes": self.files_bytes,
             "files_count": self.files_count,
+            "request_id": self.request_id,
         }
 
 
@@ -417,11 +432,17 @@ def _write_manifest(job_dir: Path, manifest: SnapshotManifest) -> None:
     _atomic_write_private(job_dir / _MANIFEST_NAME, (json.dumps(manifest.to_json(), sort_keys=True) + "\n").encode("utf-8"))
 
 
-def _read_manifest(job_dir: Path) -> SnapshotManifest | None:
+def _manifest_from_bytes(raw: bytes) -> SnapshotManifest | None:
+    """Parse ONE private custody manifest from already-held bytes.
+
+    The shared parse law: the SAME field validation whether the bytes
+    came from a pathname read (``_read_manifest``) or from an anchored
+    held-handle read (the 224-b worker-held proof). Malformed input is
+    ``None``.
+    """
     try:
-        raw = (job_dir / _MANIFEST_NAME).read_bytes()
         payload = json.loads(raw.decode("utf-8"))
-    except (OSError, ValueError):
+    except ValueError:
         return None
     if not isinstance(payload, dict) or payload.get("schema_version") != _MANIFEST_SCHEMA_VERSION:
         return None
@@ -461,9 +482,22 @@ def _read_manifest(job_dir: Path) -> SnapshotManifest | None:
             ),
             files_bytes=int(payload.get("files_bytes") or 0),
             files_count=int(payload.get("files_count") or 0),
+            request_id=(
+                str(payload["request_id"])
+                if payload.get("request_id")
+                else None
+            ),
         )
     except (KeyError, TypeError, ValueError):
         return None
+
+
+def _read_manifest(job_dir: Path) -> SnapshotManifest | None:
+    try:
+        raw = (job_dir / _MANIFEST_NAME).read_bytes()
+    except OSError:
+        return None
+    return _manifest_from_bytes(raw)
 
 
 def _list_job_dirs(custody_dir: Path) -> list[Path]:
@@ -1108,6 +1142,10 @@ class DemoSnapshotJobResult:
     failure_code: str | None
     export_bytes: int
     elapsed_ms: int
+    # Internal-only exact job identity (224-b worker handoff): repr=False
+    # so the job id can never leak through a rendered repr; the public
+    # CLI payload deliberately omits it (unchanged safe contract).
+    job_id: str = field(repr=False, default="")
     target_db: str = field(repr=False, default="")
 
 
@@ -1129,6 +1167,13 @@ def _clean_job_files(job_dir: Path) -> bool:
     manifest, a tampered identity, a grammar-violating leaf name, or a
     surviving directory is a cleanup FAILURE: artifacts are retained
     for operator inspection.
+
+    An EXACT-SET PREFLIGHT on the held files fd runs BEFORE any deletion:
+    a foreign entry (anything outside the owned set) causes ZERO removals
+    so the owned manifest and leaves survive for a TRUE retry (the operator
+    removes the foreign entry, then the retry re-cleans); a pre-existing
+    EMPTY directory is a safe partial-cleanup retry and is rmdir'd. Only an
+    exact match of the owned set is cleaned; DB-first ordering is preserved.
     """
     try:
         job_handle = catfs.open_anchored_handle(job_dir)
@@ -1147,6 +1192,30 @@ def _clean_job_files(job_dir: Path) -> bool:
         except OSError:
             return False
         try:
+            # EXACT-SET PREFLIGHT (224-b) BEFORE any deletion: list the
+            # actual entries on the HELD files fd. A foreign entry
+            # (anything not in the owned set) causes ZERO removals and a
+            # fail-closed refusal, so the owned manifest and every owned
+            # leaf survive for a TRUE retry (the operator removes the
+            # foreign entry, then the retry re-cleans). An EMPTY directory
+            # is a safe pre-existing partial cleanup (all owned entries
+            # already removed, only the directory survived): rmdir it. Any
+            # other deviation (partial set, missing/unreadable manifest,
+            # nonempty unknown content) is fail-closed and retained.
+            try:
+                actual_names = set(os.listdir(files_fd))
+            except OSError:
+                return False
+            if not actual_names:
+                # Pre-existing partial cleanup left only the (now empty)
+                # directory. Safe to remove; a same-window repopulate makes
+                # the rmdir fail closed.
+                try:
+                    os.rmdir("files", dir_fd=job_handle.dir_fd)
+                except OSError:
+                    return False
+                job_handle.assert_name_binding(str(job_dir))
+                return True
             try:
                 manifest_raw = catfs.anchored_read_fd(
                     files_fd, _FILES_MANIFEST_NAME, _FILES_MANIFEST_MAX_BYTES
@@ -1186,11 +1255,15 @@ def _clean_job_files(job_dir: Path) -> bool:
                 or not all(_FILES_LEAF_NAME_RE.fullmatch(name) for name in created_names)
             ):
                 return False
+            expected_names = set(created_names) | {_FILES_MANIFEST_NAME}
+            # A foreign entry or a missing owned leaf (partial cleanup) is a
+            # refusal: only an EXACT match of the owned set is cleaned here.
+            if actual_names != expected_names:
+                return False
         finally:
             os.close(files_fd)
-        created_names = created_names + [_FILES_MANIFEST_NAME]
         catfs.cleanup_staged_directory(
-            job_handle.dir_fd, "files", expected_identity, created_names
+            job_handle.dir_fd, "files", expected_identity, sorted(expected_names)
         )
         # Prove absence through the SAME held handle; the helper is
         # best-effort and a surviving directory is a failed cleanup.
@@ -1277,23 +1350,68 @@ def _expire_copies(
     config: DemoSnapshotConfig,
     ops: TargetOps,
     now: float | None = None,
+    reserve_slots: int = 0,
 ) -> int:
     """Expire retained copies past retention and enforce the budget.
 
     Every unpublished copy state (RAW_UNVERIFIED, DB_SANITIZED_UNPUBLISHED
     and DB_AND_FILES_VERIFIED_UNPUBLISHED) counts against retention and
     the finite copy budget: a sanitized-but-unpublished copy is still a
-    private copy holding copy-derived data, and 224 is the only path
-    that ever consumes it.
+    private copy holding copy-derived data, and 224 is the only path that
+    ever consumes it.
+
+    STRUCTURAL verified-copy law (224-b): a
+    ``DB_AND_FILES_VERIFIED_UNPUBLISHED`` copy is NEVER evicted by any
+    generic 221 path - retention expiry, copy-capacity overflow, a bare
+    CLI ``run``/``expire`` invocation, or a concurrent worker's startup
+    pass - regardless of age. Only
+    the exact control-owned cleanup path (224-b ``recover_and_cleanup``,
+    gated by the request state machine and the live-session law) may
+    remove a verified copy. This makes a published (verified-
+    unpublished, session-usable) copy - and a copy between the worker's
+    proof and its publication CAS - immune to generic eviction by
+    construction: no cross-worker or stale-read window can remove a
+    verified copy outside its exact ownership. Verified copies still
+    COUNT against the finite budget (they occupy their slot until exact
+    cleanup); when the budget is full of them, admission fails closed.
+
+    CLEANUP_FAILED capacity (224-c): a job directory in
+    ``CLEANUP_FAILED`` state (a previous removal attempt left surviving
+    custody/target artifacts) OCCUPIES its budget slot and is never
+    generic-evicted either: only the exact recovery path retries its
+    removal. Repeated failed cleanups therefore fill the finite budget
+    and fail-closed admission refuses new copies instead of allowing
+    unbounded surviving artifacts.
+
+    ``reserve_slots`` (224-b): the number of NEW copies this caller is
+    about to create. The overflow computation leaves that many budget
+    slots EMPTY in addition to the slots verified (never-evictable)
+    copies already occupy, so a reserved run can never push the total
+    past the finite cap. The bare ``expire_copies`` path reserves
+    nothing (it creates no copy).
     """
     now = time.time() if now is None else now
     copies = []
+    verified_count = 0
+    blocked_count = 0
     for job_dir in _list_job_dirs(config.custody_dir):
         manifest = _read_manifest(job_dir)
-        if manifest is not None and manifest.state in (
+        if manifest is None:
+            continue
+        # DB_AND_FILES_VERIFIED_UNPUBLISHED is deliberately EXCLUDED
+        # from eviction: verified copies are structurally never
+        # generic-evicted (see the structural law above); they still
+        # occupy their budget slot until exact cleanup, so their count
+        # reduces the capacity available to evictable copies.
+        if manifest.state == STATE_DB_AND_FILES_VERIFIED_UNPUBLISHED:
+            verified_count += 1
+        elif manifest.state == STATE_CLEANUP_FAILED:
+            # Surviving artifacts occupy their slot (224-c capacity
+            # law); the exact recovery path owns the retry.
+            blocked_count += 1
+        elif manifest.state in (
             STATE_RAW_UNVERIFIED,
             STATE_DB_SANITIZED_UNPUBLISHED,
-            STATE_DB_AND_FILES_VERIFIED_UNPUBLISHED,
         ):
             copies.append((manifest.created_at, job_dir, manifest))
     copies.sort(key=lambda item: item[0])
@@ -1303,7 +1421,20 @@ def _expire_copies(
         if (now - item[0]) > config.retention_seconds
     ]
     kept = [item for item in copies if item not in expired]
-    overflow = kept[: max(0, len(kept) - config.max_copies)]
+    # Capacity overflow: oldest evictable (unverified) copies only.
+    # Verified and CLEANUP_FAILED copies (never evictable) occupy
+    # their budget slots, so they reduce the capacity available here;
+    # if evicting every evictable copy cannot reach the budget, stop
+    # short (admission fails closed instead).
+    overflow: list[tuple[float, Path, SnapshotManifest]] = []
+    evictable_capacity = max(
+        0, config.max_copies - verified_count - blocked_count - reserve_slots
+    )
+    remove_count = max(0, len(kept) - evictable_capacity)
+    for item in kept:
+        if len(overflow) >= remove_count:
+            break
+        overflow.append(item)
 
     removed = 0
     for _created, job_dir, manifest in expired + overflow:
@@ -1319,17 +1450,73 @@ def _expire_copies(
     return removed
 
 
+def _copy_budget_refused(
+    config: DemoSnapshotConfig,
+) -> bool:
+    """Fail-closed admission (224-b, 224-c capacity law): refuse a NEW
+    copy rather than exceed the finite cap or evict a never-evictable
+    one (verified or CLEANUP_FAILED).
+
+    A new copy is refused when, after adding it, the finite copy budget
+    would be exceeded AND evicting every eligible (non-protected,
+    unverified) copy could not bring the total back within the budget.
+    Verified copies count against the budget (they occupy their slot
+    until the exact control-owned cleanup removes them), and
+    CLEANUP_FAILED copies with surviving artifacts count as well (the
+    exact recovery path owns their removal retry) - neither can ever
+    be evicted. Nothing is created or modified; the check is a pure
+    read of the custody manifests.
+    """
+    total = 0
+    evictable = 0
+    for job_dir in _list_job_dirs(config.custody_dir):
+        manifest = _read_manifest(job_dir)
+        if manifest is None:
+            continue
+        if manifest.state in (
+            STATE_RAW_UNVERIFIED,
+            STATE_DB_SANITIZED_UNPUBLISHED,
+            STATE_DB_AND_FILES_VERIFIED_UNPUBLISHED,
+            STATE_CLEANUP_FAILED,
+        ):
+            total += 1
+            if manifest.state in (
+                STATE_RAW_UNVERIFIED, STATE_DB_SANITIZED_UNPUBLISHED
+            ):
+                evictable += 1
+    if total + 1 <= config.max_copies:
+        return False
+    return (total + 1 - config.max_copies) > evictable
+
+
 def run_snapshot_job(
     config: DemoSnapshotConfig,
     *,
     cancel_event: threading.Event | None = None,
     ops: TargetOps | None = None,
+    request_id: str | None = None,
 ) -> DemoSnapshotJobResult:
     """Run ONE bounded snapshot job. The complete custody+export+restore path.
 
     Raises ``DemoSnapshotError`` only for pre-job configuration/custody
     failures; every mid-job failure returns a safe result with a finite
     code and leaves no browser-readable artifact.
+
+    Admission (224-b/224-c): verified copies are structurally never
+    generic-evicted and CLEANUP_FAILED copies with surviving artifacts
+    occupy their slots; when the budget is full of never-evictable
+    copies the new job is refused BEFORE creating anything
+    (fail-closed admission, safe ``SNAPSHOT_BUDGET_FULL`` result with
+    no job created). Otherwise expired/overflow evictable copies are
+    removed first and the new copy is admitted only when the post-
+    eviction total stays within the finite cap.
+
+    ``request_id`` (224-b): the bound demo request's identity, recorded
+    in the private custody manifest BEFORE the target database is
+    created - the durable request-to-job ownership association the
+    bounded recovery path uses to find and remove ONLY this owned job
+    when the worker fails or crashes mid-job. ``None`` for legacy
+    operator runs without a bound request.
     """
     _validate_custody_dir(config.custody_dir)
     fence_fd = _acquire_fence(config.custody_dir)
@@ -1343,18 +1530,37 @@ def run_snapshot_job(
             ops = _target_ops(config, workdir=workdir, secrets=secrets)
 
         _recover_interrupted_jobs(config, ops)
-        _expire_copies(config, ops)
+        # Reserve ONE slot for the new copy this run is about to
+        # create, so the post-run total can never exceed the finite
+        # cap (verified and CLEANUP_FAILED copies keep their slots;
+        # the new run gets its own).
+        _expire_copies(
+            config, ops, reserve_slots=1
+        )
+        if _copy_budget_refused(config):
+            # Fail closed: refuse the new copy instead of evicting a
+            # never-evictable copy. No job directory is created.
+            return DemoSnapshotJobResult(
+                state=STATE_FAILED,
+                failure_code=CODE_SNAPSHOT_BUDGET_FULL,
+                export_bytes=0,
+                elapsed_ms=int((time.monotonic() - started) * 1000),
+            )
 
         job_id = f"snap-{uuid.uuid4().hex}"
         target_db = f"{config.target_database_prefix}_{uuid.uuid4().hex[:20]}"
         job_dir = config.custody_dir / job_id
         job_dir.mkdir(mode=0o700)
 
+        # The request binding is durable BEFORE any target-side effect:
+        # a crash after this point still leaves the exact owned job
+        # recoverable from the private custody.
         manifest = SnapshotManifest(
             job_id=job_id,
             state=STATE_RUNNING,
             created_at=time.time(),
             target_db=target_db,
+            request_id=request_id,
         )
         _write_manifest(job_dir, manifest)
 
@@ -1448,6 +1654,7 @@ def run_snapshot_job(
                 failure_code=None,
                 export_bytes=byte_count,
                 elapsed_ms=int((time.monotonic() - started) * 1000),
+                job_id=job_id,
                 target_db=target_db,
             )
         except DemoSnapshotError as exc:
@@ -1471,6 +1678,7 @@ def run_snapshot_job(
                 failure_code=manifest.failure_code,
                 export_bytes=0,
                 elapsed_ms=int((time.monotonic() - started) * 1000),
+                job_id=job_id,
                 target_db=target_db,
             )
         except Exception:
@@ -1494,6 +1702,7 @@ def run_snapshot_job(
                 failure_code=manifest.failure_code,
                 export_bytes=0,
                 elapsed_ms=int((time.monotonic() - started) * 1000),
+                job_id=job_id,
                 target_db=target_db,
             )
     finally:
@@ -1514,8 +1723,16 @@ def recover_interrupted_jobs(config: DemoSnapshotConfig, *, ops: TargetOps | Non
         _release_fence(fence_fd)
 
 
-def expire_copies(config: DemoSnapshotConfig, *, ops: TargetOps | None = None) -> int:
-    """Fenced expiry entry point (CLI ``expire``)."""
+def expire_copies(
+    config: DemoSnapshotConfig,
+    *,
+    ops: TargetOps | None = None,
+) -> int:
+    """Fenced expiry entry point (CLI ``expire``).
+
+    Verified copies and CLEANUP_FAILED copies with surviving artifacts
+    are structurally never evicted; see ``_expire_copies``.
+    """
     _validate_custody_dir(config.custody_dir)
     fence_fd = _acquire_fence(config.custody_dir)
     try:

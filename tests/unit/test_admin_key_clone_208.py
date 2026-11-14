@@ -1214,3 +1214,39 @@ def test_find_clone_receipt_ambiguous_refused() -> None:
                 source_gateway_key_id=source, operation_uuid=operation
             )
         )
+
+
+def test_clone_form_absolute_bare_date_normalized_to_full_timestamp() -> None:
+    # 224-s producer evidence: the GUI clone form is NOT a bare-date
+    # producer. Its absolute-mode dates pass through
+    # _parse_admin_datetime (naive -> UTC) and are re-emitted with
+    # datetime.isoformat(), so a bare ISO date submitted through the
+    # guided form is normalized to a full aware timestamp BEFORE the
+    # plan is built. A bare date therefore reaches a persisted receipt
+    # only through the CLI/service plan-text path (which preserves the
+    # operator string verbatim) - the demo KR law mirrors exactly that.
+    from slaif_gateway.api.admin_key_clone import _parse_clone_validity_form
+
+    out = _parse_clone_validity_form(
+        {
+            "validity_mode": "absolute",
+            "valid_from": "2026-11-20",  # bare date
+            "valid_until": "2027-02-20",  # bare date
+        }
+    )
+    assert out["validity_mode"] == "absolute"
+    assert out["validity_from"] == "2026-11-20T00:00:00+00:00"
+    assert out["validity_until"] == "2027-02-20T00:00:00+00:00"
+    assert out["validity_duration_seconds"] is None
+
+    # A full UTC form stays canonical; the parser never rewrites the
+    # operator's offset (it is normalized to UTC, not truncated).
+    out2 = _parse_clone_validity_form(
+        {
+            "validity_mode": "absolute",
+            "valid_from": "2026-11-20 08:00",
+            "valid_until": "2027-02-20 08:00",
+        }
+    )
+    assert out2["validity_from"] == "2026-11-20T08:00:00+00:00"
+    assert out2["validity_until"] == "2027-02-20T08:00:00+00:00"

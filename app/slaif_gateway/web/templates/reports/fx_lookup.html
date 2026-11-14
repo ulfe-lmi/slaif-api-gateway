@@ -11,6 +11,9 @@
       <p class="eyebrow">Reports / Catalog</p>
       <h1 id="fx-lookup-heading">Effective FX rate lookup</h1>
       <p class="muted">The current effective rate for one explicit base/quote pair at UTC now, from the shared FX rate service.</p>
+      {% if demo_admin %}
+      <p class="warning-text">Demo snapshot: the FX rate rows are snapshot data, and the effective rate is resolved at view time against the snapshot - not at snapshot time.</p>
+      {% endif %}
     </div>
     <div class="header-actions">
       <a class="button-link secondary" href="/admin/fx">FX rates</a>

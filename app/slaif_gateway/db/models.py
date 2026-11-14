@@ -1887,3 +1887,188 @@ class FakeAdminAccountEvent(Base):
         Index("ix_demo_fake_admin_account_events_account_created", "account_id", "created_at"),
         {"schema": "demo_control"},
     )
+
+
+class DemoSnapshotRequest(Base):
+    """Objective 224-a: one durable, finite-state demo snapshot request.
+
+    Lives in the dedicated ``demo_control`` PostgreSQL schema. A row is
+    created (by the future web control path, objective 224-b) after the
+    enabled account / current credential generation checks and is bound to
+    exactly one account UUID and generation. The worker claims it exactly
+    once under row lock within the bounded claim deadline, and records the
+    exact worker job/copy identity ONLY at the independently verified
+    handoff. It never stores a password, bearer, provider secret, raw dump
+    path/body, or arbitrary error text: ``failure_code`` is a safe finite
+    vocabulary.
+
+    State law (enforced by the service + CHECK):
+    pending -> claimed -> verified_unpublished -> cleanup_pending ->
+    cleaned, with failed reachable from pending/claimed and
+    cleanup_pending from verified_unpublished/failed. A crashed worker
+    leaves an inspectable finite state; nothing is ever silently
+    published.
+
+    Copy identity: ``worker_job_id`` (closed ``snap-<32 hex>`` grammar,
+    exactly the 221 SnapshotManifest.job_id) and ``worker_target_db``
+    (closed ``demo_snap_<20 hex>`` target-database name, independently
+    randomized, not derivable from the job id) are worker-owned, null
+    until the verified handoff, and each unique across all requests, so
+    two requests can never bind one copy. ``worker_target_db`` is a
+    name, never a path or DSN; it is the safe publication record the
+    future web path may address after verification (224-b).
+    """
+
+    __tablename__ = "demo_snapshot_requests"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    account_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("demo_control.fake_admin_accounts.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    # The account's credential_generation at request creation; every later
+    # gate rechecks the live account against this fence.
+    credential_generation: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, default=0, server_default=text("0")
+    )
+    # Finite reviewed vocabulary; only the worker role moves the state.
+    # NO Python-side default: the ORM INSERT must omit this column so the
+    # web role's column-limited INSERT (which cannot name ``state``)
+    # succeeds; the DB server_default 'pending' applies and is fetched
+    # back via eager_defaults.
+    state: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("'pending'"))
+    # Safe finite failure code only (null outside 'failed').
+    failure_code: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Exact worker job identity (221 SnapshotManifest.job_id grammar);
+    # null until the verified handoff.
+    worker_job_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Exact copy locator (221 target-database name); worker-owned,
+    # published only at the verified handoff.
+    worker_target_db: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
+    claimed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Bounded claim deadline (the worker lease).
+    deadline_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    # Full snapshot lifetime; sessions may not outlive this.
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    __table_args__ = (
+        CheckConstraint(
+            "state in ('pending', 'claimed', 'verified_unpublished', "
+            "'failed', 'cleanup_pending', 'cleaned')",
+            name="demo_snapshot_requests_state_allowed",
+        ),
+        CheckConstraint(
+            "failure_code is null or failure_code in ('claim_expired', "
+            "'late_completion', 'worker_failed', 'verification_failed', "
+            "'copy_mismatch', 'state_conflict', 'internal_error')",
+            name="demo_snapshot_requests_failure_code_allowed",
+        ),
+        CheckConstraint(
+            "credential_generation >= 0",
+            name="demo_snapshot_requests_generation_nonnegative",
+        ),
+        CheckConstraint(
+            "deadline_at > created_at",
+            name="demo_snapshot_requests_deadline_after_created",
+        ),
+        CheckConstraint(
+            "expires_at > deadline_at",
+            name="demo_snapshot_requests_expires_after_deadline",
+        ),
+        CheckConstraint(
+            "worker_job_id is null or worker_job_id ~ '^snap-[0-9a-f]{32}$'",
+            name="demo_snapshot_requests_worker_job_id_shape",
+        ),
+        CheckConstraint(
+            "worker_target_db is null or worker_target_db ~ '^demo_snap_[0-9a-f]{20}$'",
+            name="demo_snapshot_requests_worker_target_db_shape",
+        ),
+        Index("ix_demo_snapshot_requests_account_created", "account_id", "created_at"),
+        Index("ix_demo_snapshot_requests_state_deadline", "state", "deadline_at"),
+        Index(
+            "uq_demo_snapshot_requests_worker_job_id",
+            "worker_job_id",
+            unique=True,
+            postgresql_where=text("worker_job_id IS NOT NULL"),
+        ),
+        Index(
+            "uq_demo_snapshot_requests_worker_target_db",
+            "worker_target_db",
+            unique=True,
+            postgresql_where=text("worker_target_db IS NOT NULL"),
+        ),
+        {"schema": "demo_control"},
+    )
+
+    # Fetch the DB-side server_default('pending') back on INSERT so the
+    # Python object always carries the authoritative state.
+    __mapper_args__ = {"eager_defaults": True}
+
+
+class DemoWebSession(Base):
+    """Objective 224-a: one demo browser session bound to one copy.
+
+    Stores ONLY the SHA-256 hex hash of a cryptographically random opaque
+    browser token (the raw token is returned exactly once and never
+    persisted, logged, or echoed), the account/generation fence, exactly
+    one verified request/copy binding, and creation/expiry/revocation
+    times. A row can only exist for a verified-unpublished request (the
+    service enforces this); the partial unique index additionally
+    guarantees at most one LIVE session per verified copy, so a reused
+    copy can never carry two concurrent sessions. No live
+    ``admin_users``/``admin_sessions`` row is an authentication authority
+    for fake admins: this table is the only session record the demo web
+    path may rely on.
+    """
+
+    __tablename__ = "demo_web_sessions"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    token_hash: Mapped[str] = mapped_column(Text, nullable=False)
+    account_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("demo_control.fake_admin_accounts.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    credential_generation: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, default=0, server_default=text("0")
+    )
+    request_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("demo_control.demo_snapshot_requests.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    __table_args__ = (
+        CheckConstraint(
+            "token_hash ~ '^[0-9a-f]{64}$'",
+            name="demo_web_sessions_token_hash_shape",
+        ),
+        CheckConstraint(
+            "credential_generation >= 0",
+            name="demo_web_sessions_generation_nonnegative",
+        ),
+        CheckConstraint(
+            "expires_at >= created_at",
+            name="demo_web_sessions_expires_after_created",
+        ),
+        Index(
+            "ix_demo_web_sessions_token_hash",
+            "token_hash",
+            unique=True,
+        ),
+        Index(
+            "uq_demo_web_sessions_one_active_per_request",
+            "request_id",
+            unique=True,
+            postgresql_where=text("revoked_at IS NULL"),
+        ),
+        Index("ix_demo_web_sessions_account_created", "account_id", "created_at"),
+        {"schema": "demo_control"},
+    )

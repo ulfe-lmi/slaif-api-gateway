@@ -1256,6 +1256,435 @@ def test_rc_policy_wiring() -> None:
 
 
 # ---------------------------------------------------------------------------
+# 224-r clone-receipt projection (KR action on gateway_keys.metadata)
+# ---------------------------------------------------------------------------
+
+_KR_SEED = b"kr-seed-224r"
+
+
+def _kr_uuid(label: str) -> str:
+    return str(uuid.uuid5(uuid.NAMESPACE_URL, f"https://slaif.demo.invalid/224r/{label}"))
+
+
+def _kr_valid_receipt() -> dict[str, object]:
+    """A well-formed 208 clone receipt (the EXACT 17 reviewed members)."""
+    return {
+        "source_gateway_key_id": _kr_uuid("src"),
+        "operation_uuid": _kr_uuid("op"),
+        "target_gateway_key_id": _kr_uuid("tgt"),
+        "target_owner_id": _kr_uuid("owner"),
+        "one_time_secret_id": _kr_uuid("ots"),
+        "email_delivery_id": _kr_uuid("email"),
+        "source_fingerprint": "b" * 64,
+        "policy_fingerprint": "c" * 64,
+        "source_public_key_id": "pub_canary_source",
+        "source_valid_until": "2026-09-01T08:00:00+00:00",
+        "target_cohort_id": _kr_uuid("cohort"),
+        "requires_fenced_confirmation": True,
+        "validity_mode": "copy-source-expiry",
+        "validity_duration_seconds": 3600,
+        "validity_from": "2026-06-01T08:00:00+00:00",
+        "validity_until": "2026-09-01T08:00:00+00:00",
+        "status": "created",
+    }
+
+
+def test_kr_policy_wiring() -> None:
+    assert dsan.TABLE_POLICY["gateway_keys"]["metadata"] == dsan.KR
+
+
+def test_kr_projects_well_formed_receipt_remapping_and_preserving() -> None:
+    raw = _kr_valid_receipt()
+    out = dsan._project_clone_receipt(raw, _KR_SEED)
+    # Every identifying UUID is per-copy remapped (never the raw value).
+    for name in ("source_gateway_key_id", "target_gateway_key_id", "target_owner_id",
+                 "one_time_secret_id", "email_delivery_id", "target_cohort_id"):
+        assert out[name] == str(dsan.remap_uuid(_KR_SEED, uuid.UUID(raw[name])))
+        assert out[name] != raw[name]
+    assert out["operation_uuid"] == str(dsan.remap_uuid(_KR_SEED, uuid.UUID(raw["operation_uuid"])))
+    # Public key id -> string remap; fingerprints -> column-salted 64-hex remap.
+    assert out["source_public_key_id"] == dsan.remap_str_id(_KR_SEED, raw["source_public_key_id"])
+    assert re.fullmatch(r"^[0-9a-f]{64}$", out["source_fingerprint"])
+    assert out["source_fingerprint"] == dsan.remap_hex64(_KR_SEED, b"kr_source_fingerprint", raw["source_fingerprint"])
+    assert out["policy_fingerprint"] == dsan.remap_hex64(_KR_SEED, b"kr_policy_fingerprint", raw["policy_fingerprint"])
+    assert out["source_fingerprint"] != out["policy_fingerprint"]
+    assert out["source_fingerprint"] != raw["source_fingerprint"]
+    # The raw public id is gone from the projection.
+    assert "pub_canary_source" not in json.dumps(out)
+    # Bounded nonsecret validity members + status are preserved verbatim.
+    assert out["requires_fenced_confirmation"] is True
+    assert out["validity_mode"] == "copy-source-expiry"
+    assert out["validity_duration_seconds"] == 3600
+    assert out["validity_from"] == raw["validity_from"]
+    assert out["validity_until"] == raw["validity_until"]
+    assert out["source_valid_until"] == raw["source_valid_until"]
+    assert out["status"] == "created"
+    assert set(out) == dsan._KR_ALL_FIELDS
+
+
+def test_kr_metadata_no_receipt_cleared_and_siblings_dropped() -> None:
+    # No receipt member -> cleared to {} (J0-equivalent for ordinary metadata).
+    assert dsan._expected_kr_metadata(json.dumps({"owner": "canary-meta"}), _KR_SEED) == {}
+    assert dsan._project_gateway_key_metadata(json.dumps({"owner": "canary-meta"}), _KR_SEED) == "{}"
+    assert dsan._expected_kr_metadata(json.dumps({}), _KR_SEED) == {}
+    # A receipt plus a canary sibling: ONLY the receipt survives.
+    meta = {"clone_receipt": _kr_valid_receipt(), "canary_secret": "must-not-leak"}
+    out = dsan._expected_kr_metadata(json.dumps(meta), _KR_SEED)
+    assert set(out) == {"clone_receipt"}
+    assert "must-not-leak" not in json.dumps(out)
+    # A non-dict / non-JSON metadata value is treated as no receipt ({}).
+    assert dsan._expected_kr_metadata(json.dumps(["array"]), _KR_SEED) == {}
+
+
+def test_kr_projection_deterministic_and_seed_dependent() -> None:
+    raw = _kr_valid_receipt()
+    a = dsan._project_clone_receipt(raw, b"seed-one")
+    b = dsan._project_clone_receipt(raw, b"seed-one")
+    c = dsan._project_clone_receipt(raw, b"seed-two")
+    assert a == b
+    assert a["source_gateway_key_id"] != c["source_gateway_key_id"]
+    assert a["source_fingerprint"] != c["source_fingerprint"]
+
+
+def test_kr_rejects_malformed_receipts() -> None:
+    def _mutate(fn) -> None:
+        r = _kr_valid_receipt()
+        fn(r)
+        with pytest.raises(ds.DemoSnapshotError):
+            dsan._project_clone_receipt(r, _KR_SEED)
+
+    # unknown / secret-bearing member
+    _mutate(lambda r: r.update({"canary_secret": "x"}))
+    # missing a required member
+    _mutate(lambda r: r.pop("source_gateway_key_id"))
+    # wrong type: uuid as int
+    _mutate(lambda r: r.update({"operation_uuid": 123}))
+    # invalid uuid
+    _mutate(lambda r: r.update({"target_owner_id": "not-a-uuid"}))
+    # invalid 64-hex fingerprint
+    _mutate(lambda r: r.update({"source_fingerprint": "z" * 64}))
+    # wrong validity mode
+    _mutate(lambda r: r.update({"validity_mode": "bogus"}))
+    # wrong status
+    _mutate(lambda r: r.update({"status": "pending"}))
+    # wrong type: fenced as non-bool
+    _mutate(lambda r: r.update({"requires_fenced_confirmation": "yes"}))
+    # wrong type: duration as bool
+    _mutate(lambda r: r.update({"validity_duration_seconds": True}))
+    # a non-dict receipt is malformed
+    with pytest.raises(ds.DemoSnapshotError):
+        dsan._project_clone_receipt("not a dict", _KR_SEED)
+    # optional uuid nulls are allowed and stay null
+    ok = _kr_valid_receipt()
+    ok["email_delivery_id"] = None
+    ok["target_cohort_id"] = None
+    out = dsan._project_clone_receipt(ok, _KR_SEED)
+    assert out["email_delivery_id"] is None
+    assert out["target_cohort_id"] is None
+
+
+def test_kr_validity_strings_producer_law_or_fail_closed() -> None:
+    # 224-s: the per-field law mirrors the ACTUAL producer acceptance
+    # set. Absolute-mode validity_from/validity_until are the
+    # operator's plan text preserved verbatim (any
+    # datetime.fromisoformat-parseable ISO-8601 value, including a bare
+    # ISO date, which the product's own _aware_fromiso interprets as
+    # midnight UTC); source_valid_until is always the flow's
+    # datetime.isoformat() output, so a bare date can never appear
+    # there.
+    for good in (
+        "2026-09-01",  # bare date (CLI/service flow persists it raw)
+        "20260901",  # bare date, compact basic form
+        "2026-09-01T08:00:00+00:00",
+        "2026-09-01T08:00:00.123456+00:00",
+        "2026-09-01T08:00:00+02:00",
+        "2026-09-01T08:00:00Z",
+        "2026-09-01 08:00:00+00:00",  # space separator
+        "2026-09-01T08:00:00",  # naive
+        "2026-09-01T08:00",  # minute precision
+        "20260901T080000+00:00",  # compact datetime
+    ):
+        assert dsan._kr_is_receipt_timestamp(good, allow_bare_date=True) is True
+    # source_valid_until: everything the plan text accepts EXCEPT bare
+    # dates (dashed or compact) - its producer is datetime.isoformat().
+    for good in (
+        "2026-09-01",
+        "20260901",
+        "2026-09-01T08:00:00+00:00",
+        "20260901T080000+00:00",
+    ):
+        is_bare = bool(
+            dsan._KR_BARE_DATE_RE.fullmatch(good)
+            or dsan._KR_BARE_DATE_COMPACT_RE.fullmatch(good)
+        )
+        assert dsan._kr_is_receipt_timestamp(good, allow_bare_date=False) is (not is_bare)
+    # REJECTED by every field: arbitrary free text, padded, blank and
+    # wrong types.
+    for bad in (
+        "not a timestamp",
+        "operator note: extended on request",
+        "2026-09-01T08:00:00+00:00 extra",
+        " 2026-09-01T08:00:00+00:00",  # padded
+        "   ",
+        "",
+        123,
+    ):
+        assert dsan._kr_is_receipt_timestamp(bad, allow_bare_date=True) is False
+        assert dsan._kr_is_receipt_timestamp(bad, allow_bare_date=False) is False
+    # A bare date in the field its producer can never write FAILS THE
+    # COPY CLOSED, with the member name only...
+    r = _kr_valid_receipt()
+    r["source_valid_until"] = "2026-09-01"
+    with pytest.raises(ds.DemoSnapshotError) as excinfo:
+        dsan._project_clone_receipt(r, _KR_SEED)
+    assert "source_valid_until" in str(excinfo.value)
+    # ...as does malformed text in a bare-date-tolerant field (never
+    # silently rewritten; no raw value in the error).
+    r2 = _kr_valid_receipt()
+    r2["validity_from"] = "operator note: extended on request"
+    with pytest.raises(ds.DemoSnapshotError) as excinfo:
+        dsan._project_clone_receipt(r2, _KR_SEED)
+    assert "validity_from" in str(excinfo.value)
+    assert "operator note" not in str(excinfo.value)
+    # Bare dates in the absolute-mode plan text are preserved VERBATIM
+    # (not normalized, not rewritten); full spellings stay intact; None
+    # stays None.
+    bare = _kr_valid_receipt()
+    bare["validity_from"] = "2026-06-01"
+    bare["validity_until"] = "2026-09-01"
+    out = dsan._project_clone_receipt(bare, _KR_SEED)
+    assert out["validity_from"] == "2026-06-01"
+    assert out["validity_until"] == "2026-09-01"
+    assert out["source_valid_until"] == "2026-09-01T08:00:00+00:00"
+    out_full = dsan._project_clone_receipt(_kr_valid_receipt(), _KR_SEED)
+    assert out_full["validity_from"] == "2026-06-01T08:00:00+00:00"
+    assert out_full["validity_until"] == "2026-09-01T08:00:00+00:00"
+    assert out_full["source_valid_until"] == "2026-09-01T08:00:00+00:00"
+    # The independent structural law accepts exactly what the
+    # projection can emit (bare dates only in the plan-text fields)...
+    wrapped = {"clone_receipt": json.loads(json.dumps(out))}
+    assert dsan._is_projected_receipt_metadata(json.dumps(wrapped)) is True
+    ok = {"clone_receipt": json.loads(json.dumps(out))}
+    ok["clone_receipt"]["validity_from"] = None
+    assert dsan._is_projected_receipt_metadata(json.dumps(ok)) is True
+    # ...and rejects values a producer can never write.
+    stored = {"clone_receipt": json.loads(json.dumps(out))}
+    stored["clone_receipt"]["source_valid_until"] = "2026-09-01"
+    assert dsan._is_projected_receipt_metadata(json.dumps(stored)) is False
+    stored2 = {"clone_receipt": json.loads(json.dumps(out))}
+    stored2["clone_receipt"]["validity_from"] = "operator note: extended on request"
+    assert dsan._is_projected_receipt_metadata(json.dumps(stored2)) is False
+
+
+def test_kr_verifier_structural_and_tamper_law() -> None:
+    raw = _kr_valid_receipt()
+    expected = dsan._expected_kr_metadata(json.dumps({"clone_receipt": raw}), _KR_SEED)
+    row_id = uuid.UUID("00000000-0000-0000-0000-000000000000")
+    new_id = str(dsan.remap_uuid(_KR_SEED, row_id))
+    # Independent structural check: the projected receipt passes...
+    assert dsan._is_projected_receipt_metadata(json.dumps(expected)) is True
+    # ...an injected canary member fails...
+    bad = json.loads(json.dumps(expected))
+    bad["canary"] = "leak"
+    assert dsan._is_projected_receipt_metadata(json.dumps(bad)) is False
+    # ...and a wrong-typed member fails.
+    bad2 = json.loads(json.dumps(expected))
+    bad2["clone_receipt"]["requires_fenced_confirmation"] = "yes"
+    assert dsan._is_projected_receipt_metadata(json.dumps(bad2)) is False
+    # The keyed digest proves exact per-row content: an unmutated stored value
+    # matches the pre-state expectation...
+    digest_expected = dsan._kr_digest(_KR_SEED, new_id, dsan._canonical_json(expected))
+    assert dsan._kr_digest(_KR_SEED, new_id, dsan._canonical_json(json.loads(json.dumps(expected)))) == digest_expected
+    # ...a stored RAW (un-remapped) receipt does NOT match the expectation...
+    digest_raw = dsan._kr_digest(_KR_SEED, new_id, dsan._canonical_json({"clone_receipt": raw}))
+    assert digest_raw != digest_expected
+    # ...and an adversarial mutation of ONE projected field breaks it.
+    tampered = json.loads(json.dumps(expected))
+    tampered["clone_receipt"]["source_fingerprint"] = "d" * 64
+    assert dsan._kr_digest(_KR_SEED, new_id, dsan._canonical_json(tampered)) != digest_expected
+    tampered2 = json.loads(json.dumps(expected))
+    tampered2["clone_receipt"]["target_owner_id"] = str(uuid.uuid4())
+    assert dsan._kr_digest(_KR_SEED, new_id, dsan._canonical_json(tampered2)) != digest_expected
+
+
+class _KrFakeConn:
+    def __init__(self, copied_ids: list[uuid.UUID], stored_rows: list[tuple[str, str]]) -> None:
+        self._copied_ids = copied_ids
+        self._stored = stored_rows
+
+    async def fetch(self, sql: str, *args) -> list[dict[str, object]]:
+        if "id::text" in sql:
+            return [{"id": rid, "m": m} for rid, m in self._stored]
+        return [{"id": i} for i in self._copied_ids]
+
+
+def _kr_pre(new_id: str, expected: dict[str, object], seed: bytes) -> dict[str, object]:
+    return {"kr_expected": {new_id: dsan._kr_digest(seed, new_id, dsan._canonical_json(expected))}}
+
+
+def test_kr_verifier_link_consistency_and_set_law() -> None:
+    raw = _kr_valid_receipt()
+    row_id = uuid.UUID("00000000-0000-0000-0000-000000000000")
+    new_id = str(dsan.remap_uuid(_KR_SEED, row_id))
+    expected = dsan._expected_kr_metadata(json.dumps({"clone_receipt": raw}), _KR_SEED)
+    # The pre-state expectation must be keyed by the remapped row id and its
+    # target must equal that id for the link law to hold.
+    expected = dict(expected)
+    expected["clone_receipt"] = dict(expected["clone_receipt"])
+    expected["clone_receipt"]["target_gateway_key_id"] = new_id
+    expected["clone_receipt"]["source_gateway_key_id"] = str(
+        dsan.remap_uuid(_KR_SEED, uuid.UUID(raw["source_gateway_key_id"]))
+    )
+    pre = _kr_pre(new_id, expected, _KR_SEED)
+    copied = [
+        row_id,
+        dsan.remap_uuid(_KR_SEED, uuid.UUID(raw["source_gateway_key_id"])),
+    ]
+
+    # PASS: stored value == expectation, target == row id, source in copied set.
+    conn = _KrFakeConn(copied, [(new_id, json.dumps(expected))])
+    asyncio.run(dsan._verify_clone_receipts(conn, pre, _KR_SEED, time.monotonic() + 60))
+
+    # FAIL: a stored receipt whose target does not match its row id.
+    bad_target = json.loads(json.dumps(expected))
+    bad_target["clone_receipt"]["target_gateway_key_id"] = str(uuid.uuid4())
+    conn = _KrFakeConn(copied, [(new_id, json.dumps(bad_target))])
+    with pytest.raises(ds.DemoSnapshotError):
+        asyncio.run(dsan._verify_clone_receipts(conn, pre, _KR_SEED, time.monotonic() + 60))
+
+    # FAIL: a dangling source link (not a copied gateway_keys.id).
+    bad_source = json.loads(json.dumps(expected))
+    bad_source["clone_receipt"]["source_gateway_key_id"] = str(uuid.uuid4())
+    pre2 = _kr_pre(new_id, bad_source, _KR_SEED)
+    conn = _KrFakeConn(copied, [(new_id, json.dumps(bad_source))])
+    with pytest.raises(ds.DemoSnapshotError):
+        asyncio.run(dsan._verify_clone_receipts(conn, pre2, _KR_SEED, time.monotonic() + 60))
+
+    # FAIL: a stored receipt with no pre-state expectation (extra row).
+    conn = _KrFakeConn(copied, [(str(uuid.uuid4()), json.dumps(expected))])
+    with pytest.raises(ds.DemoSnapshotError):
+        asyncio.run(dsan._verify_clone_receipts(conn, pre, _KR_SEED, time.monotonic() + 60))
+
+
+# ---------------------------------------------------------------------------
+# 224-r U-column per-copy remap law: repeated FK values keep the SAME
+# per-copy mapping; uniqueness is enforced only where the reviewed schema
+# declares it (the old blanket distinctness law was a false positive for
+# two gateway keys of one owner).
+# ---------------------------------------------------------------------------
+
+
+def test_u_column_digest_multiset_law() -> None:
+    seed = b"copy-a"
+    table = "gateway_keys"
+    column = "owner_id"
+    owner_a = uuid.uuid5(uuid.NAMESPACE_URL, "https://slaif.demo.invalid/224r/u-a")
+    owner_b = uuid.uuid5(uuid.NAMESPACE_URL, "https://slaif.demo.invalid/224r/u-b")
+    owner_c = uuid.uuid5(uuid.NAMESPACE_URL, "https://slaif.demo.invalid/224r/u-c")
+    # Two keys of the SAME owner (repeated FK value) + one of another:
+    # the expected multiset carries the same remapped value TWICE.
+    raw = [owner_a, owner_a, owner_b]
+    expected = [str(dsan.remap_uuid(seed, u)) for u in raw]
+    assert expected[0] == expected[1] != expected[2]
+    # Pre-state projection (raw -> expected) and verifier pass (stored
+    # values hashed AS-IS, here stored == expected) must agree,
+    # order-insensitively.
+    assert dsan._u_column_digest(seed, table, column, expected) == dsan._u_column_digest(
+        seed, table, column, list(reversed(expected))
+    )
+    # An un-remapped raw pass-through must NOT match: shape alone cannot
+    # distinguish raw from remapped, the keyed aggregate can.
+    assert dsan._u_column_digest(seed, table, column, [str(u) for u in raw]) != dsan._u_column_digest(
+        seed, table, column, expected
+    )
+    # Multiset-sensitive: dropping one of the two same-owner duplicates
+    # changes it (a raw owner id swapped into one of the two same-owner
+    # rows is detected).
+    assert dsan._u_column_digest(seed, table, column, expected[1:]) != dsan._u_column_digest(
+        seed, table, column, expected
+    )
+    swapped = list(expected)
+    swapped[1] = str(dsan.remap_uuid(seed, owner_c))
+    assert dsan._u_column_digest(seed, table, column, swapped) != dsan._u_column_digest(
+        seed, table, column, expected
+    )
+    # The same column name in a DIFFERENT table has a separate key space.
+    assert dsan._u_column_digest(seed, "owners", "id", expected) != dsan._u_column_digest(
+        seed, table, column, expected
+    )
+    # Per-copy (seed-dependent).
+    assert dsan._u_column_digest(b"copy-b", table, column, expected) != dsan._u_column_digest(
+        seed, table, column, expected
+    )
+
+
+def test_s_column_digest_multiset_law() -> None:
+    # 224-s: the S (string-ID) per-copy value law. Two catalog applies
+    # by the SAME operator (repeated raw values in operator_actor /
+    # db_actor) + one by another: the expected multiset carries the
+    # same remapped value TWICE.
+    seed = b"copy-a"
+    table = "catalog_refresh_applications"
+    column = "operator_actor"
+    actor_a = "src-actor-canary-a"
+    actor_b = "src-actor-canary-b"
+    raw = [actor_a, actor_a, actor_b]
+    expected = [dsan.remap_str_id(seed, v) for v in raw]
+    assert expected[0] == expected[1] != expected[2]
+    # Pre-state projection (raw -> expected) and verifier pass (stored
+    # values hashed AS-IS, here stored == expected) must agree,
+    # order-insensitively.
+    assert dsan._s_column_digest(seed, table, column, expected) == dsan._s_column_digest(
+        seed, table, column, list(reversed(expected))
+    )
+    # An un-remapped raw pass-through must NOT match: the demo pattern
+    # alone cannot distinguish a coincidental match, the keyed
+    # aggregate can.
+    assert dsan._s_column_digest(seed, table, column, raw) != dsan._s_column_digest(
+        seed, table, column, expected
+    )
+    # Multiset-sensitive: dropping one of the two repeated duplicates
+    # changes it (a dropped apply row is detected).
+    assert dsan._s_column_digest(seed, table, column, expected[1:]) != dsan._s_column_digest(
+        seed, table, column, expected
+    )
+    swapped = list(expected)
+    swapped[1] = dsan.remap_str_id(seed, actor_b)
+    assert dsan._s_column_digest(seed, table, column, swapped) != dsan._s_column_digest(
+        seed, table, column, expected
+    )
+    # The same column name in a DIFFERENT table has a separate key
+    # space, and the S key space is separate from the U one.
+    assert dsan._s_column_digest(seed, "catalog_refresh_runs", column, expected) != dsan._s_column_digest(
+        seed, table, column, expected
+    )
+    assert dsan._s_column_digest(seed, table, column, expected) != dsan._u_column_digest(
+        seed, table, column, expected
+    )
+    # Per-copy (seed-dependent).
+    assert dsan._s_column_digest(b"copy-b", table, column, expected) != dsan._s_column_digest(
+        seed, table, column, expected
+    )
+
+
+def test_declared_unique_single_columns_parses_reviewed_law() -> None:
+    constraints = [
+        ("public", "gateway_keys", "gateway_keys_pkey", "p", "PRIMARY KEY (id)"),
+        ("public", "gateway_keys", "uq_fk", "u", "UNIQUE (owner_id)"),
+        ("public", "gateway_keys", "uq_comp", "u", "UNIQUE (owner_id, cohort_id)"),
+        ("public", "gateway_keys", "ck_shape", "c", "CHECK (status = 'active')"),
+        ("public", "quota_reservations", "q_pkey", "p", 'PRIMARY KEY ("id")'),
+    ]
+    out = dsan._declared_unique_single_columns(constraints)
+    # Single-column PK/UNIQUE declared; composite UNIQUE proves no
+    # per-column distinctness and is excluded; non-unique constraints
+    # are ignored.
+    assert out["gateway_keys"] == frozenset({"id", "owner_id"})
+    assert out["quota_reservations"] == frozenset({"id"})
+    assert "owners" not in out
+
+
+# ---------------------------------------------------------------------------
 # Catalog fail-closed gate
 # ---------------------------------------------------------------------------
 
@@ -1727,6 +2156,32 @@ def test_column_violations_h_shape_only_no_global_uniqueness() -> None:
     asyncio.run(
         dsan._column_violations(
             conn, "codex_replay_references", "item_id_hmac", dsan.H, _identity_data()
+        )
+    )
+    assert len(conn.calls) == 1  # exactly the shape count, nothing else
+
+
+def test_column_violations_s_shape_only_repeats_allowed() -> None:
+    # 224-s: the S branch reports ONLY shape violations. The remapped
+    # value matches demo[0-9a-f]{60} (shape alone cannot prove
+    # remapping; the keyed pre-state multiset digest does), and S
+    # columns such as catalog_refresh_applications.operator_actor /
+    # db_actor repeat naturally across applies: the same remapped value
+    # may legitimately recur, so NO distinct-count query may be issued.
+    async def run(bad_shape: int) -> int:
+        conn = _FakeConn(fetchval_results=[bad_shape])
+        return await dsan._column_violations(
+            conn, "catalog_refresh_applications", "operator_actor", dsan.S,
+            _identity_data(),
+        )
+
+    assert asyncio.run(run(2)) == 2
+    assert asyncio.run(run(0)) == 0
+    conn = _FakeConn(fetchval_results=[0])
+    asyncio.run(
+        dsan._column_violations(
+            conn, "catalog_refresh_applications", "operator_actor",
+            dsan.S, _identity_data(),
         )
     )
     assert len(conn.calls) == 1  # exactly the shape count, nothing else

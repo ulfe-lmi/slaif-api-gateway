@@ -22,10 +22,38 @@
     </div>
   </header>
 
+  {%- if demo_admin %}
+  <div class="admin-flash" role="status">
+    <strong>Frozen demo display (no calls, no-op):</strong> this is
+    the operator's pricing-proposal form. In this demo the
+    submission does NOTHING - the server returns a quiet no-op
+    before parsing: no OpenAI call, no discovery key read, no
+    proposal generated, nothing imported. The model and currency
+    choices below come from your verified private copy; the default
+    model is a PACKAGED REFERENCE (the source proposal-model
+    setting was not captured).
+  </div>
+  {%- endif %}
+  {%- set oa_source_help_id = 'oa-pricing-help-source' -%}
+  {%- if demo_admin %}
+  {%- set oa_source_help_id = 'oa-pricing-help-source-demo' -%}
+  {%- endif %}
+
   <section class="action-panel danger-zone" aria-labelledby="openai-assisted-warning-heading">
     <h2 id="openai-assisted-warning-heading">Review Required</h2>
+    {%- if demo_admin %}
+    <p class="warning-text">
+      In this demo nothing is generated or called: the form below
+      is a frozen display of the operator's pricing-proposal
+      workflow. Submitting it does nothing (quiet server no-op
+      before parsing) - no OpenAI call, no discovery key, no
+      proposal, no import.
+    </p>
+    <p class="muted">No discovery key is used or read in this demo; the source deployment's OpenAI assisted settings were not captured. The default model shown is a packaged reference, not the captured source setting.</p>
+    {%- else %}
     <p class="warning-text">{{ warning }}</p>
     <p class="muted">This uses {{ api_key_env_var }} from the server environment. The discovery key value is never shown.</p>
+    {%- endif %}
   </section>
 
   {% if error %}
@@ -38,8 +66,8 @@
     <section class="action-panel" aria-labelledby="openai-assisted-pricing-source-heading">
       <h2 id="openai-assisted-pricing-source-heading">Sources And Scope</h2>
       <div class="form-grid">
-        <label>Pricing source URL<input name="source_url" value="{{ form.source_url }}" autocomplete="off" aria-describedby="oa-pricing-help-source"></label>
-        <label>Models source URL<input name="models_source_url" value="{{ form.models_source_url }}" autocomplete="off" aria-describedby="oa-pricing-help-source"></label>
+        <label>Pricing source URL<input name="source_url" value="{{ form.source_url }}" autocomplete="off" aria-describedby="{{ oa_source_help_id }}"></label>
+        <label>Models source URL<input name="models_source_url" value="{{ form.models_source_url }}" autocomplete="off" aria-describedby="{{ oa_source_help_id }}"></label>
         {{ record_choice(
             "proposal_model", "model", "Proposal model",
             options=choices.proposal_model or none,
@@ -68,7 +96,7 @@
         </label>
         <label>Maximum web calls<input name="max_web_calls" type="number" min="1" max="10" value="{{ form.max_web_calls }}" aria-describedby="oa-pricing-help-scope"></label>
       </div>
-      <p class="field-help" id="oa-pricing-help-source">Public pages fetched during proposal generation. Only the configured visible sources below are accepted; model choices may also come from local routes, pricing, and usage history.</p>
+      <p class="field-help" id="{{ oa_source_help_id }}">{% if demo_admin %}Fixed official public reference pages (displayed only; never fetched in this demo). Model choices come from the verified private copy's routes, pricing, and usage history.{% else %}Public pages fetched during proposal generation. Only the configured visible sources below are accepted; model choices may also come from local routes, pricing, and usage history.{% endif %}</p>
       <p class="field-help" id="oa-pricing-help-scope">Endpoint scope limits which endpoint family the proposal covers; implemented Chat Completions is the only current scope. Maximum web calls bounds the upstream web calls the generation may make (1 to 10).</p>
       <p class="muted small">Visible sources: {% for source_url in source_urls %}<span>{{ source_url }}</span>{% if not loop.last %}, {% endif %}{% endfor %}</p>
     </section>
@@ -97,12 +125,21 @@
           help="Known models from routes, pricing and usage history; typed globs/new values stay editable.",
           help_id="oa-pricing-help-exclude",
       ) }}
+      {%- if demo_admin %}
+      <label class="checkbox-label">
+        <input type="checkbox" name="acknowledge_proposal" value="true" aria-describedby="oa-pricing-help-ack-demo">
+        I understand this is a proposal, not authoritative pricing or route truth.
+      </label>
+      <p class="field-help" id="oa-pricing-help-ack-demo">In this demo the form is a frozen display; the acknowledgment and every other field are browse-only.</p>
+      <p class="muted small">Demo no-op: this submission is a quiet server no-op that does nothing - no generation, no diagnostic, no change.</p>
+      {%- else %}
       <label class="checkbox-label">
         <input type="checkbox" name="acknowledge_proposal" value="true" aria-describedby="oa-pricing-help-ack">
         I understand this is a proposal, not authoritative pricing or route truth.
       </label>
       <p class="field-help" id="oa-pricing-help-ack">Required. The generated proposal is a starting point for review, not authoritative pricing or route truth; nothing is applied until you review it and run the deterministic import preview.</p>
       <p class="muted small">Generation can take up to the configured HTTP timeout. If it fails, use the diagnostic ID and try again later.</p>
+      {%- endif %}
       <button type="submit">Generate pricing proposal</button>
     </section>
   </form>

@@ -36,15 +36,35 @@
   </div>
   {% endif %}
 
+  {% if demo_admin %}
+  <div class="admin-flash" role="status">
+    <strong>Sanitized demo snapshot display:</strong> the form below
+    is an ILLUSTRATIVE demo-only form — live setup (DATABASE_URL) is
+    NOT available to this copy (no configured or unconfigured target
+    is claimed) and submitting has NO effect (no baseline is
+    exported, no database is read or written, no provider or research
+    is called). Captured historical job records for every job family
+    are listed <a href="/admin/operations/catalog/jobs/">on the job
+    records page</a>, frozen at capture time (not live or actionable).
+  </div>
+  {% endif %}
+
   {% if setup.state != 'ready' %}
   <div class="admin-flash" role="status">
     <strong>Unavailable:</strong>
     {% for line in setup.help_lines %}<p>{{ line }}</p>{% endfor %}
   </div>
   {% else %}
+  {% if demo_admin %}
+  <p class="muted">
+    Live setup (DATABASE_URL) is NOT available to this demo copy, so
+    the illustrative export control has no effect.
+  </p>
+  {% else %}
   <p class="muted">
     Database target: {% if live_db_available %}<strong>configured</strong> (the deployment's DATABASE_URL, read-only access only){% else %}<strong>not configured</strong> — the job will be refused honestly{% endif %}.
   </p>
+  {% endif %}
   <form method="post" action="/admin/operations/catalog/export-baseline/submit" class="action-panel" aria-describedby="export-help">
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
     <p class="help" id="export-help">Exports the allowlisted catalog tables (providers, routes, pricing rules, FX rates) into one bounded JSON document stored in operator custody for download. No database writes.</p>

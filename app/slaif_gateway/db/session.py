@@ -58,7 +58,35 @@ def get_sessionmaker(
 
 
 def get_sessionmaker_from_app(request: Request) -> async_sessionmaker[AsyncSession]:
-    """Return the FastAPI lifespan-managed sessionmaker from app state."""
+    """Return the sessionmaker for this request.
+
+    Normal requests: the FastAPI lifespan-managed sessionmaker from
+    app state (unchanged). Demo requests (224-e): the central
+    demo-host gate stored a validated REQUEST-LOCAL sessionmaker on
+    ``request.state`` before the handler ran - it is the only copy
+    binding a demo request may use, and a demo request without it
+    fails closed (no per-visitor app-global factory is ever assigned
+    or consulted).
+    """
+    # 224-e demo host: the standalone demo app carries the fixed
+    # demo_mode marker. On a demo app the request-local, gate-
+    # validated sessionmaker is the ONLY source - the app-global
+    # factory is never consulted, and a demo request without a
+    # validated state fails closed even if a global factory were
+    # accidentally present. Normal apps never set the marker.
+    if getattr(request.app.state, "demo_mode", False) is True:
+        demo_state = getattr(request.state, "demo_admin", None)
+        session_factory = (
+            getattr(demo_state, "sessionmaker", None)
+            if demo_state is not None
+            else None
+        )
+        if session_factory is None:
+            raise RuntimeError(
+                "Database sessionmaker is not available on the demo "
+                "request state."
+            )
+        return session_factory
     session_factory = getattr(request.app.state, "db_sessionmaker", None)
     if session_factory is None:
         raise RuntimeError("Database sessionmaker is not available on application state.")

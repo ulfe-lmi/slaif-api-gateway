@@ -229,6 +229,15 @@ Interpretation:
 - `NNN-a` = initial execution round for objective `NNN`; **create a new PR**;
 - `NNN-b` through `NNN-z` = follow-up execution rounds for the same objective; **amend the same PR**.
 
+### One-time human-authorized exception (2026-11-14)
+
+The human maintainer explicitly approved, for objective 224 ONLY, the
+single exceptional identifier `224-aa` (the CI-repair round on the
+existing PR). This is a one-time, human-authorized exception to the
+`NNN-a`..`NNN-z` shape: it does NOT authorize any other two-letter
+suffix (`224-ab` and the like remain invalid) and does not change the
+identifier law for future objectives.
+
 ### Hard invariant: one numeric objective = one PR
 
 For objective `013`:

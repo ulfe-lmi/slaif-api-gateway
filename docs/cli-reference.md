@@ -1032,8 +1032,18 @@ Bounded private demo PostgreSQL snapshot custody. Default OFF; every
 Configuration → Demo Snapshot Worker and `docs/demo-admin.md`). Output is
 a fixed safe vocabulary (state, finite failure code, export bytes,
 elapsed ms, copy count) and never contains a database name, DSN,
-password or row content. The demo is not usable end-to-end until stages
-222/223 (masking/capture) and 224 (login/GUI binding) complete.
+password or row content. Stages 222/223 (masking/capture), the 224-b
+worker handoff (including the 224-d exact verified-copy reader
+publication grant, which the `process-request` command performs
+automatically after the combined 222+223 proof) and the 224-c browser
+entry (standalone `/fakeadmin` process, now with the 224-d read-only
+copy preview, the 224-e/224-f db-backed admin sections and the
+224-g metadata-only files preview) are implemented; the demo is
+still not usable end-to-end until the later 224 suffixes land the
+copy-backed GUI panels. 224-d/224-e/224-f/224-g add NO new CLI
+commands: the 224-g target-only display publication happens
+automatically inside `process-request` (worker-only) between the
+combined 222+223 proof and the verified handoff.
 
 ```bash
 # One bounded snapshot job (create + dump + restore into a unique raw copy)
@@ -1052,6 +1062,14 @@ slaif-gateway demo-snapshot-worker sanitize [--json]
 # Capture, sanitize + independently verify every 222 copy's display
 # files (objective 223); idempotent: file-verified copies are skipped
 slaif-gateway demo-snapshot-worker files [--json]
+
+# Process ONE exact demo snapshot request end-to-end (objective 224-b,
+# worker-only): claim, ONE fresh 221 copy, 222 + 223 for THAT copy,
+# worker-held proof, verified handoff
+slaif-gateway demo-snapshot-worker process-request REQUEST_ID [--json]
+
+# Bounded recovery/cleanup (objective 224-b, worker-only, schedulable)
+slaif-gateway demo-snapshot-worker cleanup [--limit N] [--json]
 ```
 
 Success exits 0 with `state: RAW_UNVERIFIED`; every failure class exits
@@ -1085,6 +1103,38 @@ per-copy codes remain in the private custody manifests)
 `UNEXPECTED`). Output is the same fixed safe vocabulary: state, code,
 copy counts, elapsed milliseconds — never a file path outside the
 operator's custody, a database name, or raw content.
+
+### 224-b worker handoff commands
+
+`demo-snapshot-worker process-request REQUEST_ID` processes exactly one
+`demo_snapshot_requests` row (worker role): it claims the pending
+request, creates ONE fresh 221 raw copy for it (writing the private
+request association into the custody manifest before the target
+database exists), sanitizes and file-captures THAT copy only, re-reads
+and re-digests the worker-held artifacts as proof, and records the
+verified handoff. It exits 0 with `state: verified_unpublished` only on
+full success; a refused claim exits 1 with `state: claim_refused`, and
+any pipeline, proof or handoff failure exits 1 with `state: failed` and
+a safe finite `code` (`worker_failed`, `internal_error`, the 221/222/223
+safe codes, or a 224-a control code such as `web_state_conflict`).
+`REQUEST_ID` must be a valid UUID (invalid input exits 1 with
+`code: WEB_WORKER_MISCONFIGURED`).
+
+`demo-snapshot-worker cleanup [--limit N]` runs the bounded recovery
+pass: it reaps stuck pending/claimed rows, marks failed and
+session-released verified rows `cleanup_pending`, then for each
+`cleanup_pending` row drops ONLY its bound target database and removes
+ONLY its owned custody leaves before marking it `cleaned`. Retained
+rows (cleanup refused or failed) stay inspectable for retry and are
+counted, never deleted or silently marked cleaned. Both commands
+require the separate worker-control credential configuration (see
+Configuration → Demo web worker control connection) and NEVER use the
+owner `DATABASE_URL`.
+
+Both commands emit the same fixed safe vocabulary as the other worker
+commands: state, finite failure code, counts, elapsed milliseconds —
+never a job id, a target database name, a custody path, a DSN, a
+password or row content.
 
 ## Codex and diagnostics
 
@@ -1488,10 +1538,16 @@ report. Full contract:
 fake-admin tables (see [demo-admin.md](demo-admin.md) and the
 [database schema](database-schema.md), sections 5.26/5.27). This is a
 foundation stage: the default live gateway has NO fake-admin login route,
-`/fakeadmin/login` remains 404, and no HTTP endpoint can create, reset,
-enable, disable, or list fake-admin credentials. The full demonstration
-feature (fresh source snapshots, wait page, identity masking, silent
-no-op actions, logout/expiry cleanup) is a later objective.
+`/fakeadmin/login` remains 404 on the normal gateway, and no HTTP
+endpoint can create, reset, enable, disable, or list fake-admin
+credentials. The demo web entry (objectives 224-c/224-d) is a SEPARATE
+standalone ASGI process serving `/fakeadmin` on a dedicated demo host
+(see [demo-admin.md](demo-admin.md), Demo web entry and Demo verified
+copy reader) — it is not a route of this gateway. 224-d adds the
+read-only copy preview to that process (bounded counts from the
+session's own verified copy under the SELECT-only reader role); the
+remaining demonstration features (full copy-backed GUI browsing,
+identity-masked reads, silent no-op actions) are later 224 suffixes.
 
 ```text
 slaif-gateway demo-admin create <username> --reason <1..512 chars>

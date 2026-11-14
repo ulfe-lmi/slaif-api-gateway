@@ -486,6 +486,15 @@ class Settings(BaseSettings):
     DEMO_SNAPSHOT_TARGET_HOST: str = ""
     DEMO_SNAPSHOT_TARGET_PORT: int = 5432
     DEMO_SNAPSHOT_TARGET_USER: str = ""
+    # Objective 224-d: closed-name identifier of the operator-created STATIC
+    # target-copy reader login role (its own password, owned by the operator;
+    # nothing here creates roles or grants). The snapshot worker needs ONLY
+    # this name to grant that role access to ONE fully verified disposable
+    # copy after the combined 222+223 proof; the demo web process receives
+    # the reader role's connection separately (DEMO_WEB_COPY_* environment,
+    # standalone app only). Default empty: the worker fails closed (no
+    # grant, no publication) when missing or malformed.
+    DEMO_SNAPSHOT_TARGET_READER_ROLE: str = ""
     # Restrictive secret file (0600) read by the PG client tools. Passwords
     # are never passed via argv or rendered to logs/output.
     DEMO_SNAPSHOT_PGPASSFILE: str = ""
@@ -515,6 +524,21 @@ class Settings(BaseSettings):
     # Hard elapsed-time cap covering capture, sanitization, writes and
     # the independent read-only verification for one job.
     DEMO_SNAPSHOT_FILES_MAX_ELAPSED_SECONDS: int = 300
+
+    # -- private demo web worker control connection (objective 224-b; default OFF)
+    # The per-login exact worker reaches the demo_control tables through its
+    # OWN restricted worker-role credential, NEVER the owner DATABASE_URL.
+    # The operator creates the role and applies the reviewed 224-a grant
+    # matrix first (docs/demo-admin.md); nothing here creates roles.
+    # Validation is feature-local in the 224-b worker config builder, so an
+    # ordinary demo-disabled gateway never fails to start because of an
+    # optional demo setting. The password is an operator-supplied
+    # environment value and is never rendered to logs/output.
+    DEMO_WEB_WORKER_CONTROL_HOST: str = ""
+    DEMO_WEB_WORKER_CONTROL_PORT: int = 5432
+    DEMO_WEB_WORKER_CONTROL_DATABASE: str = ""
+    DEMO_WEB_WORKER_CONTROL_USER: str = ""
+    DEMO_WEB_WORKER_CONTROL_PASSWORD: str = ""
 
     model_config = SettingsConfigDict(env_prefix="", case_sensitive=False)
 

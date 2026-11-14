@@ -21,6 +21,18 @@
     </div>
   </header>
 
+  {%- if demo_admin %}
+  <div class="admin-flash" role="status">
+    <strong>Sanitized demo snapshot display:</strong> the retained
+    references shown are the FROZEN copied rows of this session's
+    private copy (evaluated at view time against the frozen data).
+    Inspect, preview and apply have NO effect in this demo: the normal
+    forms are quiet server-side no-ops, no extension is ever applied,
+    no audit entry is written, and no HMAC secret availability is shown
+    or implied.
+  </div>
+  {%- endif %}
+
   <section class="action-panel" aria-labelledby="replay-about-heading">
     <h2 id="replay-about-heading">What this manages</h2>
     <p>Retained Codex replay references are short-lived, same-key replay pointers with stored
@@ -28,13 +40,29 @@
     expiry of eligible references to <em>original creation time + the selected lifetime</em>; it
     never shortens, recreates, or transfers a reference, and it never restores unusable
     material, grants replay access, or changes any other key state.</p>
+    {%- if demo_admin %}
+    <p class="muted">The demo summary shows copied reference counts and safe metadata only.
+    HMAC maintenance eligibility is NOT shown: the demo process never reads HMAC secrets, and
+    nothing here implies replay access, preview, apply, or any extension.</p>
+    {%- else %}
     <p class="muted">HMAC maintenance eligibility means the stored HMAC version has a configured
     secret available. It does not verify the underlying material, and replay use still requires
     the normal runtime authorization, route, and policy checks.</p>
+    {%- endif %}
   </section>
 
   <section class="action-panel" aria-labelledby="replay-scopes-heading">
     <h2 id="replay-scopes-heading">Choose exactly one scope</h2>
+    {%- if demo_admin %}
+    <p class="muted">There is no implicit "all active keys" default: the third option is an
+    explicit choice you make from this page. All scopes read the copied rows of this session's
+    verified copy only.</p>
+    <ul>
+      <li><strong>One existing key</strong> - <a href="/admin/keys">open the searchable (copied) key list</a>; the scope page for one copied key is <code>/admin/operations/replay-maintenance/key/&lt;canonical-uuid&gt;</code>.</li>
+      <li><strong>One cohort</strong> - <a href="/admin/cohorts">open the searchable (copied) cohort list</a>; the scope page for one copied cohort is <code>/admin/operations/replay-maintenance/cohort/&lt;canonical-uuid&gt;</code>.</li>
+      <li><strong>Every active key (explicit scope)</strong> - <a href="/admin/operations/replay-maintenance/all-active">inspect every copied key currently in the active state</a>.</li>
+    </ul>
+    {%- else %}
     <p class="muted">There is no implicit "all active keys" default: the third option is an
     explicit choice you make from this page.</p>
     <div class="table-wrap" role="region" tabindex="0" aria-label="Replay maintenance scopes">
@@ -61,10 +89,21 @@
         </tbody>
       </table>
     </div>
+    {%- endif %}
   </section>
 
   <section class="action-panel" aria-labelledby="replay-limits-heading">
     <h2 id="replay-limits-heading">Bounded by design</h2>
+    {%- if demo_admin %}
+    <p class="muted">The demo summary is bounded: at most {{ 1000 | num }} selected copied keys
+    (a larger scope refuses instead of truncating), route/model groups at most
+    {{ 100 | num }} rows with explicit truncation metadata, and the
+    {{ 100 | num }} newest safe metadata rows per scope. The worker-captured configured TTL is
+    {% if demo_ttl_available %}{{ demo_ttl_seconds | num }} seconds (worker-observed at copy
+    time){% else %}unavailable (not recorded in this demo snapshot){% endif %}. The inspect,
+    preview and apply forms on the scope pages are quiet no-ops here: no extension lifetime
+    is ever applied.</p>
+    {%- else %}
     <p class="muted">A single operation inspects at most {{ 50000 | num }} retained references
     across at most {{ 1000 | num }} selected keys; exceeding a ceiling refuses the operation
     instead of silently truncating the scope. Route/model groups display at most
@@ -72,6 +111,7 @@
     {{ 1 | num }}..{{ 31536000 | num }} seconds total from each reference's original
     creation; blank uses this deployment's configured default ({{ configured_ttl_seconds | num }}
     seconds).</p>
+    {%- endif %}
   </section>
 </section>
 {% endblock %}

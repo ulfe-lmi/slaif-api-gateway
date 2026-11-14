@@ -12,7 +12,7 @@
       <p class="muted signed-in">Signed in as <strong>{{ admin.display_name }}</strong></p>
     </div>
     <div class="header-actions">
-      <a class="button-link secondary" href="/admin/operations">Operations</a>
+      {% if not demo_admin %}<a class="button-link secondary" href="/admin/operations">Operations</a>{% endif %}
       <a class="button-link secondary" href="/admin">Dashboard</a>
       <form method="post" action="/admin/logout">
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">

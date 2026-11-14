@@ -26,6 +26,16 @@
     <p class="muted">Cost proposals are SLAIF local accounting assumptions, not invoice-grade provider guarantees. Admins must review and narrow participant policies before issuing keys.</p>
   </section>
 
+  {% if demo_admin %}
+  <div class="admin-flash" role="status">
+    <strong>Sanitized demo snapshot display:</strong> the source key
+    data on this page is a copy frozen at snapshot time. The preview
+    form below is ILLUSTRATIVE — submitting has NO effect (no
+    calibration preview, key template, participant key, route, or
+    pricing is created) and no live configuration is read.
+  </div>
+  {% endif %}
+
   {% if error %}
   <div class="admin-flash admin-flash-error" role="alert">
     <p>{{ error }}</p>

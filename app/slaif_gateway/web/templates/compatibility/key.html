@@ -9,6 +9,9 @@
       <p class="eyebrow">Operations / Codex Compatibility</p>
       <h1 id="compat-key-heading">Key compatibility binding</h1>
       <p class="muted">Inspect this key's current Codex compatibility and review an approved migration.</p>
+      {%- if demo_admin %}
+      <p class="muted">Demo snapshot: the key binding shown is a FROZEN read of this session's verified copy. Compatibility operations are illustrative - the form has no effect: submitting it changes nothing, signs no review, applies nothing, and no compatibility or replay authority is granted.</p>
+      {%- endif %}
     </div>
     <div class="header-actions">
       <a class="button-link secondary" href="/admin/operations/compatibility/">Compatibility</a>

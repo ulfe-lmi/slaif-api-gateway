@@ -46,7 +46,8 @@
       </div>
       <label>Paste CSV, JSON, or TSV<textarea name="import_text" rows="14" spellcheck="false" aria-describedby="pricing-import-preview-help">{{ form['import_text'] }}</textarea></label>
       <p class="muted small" id="pricing-import-preview-help">Format is Auto (detects CSV, JSON, or TSV) or an explicit choice. The source label tags the batch. Use either the uploaded file or the pasted content, not both; the preview validates in memory and stores nothing. Maximum {{ settings.PRICING_IMPORT_MAX_BYTES }} bytes and {{ settings.PRICING_IMPORT_MAX_ROWS }} rows. Money fields must be decimal strings.</p>
-      <button type="submit">Preview import</button>
+{% if demo_admin %}      <p class="warning-text">Demo read-only preview: submitting this form changes nothing in the snapshot.</p>
+{% endif %}      <button type="submit">Preview import</button>
     </section>
   </form>
 

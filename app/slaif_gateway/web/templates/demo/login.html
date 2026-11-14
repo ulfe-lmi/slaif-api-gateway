@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Demo Admin Login</title>
+  <link rel="stylesheet" href="/fakeadmin/static/css/admin.css">
+</head>
+<body>
+  <section class="auth-panel" aria-labelledby="login-heading">
+    <div class="auth-header">
+      <h1 id="login-heading">Demo Admin Login</h1>
+    </div>
+    <p class="muted small" role="note">
+      Signing in starts a fresh private, identity-masked snapshot for
+      THIS session: the source data is captured after sign-in and is
+      available only once verified and anonymized. The frozen view
+      retains usage patterns, and operational controls on the demo
+      pages have no effect.
+    </p>
+
+    {% if error %}
+    <p class="form-error" role="alert">{{ error }}</p>
+    {% endif %}
+
+    <form method="post" action="/fakeadmin/login" class="form-stack">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+
+      <label for="username">Username</label>
+      <input id="username" name="username" type="text" autocomplete="username"
+             maxlength="128" required autofocus aria-describedby="login-username-help">
+      <p class="muted small" id="login-username-help">
+        Demo operator username for this snapshot session.
+      </p>
+
+      <label for="password">Password</label>
+      <input id="password" name="password" type="password" autocomplete="current-password"
+             maxlength="128" required aria-describedby="login-password-help">
+      <p class="muted small" id="login-password-help">
+        Your demo operator password. It is never redisplayed on this page.
+      </p>
+
+      <button type="submit">Sign in</button>
+    </form>
+  </section>
+</body>
+</html>

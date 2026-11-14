@@ -27,6 +27,19 @@
   </div>
   {% endif %}
 
+  {% if demo_admin %}
+  <div class="admin-flash" role="status">
+    <strong>Sanitized demo snapshot display:</strong> the source key
+    and the owner/cohort choices below are copied rows frozen at
+    snapshot time (their timestamps, limits, and statuses are as
+    captured in that snapshot). The eligibility line is computed for
+    this copied snapshot AT VIEW TIME from those frozen rows only;
+    it is not a live operational eligibility decision. The form is
+    ILLUSTRATIVE — submitting has NO effect (no plan is reviewed,
+    applied, or delivered, and no key is created).
+  </div>
+  {% endif %}
+
   <section class="action-panel" aria-labelledby="clone-source-heading">
     <h2 id="clone-source-heading">Source Key</h2>
     <dl class="compact-dl">

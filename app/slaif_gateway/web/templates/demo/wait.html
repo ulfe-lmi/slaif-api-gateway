@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Demo Snapshot Status</title>
+  <link rel="stylesheet" href="/fakeadmin/static/css/admin.css">
+</head>
+<body>
+  <section class="auth-panel" aria-labelledby="wait-heading">
+    <div class="auth-header">
+      <h1 id="wait-heading">Preparing your demo snapshot</h1>
+    </div>
+
+    <p id="demo-wait-state" role="status" class="muted">
+      {% if state == "waiting" %}
+        Waiting for your snapshot to be prepared&hellip; This page updates
+        automatically.
+      {% elif state == "failed" %}
+        Your snapshot could not be prepared. You can sign in again to start
+        a new one.
+      {% elif state == "timed_out" %}
+        Your snapshot request timed out. You can sign in again to start a
+        new one.
+      {% else %}
+        This snapshot is no longer available. You can sign in again to
+        start a new one.
+      {% endif %}
+    </p>
+
+    {% if state == "waiting" %}
+    <script>
+      (function () {
+        var stateEl = document.getElementById("demo-wait-state");
+        var stop = false;
+        async function poll() {
+          if (stop) return;
+          try {
+            var res = await fetch("/fakeadmin/wait/status", { credentials: "same-origin" });
+            if (!res.ok) { window.location.replace("/fakeadmin/login"); return; }
+            var data = await res.json();
+            if (data.state === "ready") { window.location.replace("/fakeadmin/wait"); return; }
+            if (data.state === "failed") { stateEl.textContent = "Your snapshot could not be prepared. You can sign in again to start a new one."; stop = true; return; }
+            if (data.state === "timed_out" || data.state === "unavailable") { stateEl.textContent = "This snapshot is no longer available. You can sign in again to start a new one."; stop = true; return; }
+          } catch (err) {
+            stateEl.textContent = "Connection problem. Please reload this page.";
+            stop = true;
+            return;
+          }
+          setTimeout(poll, 2000);
+        }
+        poll();
+      })();
+    </script>
+    {% else %}
+    <p><a href="/fakeadmin/login">Sign in again</a></p>
+    {% endif %}
+  </section>
+</body>
+</html>
