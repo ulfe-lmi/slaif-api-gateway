@@ -1,0 +1,150 @@
+{% extends "base.html" %}
+
+{% block title %}Catalog run detail - SLAIF API Gateway{% endblock %}
+
+{% block body %}
+<section class="dashboard-shell wide" aria-labelledby="demo-catalog-run-heading">
+  <header class="dashboard-header">
+    <div>
+      <p class="eyebrow">Catalog snapshot</p>
+      <h1 id="demo-catalog-run-heading">Catalog run detail</h1>
+      <p class="muted">
+        Run <code>{{ run_id }}</code> — sanitized snapshot display
+        of one captured run from your private demo copy.
+      </p>
+    </div>
+    <div class="header-actions">
+      <a class="button-link secondary" href="/admin/operations/catalog/">Catalog index</a>
+      <form method="post" action="/admin/logout">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <button type="submit" class="signout">Sign out</button>
+      </form>
+    </div>
+  </header>
+
+  <div class="admin-flash" role="status">
+    <strong>Sanitized snapshot display:</strong> this copy carries no
+    original seal, no live status and no apply authority. The
+    snapshot state is historical at capture time, not live run
+    status.
+  </div>
+
+  <dl class="detail-facts" aria-label="Sanitized snapshot summary">
+    <div>
+      <dt>Snapshot state (historical)</dt>
+      <dd><code>{{ detail.state }}</code></dd>
+    </div>
+    <div>
+      <dt>Run generation time (historical, UTC)</dt>
+      <dd><code>{{ detail.generated_at }}</code></dd>
+    </div>
+    <div>
+      <dt>Policy version</dt>
+      <dd class="num">{{ detail.policy_version | num }}</dd>
+    </div>
+    <div>
+      <dt>Count categories retained</dt>
+      <dd class="num">{{ detail.counts_entries | num }}</dd>
+    </div>
+  </dl>
+  <p class="muted" role="note">
+    The original detail text (state reasons, evidence and the apply
+    plan) is neutralized in this sanitized display copy; only the
+    bounded snapshot fields shown here are presented. “Count
+    categories retained” is the number of count categories the
+    sanitized copy keeps from the original counts map — not a count
+    of catalog or model entries.
+  </p>
+
+  {% if detail.per_provider %}
+  <h2>Sum of provider count metrics (bounded)</h2>
+  <p class="muted" role="note">
+    Each value is the sum of that provider’s original count metrics
+    in the captured run, not a model or request count.
+  </p>
+  <ul aria-label="Provider count metric sums">
+    {% for provider, values in detail.per_provider.items() %}
+    <li>{{ provider }}: <span class="num" title="{{ values['total'] }}">{{ values['total'] | num }}</span></li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+
+  {% if detail.warnings %}
+  <h2>Warnings (sanitized)</h2>
+  <ul aria-label="Sanitized warnings">
+    {% for w in detail.warnings %}
+    <li>{{ w.severity }} — {{ w.code }}{% if w.provider %} ({{ w.provider }}){% endif %}</li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+
+  {% if detail.dispositions %}
+  <h2>Dispositions (sanitized)</h2>
+  <ul aria-label="Sanitized dispositions">
+    {% for d in detail.dispositions %}
+    <li><code>{{ d.provider }}</code> / <code>{{ d.model }}</code>: {{ d.disposition }}</li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+
+  {% if detail.price_comparisons %}
+  <h2>Price comparisons (sanitized)</h2>
+  <ul aria-label="Sanitized price comparisons">
+    {% for p in detail.price_comparisons %}
+    <li>
+      <code>{{ p.provider }}</code> / <code>{{ p.model }}</code> —
+      {{ p.dimension }}:
+      {% if p.old is not none %}{{ p.old }} → {% endif %}{{ p.new }} {{ p.currency_new }}
+      {% if p.percent_change is not none %}({{ p.percent_change }}%){% endif %}
+      — {{ p.state }}
+    </li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+
+  <h2>Captured artifacts (sanitized display copies)</h2>
+  <div class="table-wrap" tabindex="0" role="region" aria-label="Captured run artifacts">
+    <table data-sortable>
+      <thead><tr>
+        <th data-ordinal aria-hidden="true">#</th>
+        <th scope="col">Artifact</th>
+        <th scope="col">Kind</th>
+        <th scope="col" class="num" data-sort-type="number">Bytes</th>
+        <th scope="col" data-sort-type="datetime">Captured (UTC)</th>
+      </tr></thead>
+      <tbody>
+      {% for row in artifact_rows %}
+      <tr>
+        <td class="row-ordinal">{{ loop.index }}</td>
+        <td>
+          <a href="/admin/operations/catalog/runs/{{ run_id }}/artifact/{{ row.name }}">
+            <code>{{ row.name }}</code>
+          </a>
+        </td>
+        <td>{{ row.kind }}</td>
+        <td class="num" data-sort-value="{{ row.byte_count }}">{{ row.byte_count | num }}</td>
+        <td class="nowrap" data-sort-value="{{ row.captured_sort }}">{{ row.captured_utc }}</td>
+      </tr>
+      {% else %}
+      <tr data-no-sort>
+        <td colspan="5" class="empty-state">This run has no captured artifact rows.</td>
+      </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <p class="muted" role="note">
+    Each link forces a file download of that sanitized display copy;
+    nothing is rendered inline, and the copies carry no original seal
+    or apply authority.
+  </p>
+
+  <h2>Apply status (historical)</h2>
+  <p>
+    <a href="/admin/operations/catalog/runs/{{ run_id }}/apply-status">Status at snapshot time</a>
+    <span class="muted">— the frozen historical apply record of this
+    copy (status at snapshot time, not live authoritative source
+    status).</span>
+  </p>
+</section>
+{% endblock %}

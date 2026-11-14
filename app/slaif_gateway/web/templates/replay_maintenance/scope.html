@@ -8,6 +8,15 @@
     <div>
       <p class="eyebrow">Operations / Replay maintenance</p>
       <h1 id="replay-scope-heading">{{ scope_label }}</h1>
+      {%- if demo_admin %}
+      {% if scope_code %}
+      <p class="lead">Selected scope: <code>{{ scope_code }}</code> (copied rows, frozen at copy time)
+      {% if key_status %}(key status: {{ key_status }}){% endif %}
+      {% if cohort_name %}(cohort: {{ cohort_name }}){% endif %}</p>
+      {% else %}
+      <p class="lead">Selected scope: every key currently in the active state in this copy (frozen at copy time).</p>
+      {% endif %}
+      {%- else %}
       {% if scope_code %}
       <p class="lead">Selected scope: <code>{{ scope_code }}</code>
       {% if key_status %}(key status: {{ key_status }}){% endif %}
@@ -16,6 +25,7 @@
       <p class="lead">Selected scope: every key currently in the active state, at inspection
       and again at apply time, so the scope you see is the scope reviewed.</p>
       {% endif %}
+      {%- endif %}
     </div>
     <div class="header-actions">
       <a class="button-link secondary" href="/admin/operations/replay-maintenance/">Replay maintenance</a>
@@ -26,8 +36,143 @@
     </div>
   </header>
 
+  {%- if demo_admin %}
+  <div class="admin-flash" role="status">
+    <strong>Sanitized demo snapshot display:</strong> the retained
+    references below are the FROZEN copied rows of this session's
+    private copy, evaluated at view time against the frozen data.
+    Inspect, preview and apply have NO effect in this demo: the normal
+    forms are quiet server-side no-ops, no extension is ever applied,
+    no audit entry is written, and no HMAC secret availability is shown
+    or implied.
+  </div>
+  {%- endif %}
+  {%- if demo_admin %}
+  <section class="action-panel" aria-labelledby="replay-demo-summary-heading">
+    <h2 id="replay-demo-summary-heading">Copied retained references (frozen at copy time)</h2>
+    <p class="muted">Copy-backed read-only summary, evaluated at view time against the frozen copy data ({{ demo_now }}). No replay-table write occurs while displaying this page.</p>
+    {% if demo_oversize %}
+    <p class="warning-text">Scope too large to display: {{ demo_keys_count | num }} copied keys exceed the {{ demo_max_keys | num }}-key bound, so no reference rows were read (the normal inspection refuses the same scope instead of truncating).</p>
+    {% else %}
+    <dl>
+      <dt>Selected copied keys</dt><dd title="{{ demo_keys_count }}">{{ demo_keys_count | num }}</dd>
+      <dt>Configured TTL (worker-observed at copy time)</dt><dd>{% if demo_ttl_available %}{{ demo_ttl_seconds | num }} seconds{% else %}unavailable (not recorded in this demo snapshot){% endif %}</dd>
+      <dt>Retained references</dt><dd>{{ demo_references | num }} (active {{ demo_active | num }}, expired {{ demo_expired | num }})</dd>
+      <dt>Created between (UTC)</dt><dd>{{ demo_created_min }} .. {{ demo_created_max }}</dd>
+      <dt>Expiry between (UTC)</dt><dd>{{ demo_expiry_min }} .. {{ demo_expiry_max }}</dd>
+    </dl>
+    {% if demo_kind_counts %}
+    <p class="muted">References by item kind:</p>
+    <ul>
+      {% for kind, count in demo_kind_counts %}
+      <li><code>{{ kind }}</code>: {{ count | num }}</li>
+      {% endfor %}
+    </ul>
+    {% endif %}
+    <div class="table-wrap" role="region" tabindex="0" aria-label="Per-key copied reference aggregates">
+      <table data-sortable>
+        <thead>
+          <tr>
+            <th data-ordinal aria-hidden="true">#</th>
+            <th scope="col">Key</th>
+            <th scope="col">Status</th>
+            <th scope="col">References</th>
+            <th scope="col">Active</th>
+            <th scope="col">Expired</th>
+            <th scope="col">Created (UTC)</th>
+            <th scope="col">Expiry (UTC)</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for item in demo_per_key %}
+          <tr>
+            <td class="row-ordinal">{{ loop.index }}</td>
+            <td>{% if item.key_href %}<a href="{{ item.key_href }}"><code>{{ item.key_id }}</code></a>{% else %}<code>{{ item.key_id }}</code>{% endif %}</td>
+            <td>{{ item.key_status or "—" }}</td>
+            <td title="{{ item.references }}">{{ item.references | num }}</td>
+            <td title="{{ item.active_references }}">{{ item.active_references | num }}</td>
+            <td title="{{ item.expired_references }}">{{ item.expired_references | num }}</td>
+            <td>{{ item.created_min }} .. {{ item.created_max }}</td>
+            <td>{{ item.expiry_min }} .. {{ item.expiry_max }}</td>
+          </tr>
+          {% endfor %}
+          {% if not demo_per_key %}
+          <tr data-no-sort class="empty-state"><td colspan="8">No retained references in this scope.</td></tr>
+          {% endif %}
+        </tbody>
+      </table>
+    </div>
+    <div class="table-wrap" role="region" tabindex="0" aria-label="Route and model reference groups">
+      <table data-sortable>
+        <thead>
+          <tr>
+            <th data-ordinal aria-hidden="true">#</th>
+            <th scope="col">Route</th>
+            <th scope="col">Requested model</th>
+            <th scope="col">References</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for g in demo_groups %}
+          <tr>
+            <td class="row-ordinal">{{ loop.index }}</td>
+            <td>{% if g.route_href %}<a href="{{ g.route_href }}"><code>{{ g.route_id }}</code></a>{% else %}<code>{{ g.route_id }}</code>{% endif %}</td>
+            <td>{{ g.requested_model }}</td>
+            <td title="{{ g.references }}">{{ g.references | num }}</td>
+          </tr>
+          {% endfor %}
+          {% if not demo_groups %}
+          <tr data-no-sort class="empty-state"><td colspan="4">No route/model groups in this scope.</td></tr>
+          {% endif %}
+        </tbody>
+      </table>
+      {% if demo_groups_truncated %}
+      <p class="muted">Showing at most {{ demo_groups | length | num }} of {{ demo_groups_total | num }} route/model groups (explicit truncation).</p>
+      {% endif %}
+    </div>
+    <div class="table-wrap" role="region" tabindex="0" aria-label="Newest copied reference metadata rows">
+      <table data-sortable>
+        <thead>
+          <tr>
+            <th data-ordinal aria-hidden="true">#</th>
+            <th scope="col">Key</th>
+            <th scope="col">Item kind</th>
+            <th scope="col">Provider / model</th>
+            <th scope="col">Tool</th>
+            <th scope="col">Created (UTC)</th>
+            <th scope="col">Expires (UTC)</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in demo_recent %}
+          <tr>
+            <td class="row-ordinal">{{ loop.index }}</td>
+            <td>{% if row.key_href %}<a href="{{ row.key_href }}"><code>{{ row.key_id }}</code></a>{% else %}<code>{{ row.key_id }}</code>{% endif %}</td>
+            <td><code>{{ row.item_kind }}</code></td>
+            <td>{{ row.provider }} / {{ row.upstream_model }}</td>
+            <td>{% if row.tool_namespace %}{{ row.tool_namespace }} / {% endif %}{{ row.tool_name or "—" }}</td>
+            <td title="{{ row.created_at }}">{{ row.created_at }}</td>
+            <td title="{{ row.expires_at }}" class="{{ 'warning-text' if row.expired else '' }}">{{ row.expires_at }}{% if row.expired %} (expired){% endif %}</td>
+          </tr>
+          {% endfor %}
+          {% if not demo_recent %}
+          <tr data-no-sort class="empty-state"><td colspan="7">No retained references in this scope.</td></tr>
+          {% endif %}
+        </tbody>
+      </table>
+      <p class="muted">At most the {{ demo_recent_limit | num }} newest safe metadata rows are shown (safe metadata only: no HMAC digests, opaque tokens, provider request IDs, or usage-ledger IDs).</p>
+    </div>
+    {% endif %}
+  </section>
+  {%- endif %}
+
   <section class="action-panel" aria-labelledby="replay-inspect-heading">
     <h2 id="replay-inspect-heading">Inspect this scope (read-only)</h2>
+    {%- if demo_admin %}
+    <p class="muted">In this demo, submitting this form does nothing (quiet
+    server-side no-op): the copy-backed summary above is the inspection
+    result for this scope.</p>
+    {%- endif %}
     <p class="muted">Totals, per-key aggregates, bounded route/model groups, and exclusion
     counts. No writes and no audit record.</p>
     <form class="create-form" method="post" action="/admin/operations/replay-maintenance/inspect">
@@ -51,8 +196,18 @@
 
   <section class="action-panel" aria-labelledby="replay-preview-heading">
     <h2 id="replay-preview-heading">Preview an expiry extension</h2>
+    {%- if demo_admin %}
+    <p class="muted">In this demo, submitting this form does nothing (quiet
+    server-side no-op): no preview is generated, no plan is signed, and no
+    extension is ever applied.</p>
+    {%- endif %}
+    {%- if demo_admin %}
+    <p class="muted">In normal use, preparing a preview writes nothing but produces the exact reviewed plan, which you confirm before anything can change. In this demo, submitting the form does nothing: no plan is generated and no extension is ever applied.</p>
+    {%- endif %}
+    {%- if not demo_admin %}
     <p class="muted">Preparing a preview writes nothing. It produces
     the exact reviewed plan, which you confirm before anything can change.</p>
+    {%- endif %}
     <form class="create-form" method="post" action="/admin/operations/replay-maintenance/preview">
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
       <input type="hidden" name="scope" value="{{ scope_kind }}">
@@ -67,10 +222,11 @@
                placeholder="2026-01-02T00:00:00Z" aria-describedby="preview-bounds-help">
       </div>
       <p class="field-help" id="preview-bounds-help">ISO 8601 UTC timestamps; blank means
-      unbounded. Ongoing traffic can add references between preview and apply, which
+      unbounded. {% if demo_admin %}This demo form is shown for completeness: submitting
+      it does nothing and this frozen copy never changes.{% else %}Ongoing traffic can add references between preview and apply, which
       legitimately makes an unbounded window stale and asks for a fresh preview. An explicit
       created-until cutoff (or a smaller scope) stabilizes the review; nothing is ever silently
-      cut off or relaxed.</p>
+      cut off or relaxed.{% endif %}</p>
       <div class="field-row">
         <label for="preview-ttl-seconds">Total lifetime, seconds (from ORIGINAL creation)</label>
         <input type="number" id="preview-ttl-seconds" name="ttl_seconds" min="{{ ttl_min }}"
@@ -78,8 +234,10 @@
       </div>
       <p class="field-help" id="preview-ttl-help">Whole seconds, {{ ttl_min | num }}..{{ ttl_max | num }}.
       This is the TOTAL lifetime measured from each reference's original creation time, never
-      from now. Blank uses this deployment's configured default ({{ configured_ttl_seconds | num }}
-      seconds). Example: {{ 2592000 | num }} = 30 days from original creation; the maximum is
+      from now. {%- if demo_admin %} In normal admin, blank would use
+      the configured default (illustrative worker-captured value: {% if demo_ttl_available %}{{ demo_ttl_seconds | num }} seconds, worker-observed at copy time{% else %}unavailable in this snapshot{% endif %}). In this demo,
+      submission uses no value and changes nothing.{%- else %} Blank uses this deployment's configured default ({{ configured_ttl_seconds | num }}
+      seconds).{% endif %} Example: {{ 2592000 | num }} = 30 days from original creation; the maximum is
       {{ ttl_max | num }} (one year). An extension
       only lengthens expiry: a reference already expiring later than its target keeps its later
       expiry (never shortened).</p>
@@ -88,21 +246,21 @@
                aria-describedby="preview-expired-help">
         <label for="preview-include-expired">Also include references already expired at preview time</label>
       </div>
-      <p class="field-help" id="preview-expired-help">Off by default; include-expired is an
+      <p class="field-help" id="preview-expired-help">{% if demo_admin %}Off by default; include-expired is an explicit choice. In normal use it lengthens the expiry of already-expired eligible references within the selected lifetime, but it cannot restore unusable material. In this demo, submission does nothing: no extension is ever applied.{% else %}Off by default; include-expired is an
       explicit choice. It lengthens the expiry of already-expired eligible references within the
       selected lifetime, but it cannot restore unusable material: a reference still needs an
       active, valid key, a finalized usage-ledger row, a supported item kind, and a configured
       secret for its stored HMAC version. Excluded references and the reasons are shown in the
-      preview.</p>
+      preview.{% endif %}</p>
       <div class="field-row">
-        <label for="preview-reason">Audit reason</label>
+        <label for="preview-reason">{% if demo_admin %}Reason (in this demo, not recorded){% else %}Audit reason{% endif %}</label>
         <input type="text" id="preview-reason" name="reason" maxlength="{{ 512 }}"
                placeholder="Extend reviewed replay references for the Q2 audit window"
                aria-describedby="preview-reason-help" required>
       </div>
-      <p class="field-help" id="preview-reason-help">Up to 512 characters, saved exactly as
+      <p class="field-help" id="preview-reason-help">{% if demo_admin %}Up to 512 characters. In this demo, submission does nothing, so the reason is not stored and no audit record is written.{% else %}Up to 512 characters, saved exactly as
       entered (nothing is trimmed). Do not include passwords or keys. The reason is stored with
-      one audit record when the extension is applied.</p>
+      one audit record when the extension is applied.{% endif %}</p>
       <button type="submit">Preview extension</button>
     </form>
   </section>

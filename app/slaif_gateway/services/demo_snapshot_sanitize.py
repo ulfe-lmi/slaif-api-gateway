@@ -54,12 +54,24 @@ import time
 import uuid as _uuid
 from collections.abc import Sequence
 from dataclasses import dataclass
+from datetime import datetime
 from importlib import resources
 from pathlib import Path
 
 import asyncpg
 
 from slaif_gateway.services import demo_snapshot as ds
+
+# 224-r: the recognized clone-receipt vocabulary (objective 208). The
+# sanitizer reuses the product's own receipt key and validity-mode
+# constants so the demo law can never drift from the supported clone
+# flow's receipt shape.
+from slaif_gateway.schemas.key_clone import (
+    CLONE_RECEIPT_METADATA_KEY as _KR_RECEIPT_KEY,
+    VALIDITY_ABSOLUTE as _KR_VALIDITY_ABSOLUTE,
+    VALIDITY_COPY_SOURCE_EXPIRY as _KR_VALIDITY_COPY_SOURCE,
+    VALIDITY_DURATION_FROM_NOW as _KR_VALIDITY_DURATION,
+)
 
 # Installed runtime route capability grammar (objective 223-b). The RC
 # transform reuses the product's own strict child parsers so the demo
@@ -225,6 +237,88 @@ def _h_column_digest(seed: bytes, column: str, values: list[str]) -> str:
     return h.hexdigest()
 
 
+def _u_column_digest(seed: bytes, table: str, column: str, values: list[str]) -> str:
+    """Keyed multiset digest over the given UUID values, taken AS-IS.
+
+    Same construction as ``_h_column_digest``; the key additionally
+    includes the TABLE because U column names such as ``id`` repeat across
+    tables and must never share key space. Neither side remaps internally:
+    prestate first maps each raw UUID through remap_uuid to the EXPECTED
+    stored values and passes those; the verifier passes the STORED values
+    directly. Both sides therefore digest the same post-rewrite value
+    space, and equality proves the stored multiset is exactly the expected
+    per-copy remap multiset (an un-remapped raw value or any other
+    substitution breaks equality). Repeated raw FK values (for example two
+    gateway keys of the same owner) must appear the same number of times
+    under the SAME per-copy remapped value. Limit (shared with the H law):
+    this is a per-column multiset proof, not a row-placement proof.
+    """
+    h = hashlib.sha256(
+        seed + b"|u|" + table.encode("utf-8") + b"|" + column.encode("utf-8")
+    )
+    for value in sorted(values):
+        h.update(value.encode("ascii"))
+        h.update(b"|")
+    return h.hexdigest()
+
+
+def _s_column_digest(seed: bytes, table: str, column: str, values: list[str]) -> str:
+    """Keyed multiset digest over the given string values, taken AS-IS.
+
+    224-s mirror of ``_u_column_digest`` for the S (string-ID) columns:
+    the key additionally includes the TABLE because S column names such
+    as ``name`` or ``request_id`` repeat across tables and must never
+    share key space. Neither side remaps internally: prestate first maps
+    each raw value through remap_str_id to the EXPECTED stored values
+    and passes those; the verifier passes the STORED values directly.
+    Both sides therefore digest the same post-rewrite value space, and
+    equality proves the stored multiset is exactly the expected per-copy
+    remap multiset (an un-remapped raw value or any other change breaks
+    equality). Repeated raw values (for example the same operator_actor
+    and db_actor across two catalog applies) must appear the same number
+    of times under the SAME per-copy remapped value. Limit (shared with
+    the H/U laws): this is a per-column multiset proof, not a
+    row-placement proof.
+    """
+    h = hashlib.sha256(
+        seed + b"|s|" + table.encode("utf-8") + b"|" + column.encode("utf-8")
+    )
+    for value in sorted(values):
+        h.update(value.encode("ascii"))
+        h.update(b"|")
+    return h.hexdigest()
+
+
+def _declared_unique_single_columns(
+    constraints: list[tuple[str, str, str, str, str]],
+) -> dict[str, frozenset[str]]:
+    """Tables -> columns on which the reviewed schema declares a
+    SINGLE-column PRIMARY KEY or UNIQUE constraint.
+
+    Derived from the constraint definitions that ``_check_catalog`` has
+    already pinned to the reviewed digest, so this states what the REVIEWED
+    schema declares, not what the stored rows happen to satisfy. Only
+    single-column declarations are returned: a composite UNIQUE proves no
+    per-column distinctness. (U columns are uuid-typed; the catalog
+    signature check already proves the type, and the recreated constraints
+    prove enforcement at commit - this is the verifier's declared-law
+    re-proof.)
+    """
+    out: dict[str, set[str]] = {}
+    for _schema, table, _conname, contype, definition in constraints:
+        if contype not in ("p", "u"):
+            continue
+        start = definition.rfind("(")
+        end = definition.rfind(")")
+        if start == -1 or end <= start:
+            continue
+        cols = [c.strip().strip('"') for c in definition[start + 1 : end].split(",")]
+        if len(cols) != 1 or not cols[0]:
+            continue
+        out.setdefault(table, set()).add(cols[0])
+    return {table: frozenset(cols) for table, cols in out.items()}
+
+
 # FTN (fixed tool name) row condition: the reviewed
 # ck_codex_replay_references_..._kind_shape CHECK requires tool_name NULL
 # for reasoning/compaction rows and NOT NULL for function_call /
@@ -385,6 +479,11 @@ def build_identity_maps(
 #   JA   arbitrary JSONB array -> []
 #   JJ   typed-safe JSONB (reviewed: product enums/counts only) -> preserved
 #   JU   JSONB arrays of UUIDs -> every UUID element remapped, shape kept
+#   KR   gateway_keys.metadata clone receipt: ordinary metadata -> {};
+#        a recognized, well-formed 208 clone receipt -> a typed
+#        allowlisted projection (UUIDs/public-id/fingerprints remapped
+#        per copy; display status + bounded nonsecret validity preserved);
+#        malformed/unknown/secret-bearing receipts fail closed
 #   IP   fixed fictional IP (deterministic per row)
 #   UA   fixed fictional user agent
 #   E_*  entity-bound fictional value (per-copy entity map; NULL-safe)
@@ -408,6 +507,7 @@ JJ = "JJ"
 #      fail closed (documented limit).
 RC = "RC"
 JU = "JU"
+KR = "KR"
 IP = "IP"
 UA = "UA"
 F = "F:"
@@ -566,7 +666,7 @@ TABLE_POLICY: dict[str, dict[str, str]] = {
         "allowed_models": JJ,
         "allow_all_endpoints": P,
         "allowed_endpoints": JJ,
-        "metadata": J0,
+        "metadata": KR,
         "last_used_at": P,
         "last_quota_reset_at": P,
         "quota_reset_count": P,
@@ -2590,6 +2690,77 @@ async def _capture_prestate(
             h_expected.setdefault(table, {})[column] = _h_column_digest(
                 seed, column, expected
             )
+    # 224-r expected per-column remap multiset digest for EVERY U column
+    # (bounded: each column is under the per-table row cap already enforced
+    # above). Raw UUIDs -> expected stored values, THEN digest as-is: the
+    # verifier recomputes the digest over the STORED values and requires
+    # equality. This is the per-copy mapping law that a blanket
+    # distinctness check cannot express: repeated raw FK values (two keys
+    # of one owner) must appear under the same per-copy remapped value.
+    u_expected: dict[str, dict[str, str]] = {}
+    for table in sorted(tables):
+        _ensure_before_deadline(deadline)
+        for column, action in TABLE_POLICY[table].items():
+            if action != U:
+                continue
+            rows = await conn.fetch(
+                f"SELECT {_q(column)} AS v FROM public.{_q(table)} "
+                f"WHERE {_q(column)} IS NOT NULL"
+            )
+            expected = [
+                str(remap_uuid(seed, _uuid.UUID(str(r["v"])))) for r in rows
+            ]
+            u_expected.setdefault(table, {})[column] = _u_column_digest(
+                seed, table, column, expected
+            )
+    # 224-s expected per-column remap multiset digest for EVERY S column
+    # (bounded: each column is under the per-table row cap already
+    # enforced above). Raw strings -> expected stored values via the
+    # existing remap_str_id, THEN digest as-is: the verifier recomputes
+    # the digest over the STORED values and requires equality. This is
+    # the per-copy value law a blanket distinctness check cannot
+    # express: repeated raw values (e.g. the same operator_actor /
+    # db_actor across two catalog applies) must appear under the SAME
+    # per-copy remapped value, while a raw (un-remapped) pass-through, a
+    # dropped duplicate or a substitution breaks equality.
+    s_expected: dict[str, dict[str, str]] = {}
+    for table in sorted(tables):
+        _ensure_before_deadline(deadline)
+        for column, action in TABLE_POLICY[table].items():
+            if action != S:
+                continue
+            rows = await conn.fetch(
+                f"SELECT {_q(column)} AS v FROM public.{_q(table)} "
+                f"WHERE {_q(column)} IS NOT NULL"
+            )
+            expected = [remap_str_id(seed, str(r["v"])) for r in rows]
+            s_expected.setdefault(table, {})[column] = _s_column_digest(
+                seed, table, column, expected
+            )
+    # 224-r expected per-row clone-receipt projection (bounded: only the
+    # gateway_keys rows whose raw metadata is non-empty are scanned, each
+    # under the per-table row cap already enforced above). For a row with a
+    # recognized well-formed receipt the keyed digest of the EXPECTED
+    # post-rewrite metadata (projected from the RAW source receipt) is kept
+    # under the row's REMAPPED id; rows without a receipt are expected to be
+    # cleared to {} and are simply absent here. A malformed source receipt
+    # raises and fails the copy closed BEFORE any pre-state is written.
+    kr_expected: dict[str, str] = {}
+    receipt_rows = await conn.fetch(
+        "SELECT id, metadata FROM public.gateway_keys "
+        "WHERE metadata IS NOT NULL AND metadata <> '{}'::jsonb"
+    )
+    for row in receipt_rows:
+        _ensure_before_deadline(deadline)
+        raw_id = row["id"]
+        if not isinstance(raw_id, _uuid.UUID):
+            raise _kr_malformed("row_id")
+        expected = _expected_kr_metadata(row["metadata"], seed)
+        if expected:
+            new_id = str(remap_uuid(seed, raw_id))
+            kr_expected[new_id] = _kr_digest(
+                seed, new_id, _canonical_json(expected)
+            )
     return {
         "tables": tables,
         "pk": pk,
@@ -2597,6 +2768,9 @@ async def _capture_prestate(
         "foreign_keys": inventory["foreign_keys"],
         "entity_ids": entity_ids,
         "h_expected": h_expected,
+        "u_expected": u_expected,
+        "s_expected": s_expected,
+        "kr_expected": kr_expected,
     }
 
 
@@ -2702,6 +2876,333 @@ def _ju_is_safe(value: object) -> bool:
     )
 
 
+# ---------------------------------------------------------------------------
+# 224-r clone-receipt projection (gateway_keys.metadata -> KR action)
+#
+# The supported clone flow (objective 208) persists a bounded safe receipt
+# under the ``clone_receipt`` member of the NEW target key's metadata:
+# safe UUIDs, the source public identity, source/policy fingerprints and
+# bounded nonsecret validity fields only. The demo sanitizer must carry
+# that receipt into the private copy so the historical receipt view stays
+# usable, while remapping every identifying value per copy and discarding
+# anything else. The projection is CLOSED: it accepts exactly the 17
+# reviewed members with their exact types and rejects (fails the copy
+# closed) any malformed shape, unknown/secret-bearing member, or a new
+# receipt version. No arbitrary JSON passthrough is ever performed.
+# ---------------------------------------------------------------------------
+
+_KR_UUID_RE = re.compile(
+    r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}"
+    r"-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$",
+    re.ASCII,
+)
+# Required non-optional UUID members (all remapped per copy).
+_KR_UUID_FIELDS = (
+    "source_gateway_key_id",
+    "operation_uuid",
+    "target_gateway_key_id",
+    "target_owner_id",
+    "one_time_secret_id",
+)
+# Nullable UUID members (remapped when present).
+_KR_OPTIONAL_UUID_FIELDS = ("email_delivery_id", "target_cohort_id")
+# Fingerprint members -> per-copy synthetic 64-hex (column-salted, so the
+# two receipts of the same raw value stay distinct and never a source digest).
+_KR_HEX64_FIELDS = {
+    "source_fingerprint": b"kr_source_fingerprint",
+    "policy_fingerprint": b"kr_policy_fingerprint",
+}
+# Stable business-public identifier (per-copy string remap, like public_key_id).
+_KR_STR_FIELDS = ("source_public_key_id",)
+# Bounded validity timestamp / window members, mirrored PER FIELD from
+# the actual producer's acceptance set: the supported clone flow writes
+# ``source_valid_until`` with ``datetime.isoformat()`` (always a full
+# aware timestamp), while absolute-mode ``validity_from``/
+# ``validity_until`` are the operator's plan text preserved verbatim
+# (the plan schema ``_iso_string`` accepts any
+# ``datetime.fromisoformat``-parseable string, including a bare ISO
+# date, and ``attach_clone_receipt`` persists the plan string).
+# Free text, blank, padded and wrong-typed non-null values fail the
+# copy closed - never silently rewritten.
+_KR_OPTIONAL_STR_FIELDS = ("source_valid_until", "validity_from", "validity_until")
+# Only the absolute-mode plan-text members: the CLI/service clone flow
+# may persist a bare ISO date verbatim (the GUI form normalizes to a
+# full timestamp via ``_parse_admin_datetime`` + ``isoformat()``).
+_KR_BARE_DATE_FIELDS = frozenset({"validity_from", "validity_until"})
+_KR_BOOL_FIELDS = ("requires_fenced_confirmation",)
+_KR_INT_FIELDS = ("validity_duration_seconds",)
+_KR_ENUM_FIELD = "validity_mode"
+_KR_STATUS_FIELD = "status"
+_KR_VALIDITY_MODES = frozenset(
+    {_KR_VALIDITY_COPY_SOURCE, _KR_VALIDITY_DURATION, _KR_VALIDITY_ABSOLUTE}
+)
+_KR_STATUS_VALUE = "created"
+# The COMPLETE closed field set: exactly these 17 members, no more, no less.
+_KR_ALL_FIELDS = frozenset(
+    _KR_UUID_FIELDS
+    + _KR_OPTIONAL_UUID_FIELDS
+    + tuple(_KR_HEX64_FIELDS)
+    + _KR_STR_FIELDS
+    + _KR_OPTIONAL_STR_FIELDS
+    + _KR_BOOL_FIELDS
+    + _KR_INT_FIELDS
+    + (_KR_ENUM_FIELD, _KR_STATUS_FIELD)
+)
+_KR_STR_MAX_LEN = 256
+
+
+# Bare date-only strings (dashed and compact ISO-8601 basic forms).
+_KR_BARE_DATE_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
+_KR_BARE_DATE_COMPACT_RE = re.compile(r"\d{8}")
+
+
+def _kr_is_receipt_timestamp(value: object, *, allow_bare_date: bool) -> bool:
+    """Bounded predicate for one optional validity timestamp member.
+
+    Mirrors the actual producer's acceptance set for that member:
+    non-blank, unpadded and ``datetime.fromisoformat``-parseable. The
+    flow writes ``source_valid_until`` with ``datetime.isoformat()`` on
+    a UTC-normalized datetime (never a bare date), while absolute-mode
+    ``validity_from``/``validity_until`` are the operator's plan text
+    preserved verbatim - which may be a bare ISO date (interpreted as
+    midnight UTC by the product's own ``_aware_fromiso``) as well as
+    offset/Z, naive, space-separated, minute-precision or compact
+    spellings. Accepted values are preserved verbatim and are NOT
+    asserted to be timezone-aware or normalized.
+    """
+    if not isinstance(value, str) or not value or value != value.strip():
+        return False
+    try:
+        datetime.fromisoformat(value)
+    except ValueError:
+        return False
+    if not allow_bare_date and (
+        _KR_BARE_DATE_RE.fullmatch(value) or _KR_BARE_DATE_COMPACT_RE.fullmatch(value)
+    ):
+        return False
+    return True
+
+
+def _kr_validity_member(value: object, name: str) -> str | None:
+    """Project one optional validity timestamp member (fail closed).
+
+    ``None`` stays ``None``. A non-null member must be in that
+    member's producer acceptance set (see
+    ``_kr_is_receipt_timestamp``): a well-formed ISO-8601 value, with a
+    bare date allowed only for the absolute-mode plan-text members.
+    Malformed values fail the copy closed - the error carries only the
+    member name, never the raw value - because a malformed recognized
+    receipt is not projectable.
+    """
+    if value is None:
+        return None
+    if not _kr_is_receipt_timestamp(
+        value, allow_bare_date=name in _KR_BARE_DATE_FIELDS
+    ):
+        raise _kr_malformed(name)
+    return value
+
+
+def _kr_malformed(param: str) -> ds.DemoSnapshotError:
+    return ds.DemoSnapshotError(
+        ds.CODE_SANITIZE_FAILED,
+        f"Demo copy clone receipt is malformed (member: {param}).",
+    )
+
+
+def _canonical_json(obj: object) -> str:
+    """Canonical serialization used for the keyed receipt digest."""
+    return json.dumps(obj, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+
+
+def _kr_digest(seed: bytes, row_id: str, canonical: str) -> str:
+    """Collision-resistant keyed digest of one row's expected receipt.
+
+    Keyed by the per-copy seed and the REMAPPED row id so a second copy can
+    never reuse a first copy's expectation, and a single mutated projected
+    field changes the digest. Only the digest (never the receipt) is kept in
+    the private pre-state.
+    """
+    return hashlib.sha256(
+        seed + b"|kr|" + row_id.encode("ascii") + b"|" + canonical.encode("ascii")
+    ).hexdigest()
+
+
+def _project_clone_receipt(receipt: object, seed: bytes) -> dict[str, object]:
+    """Strict, closed projection of one recognized 208 clone receipt.
+
+    Accepts EXACTLY the 17 reviewed members with their exact finite types.
+    Every identifying value is remapped per copy (UUIDs via the global
+    per-copy bijection, the public key id via the string remap, the two
+    fingerprints via the column-salted 64-hex remap); display status and
+    the bounded nonsecret validity members are preserved verbatim ONLY
+    when they are in that member's producer acceptance set: well-formed
+    ISO-8601 values, with a bare ISO date allowed only for the
+    absolute-mode ``validity_from``/``validity_until`` plan text (never
+    for ``source_valid_until``), and never free text. Any deviation - a
+    missing/unknown member, an unexpected type, a wrong status or
+    validity mode, or a malformed non-null validity value - fails closed
+    (raises) so a partial or tampered receipt is never projected into
+    the copy.
+    """
+    if not isinstance(receipt, dict):
+        raise _kr_malformed("clone_receipt")
+    if set(receipt) != _KR_ALL_FIELDS:
+        raise _kr_malformed("member-set")
+
+    def _remap_uuid_field(name: str) -> str:
+        value = receipt[name]
+        if not isinstance(value, str) or not _KR_UUID_RE.fullmatch(value):
+            raise _kr_malformed(name)
+        return str(remap_uuid(seed, _uuid.UUID(value)))
+
+    def _opt_uuid_field(name: str) -> str | None:
+        value = receipt[name]
+        if value is None:
+            return None
+        if not isinstance(value, str) or not _KR_UUID_RE.fullmatch(value):
+            raise _kr_malformed(name)
+        return str(remap_uuid(seed, _uuid.UUID(value)))
+
+    out: dict[str, object] = {}
+    for name in _KR_UUID_FIELDS:
+        out[name] = _remap_uuid_field(name)
+    for name in _KR_OPTIONAL_UUID_FIELDS:
+        out[name] = _opt_uuid_field(name)
+    for name, salt in _KR_HEX64_FIELDS.items():
+        value = receipt[name]
+        if not isinstance(value, str) or not _HEX64_RE.fullmatch(value):
+            raise _kr_malformed(name)
+        out[name] = remap_hex64(seed, salt, value)
+    for name in _KR_STR_FIELDS:
+        value = receipt[name]
+        if (
+            not isinstance(value, str)
+            or not value.strip()
+            or len(value) > _KR_STR_MAX_LEN
+        ):
+            raise _kr_malformed(name)
+        out[name] = remap_str_id(seed, value)
+    for name in _KR_OPTIONAL_STR_FIELDS:
+        out[name] = _kr_validity_member(receipt[name], name)
+    for name in _KR_BOOL_FIELDS:
+        value = receipt[name]
+        if not isinstance(value, bool):
+            raise _kr_malformed(name)
+        out[name] = value
+    for name in _KR_INT_FIELDS:
+        value = receipt[name]
+        if value is not None and (isinstance(value, bool) or not isinstance(value, int)):
+            raise _kr_malformed(name)
+        out[name] = value
+    mode = receipt[_KR_ENUM_FIELD]
+    if mode not in _KR_VALIDITY_MODES:
+        raise _kr_malformed(_KR_ENUM_FIELD)
+    out[_KR_ENUM_FIELD] = mode
+    if receipt[_KR_STATUS_FIELD] != _KR_STATUS_VALUE:
+        raise _kr_malformed(_KR_STATUS_FIELD)
+    out[_KR_STATUS_FIELD] = _KR_STATUS_VALUE
+    return out
+
+
+def _kr_metadata_object(raw: object) -> dict[str, object] | None:
+    """Parse a stored/raw JSONB metadata value.
+
+    Returns the metadata object, or ``None`` when the value is valid JSON
+    that is NOT an object (an array or scalar can never carry a namespaced
+    receipt). Invalid JSON or an unsupported input shape fails closed
+    (raises).
+    """
+    if isinstance(raw, dict):
+        return raw
+    if isinstance(raw, (str, bytes)):
+        try:
+            parsed = json.loads(raw)
+        except ValueError:
+            raise _kr_malformed("clone_receipt") from None
+        return parsed if isinstance(parsed, dict) else None
+    raise _kr_malformed("clone_receipt")
+
+
+def _expected_kr_metadata(raw: object, seed: bytes) -> dict[str, object]:
+    """Expected POST-rewrite metadata for one gateway_keys row.
+
+    No receipt -> ``{}`` (J0-equivalent: ordinary metadata is cleared). A
+    recognized, well-formed receipt -> exactly ``{"clone_receipt":
+    <projected>}``; every other metadata member is discarded. A malformed
+    receipt fails the copy closed (raises).
+    """
+    metadata = _kr_metadata_object(raw)
+    if metadata is None or _KR_RECEIPT_KEY not in metadata:
+        return {}
+    projected = _project_clone_receipt(metadata[_KR_RECEIPT_KEY], seed)
+    return {_KR_RECEIPT_KEY: projected}
+
+
+def _project_gateway_key_metadata(raw: object, seed: bytes) -> str:
+    """KR converter entry: canonical JSON of the expected metadata."""
+    return _canonical_json(_expected_kr_metadata(raw, seed))
+
+
+def _is_projected_receipt_metadata(value: object) -> bool:
+    """INDEPENDENT structural proof for a stored KR value (verifier side).
+
+    Deliberately re-proves the shape from the stored value alone (not by
+    re-running the converter): the stored metadata must be exactly one
+    well-formed projected clone receipt - every member present with its
+    remapped (per-copy) type, no unknown/raw nested member. Any raw
+    source value, extra key, or wrong type fails this check.
+    """
+    if isinstance(value, (str, bytes)):
+        try:
+            parsed = json.loads(value)
+        except ValueError:
+            return False
+    else:
+        parsed = value
+    if not isinstance(parsed, dict) or set(parsed) != {_KR_RECEIPT_KEY}:
+        return False
+    receipt = parsed[_KR_RECEIPT_KEY]
+    if not isinstance(receipt, dict) or set(receipt) != _KR_ALL_FIELDS:
+        return False
+    for name in _KR_UUID_FIELDS + _KR_OPTIONAL_UUID_FIELDS:
+        v = receipt[name]
+        if v is not None and (
+            not isinstance(v, str) or not _UUID_RE.fullmatch(v)
+        ):
+            return False
+    for name in _KR_HEX64_FIELDS:
+        v = receipt[name]
+        if not isinstance(v, str) or not _HEX64_RE.fullmatch(v):
+            return False
+    for name in _KR_STR_FIELDS:
+        v = receipt[name]
+        if not isinstance(v, str) or not v.strip() or len(v) > _KR_STR_MAX_LEN:
+            return False
+    for name in _KR_OPTIONAL_STR_FIELDS:
+        v = receipt[name]
+        # Stored value must be exactly what the projection can emit:
+        # None or one value in that member's producer acceptance set
+        # (the same per-field law the projector enforces, re-proven
+        # independently).
+        if v is not None and not _kr_is_receipt_timestamp(
+            v, allow_bare_date=name in _KR_BARE_DATE_FIELDS
+        ):
+            return False
+    for name in _KR_BOOL_FIELDS:
+        if not isinstance(receipt[name], bool):
+            return False
+    for name in _KR_INT_FIELDS:
+        v = receipt[name]
+        if v is not None and (isinstance(v, bool) or not isinstance(v, int)):
+            return False
+    if receipt[_KR_ENUM_FIELD] not in _KR_VALIDITY_MODES:
+        return False
+    if receipt[_KR_STATUS_FIELD] != _KR_STATUS_VALUE:
+        return False
+    return True
+
+
 def _convert_value(
     action: str,
     value: object,
@@ -2745,6 +3246,11 @@ def _convert_value(
         return "{}"
     if action == JA:
         return "[]"
+    if action == KR:
+        # Clone-receipt projection: ordinary metadata -> {}; a recognized
+        # well-formed receipt -> the closed typed projection. Malformed
+        # receipts raise (fail the whole copy closed).
+        return _project_gateway_key_metadata(value, seed)
     if action == JJ:
         if not _jj_is_valid(table, column, value):
             raise ds.DemoSnapshotError(
@@ -2902,26 +3408,37 @@ async def _column_violations(
         return int(await conn.fetchval(f"SELECT count(*) FROM {tbl} WHERE {col} <> $1", "{}"))
     if action == JA:
         return int(await conn.fetchval(f"SELECT count(*) FROM {tbl} WHERE {col} <> $1", "[]"))
+    if action == KR:
+        # A stored value must be exactly {} OR one well-formed projected
+        # clone receipt (independent structural proof; the exact per-row
+        # content law is the keyed pre-state digest in _verify_clone_receipts).
+        nonempty = await conn.fetch(
+            f"SELECT {col} AS v FROM {tbl} WHERE {col} IS NOT NULL AND {col} <> $1",
+            "{}",
+        )
+        _bad = [row for row in nonempty if not _is_projected_receipt_metadata(row["v"])]
+        return len(_bad)
     if action.startswith("F:") or action.startswith("FC:"):
         value = str(data[action.split(":", 1)[1]])
         return int(await conn.fetchval(f"SELECT count(*) FROM {tbl} WHERE {col} <> $1", value))
     if action == S:
-        nonnull = int(
-            await conn.fetchval(f"SELECT count(*) FROM {tbl} WHERE {col} IS NOT NULL")
-        )
-        if not nonnull:
-            return 0
-        bad_shape = int(
+        # 224-s: shape only. Every stored value must match the remapped
+        # demo[0-9a-f]{60} pattern (a raw value that happens to match is
+        # still caught by the keyed pre-state multiset digest in
+        # _run_verifier). The old blanket distinctness law was a false
+        # positive: S columns such as
+        # catalog_refresh_applications.operator_actor / db_actor repeat
+        # naturally across applies, so the SAME remapped value may
+        # legitimately recur. Distinctness is re-checked in _run_verifier
+        # ONLY where the reviewed schema declares a single-column
+        # UNIQUE/PK on the column.
+        return int(
             await conn.fetchval(
                 f"SELECT count(*) FROM {tbl} "
                 f"WHERE {col} IS NOT NULL AND {col} !~ $1",
                 _S_PATTERN,
             )
         )
-        distinct = int(
-            await conn.fetchval(f"SELECT count(DISTINCT {col}) FROM {tbl}")
-        )
-        return bad_shape + (1 if distinct != nonnull else 0)
     if action == H:
         # Shape only. The raw value already matches the same 64-hex
         # pattern, so shape cannot prove remapping, and the schema's
@@ -2953,15 +3470,16 @@ async def _column_violations(
             )
         )
     if action == U:
-        nonnull = int(
-            await conn.fetchval(f"SELECT count(*) FROM {tbl} WHERE {col} IS NOT NULL")
-        )
-        if not nonnull:
-            return 0
-        distinct = int(
-            await conn.fetchval(f"SELECT count(DISTINCT {col}) FROM {tbl}")
-        )
-        return 1 if distinct != nonnull else 0
+        # U columns are uuid-typed, so the exact SQL type (and hence the
+        # UUID shape) is already re-proved by the catalog signature check;
+        # a per-value shape check here would be redundant. The per-copy
+        # remap law for U columns is proven in _run_verifier by the keyed
+        # pre-state multiset digests (repeated raw FK values keep the same
+        # per-copy mapping) plus declared-uniqueness re-checks ONLY where
+        # the reviewed schema declares a single-column UNIQUE/PK. The old
+        # blanket distinctness check wrongly rejected legitimate repeated
+        # FK values (e.g. two gateway keys of the same owner).
+        return 0
     if action == JJ:
         bad = int(
             await conn.fetchval(f"SELECT count(*) FROM {tbl} WHERE {col} IS NOT NULL")
@@ -3058,6 +3576,87 @@ async def _column_violations(
     return 0
 
 
+async def _verify_clone_receipts(
+    conn: asyncpg.Connection,
+    pre: dict[str, object],
+    seed: bytes,
+    deadline: float,
+) -> None:
+    """224-r: independently re-prove the per-row clone-receipt law.
+
+    Runs on a separate read-only connection AFTER commit:
+    - the SET of stored non-empty ``gateway_keys.metadata`` receipts exactly
+      equals the pre-state expectation set (no missing and no extra rows);
+    - every stored receipt's keyed digest (computed from the STORED value)
+      equals the pre-state expectation projected from the RAW source receipt
+      before the rewrite, so an adversarial mutation of any single projected
+      field fails publication;
+    - link consistency: the receipt's target id equals the containing row id
+      and its source id is a real copied ``gateway_keys.id`` (no dangling or
+      cross-copy links).
+    """
+    verify_failed = ds.CODE_SANITIZE_VERIFY_FAILED
+    _ensure_before_deadline(deadline)
+    kr_expected = pre.get("kr_expected") or {}
+    copied_ids = frozenset(
+        str(row["id"])
+        for row in await conn.fetch("SELECT id FROM public.gateway_keys")
+    )
+    stored_rows = await conn.fetch(
+        "SELECT id::text AS id, metadata AS m FROM public.gateway_keys "
+        "WHERE metadata IS NOT NULL AND metadata <> '{}'::jsonb"
+    )
+    stored_ids: set[str] = set()
+    for row in stored_rows:
+        _ensure_before_deadline(deadline)
+        rid = row["id"]
+        stored_ids.add(rid)
+        expected_digest = kr_expected.get(rid)
+        if expected_digest is None:
+            raise ds.DemoSnapshotError(
+                verify_failed,
+                "Demo copy has a clone receipt with no pre-state expectation.",
+            )
+        try:
+            parsed = json.loads(row["m"])
+        except ValueError:
+            raise ds.DemoSnapshotError(
+                verify_failed,
+                "Demo copy stored clone receipt is not valid JSON.",
+            ) from None
+        if not isinstance(parsed, dict):
+            raise ds.DemoSnapshotError(
+                verify_failed,
+                "Demo copy stored clone receipt is not a JSON object.",
+            )
+        if _kr_digest(seed, rid, _canonical_json(parsed)) != expected_digest:
+            raise ds.DemoSnapshotError(
+                verify_failed,
+                "Demo copy stored clone receipt does not match the expected per-copy projection.",
+            )
+        receipt = parsed.get(_KR_RECEIPT_KEY)
+        if not isinstance(receipt, dict):
+            raise ds.DemoSnapshotError(
+                verify_failed,
+                "Demo copy stored clone receipt is missing its receipt member.",
+            )
+        if receipt.get("target_gateway_key_id") != rid:
+            raise ds.DemoSnapshotError(
+                verify_failed,
+                "Demo copy clone receipt target does not match its key row.",
+            )
+        if receipt.get("source_gateway_key_id") not in copied_ids:
+            raise ds.DemoSnapshotError(
+                verify_failed,
+                "Demo copy clone receipt source link is dangling or cross-copy.",
+            )
+    if stored_ids != set(kr_expected.keys()):
+        raise ds.DemoSnapshotError(
+            verify_failed,
+            "Demo copy clone receipt set does not match the pre-state expectation.",
+        )
+
+
 async def _run_verifier(
     conn: asyncpg.Connection,
     pre: dict[str, object],
@@ -3143,6 +3742,94 @@ async def _run_verifier(
                     verify_failed,
                     "Demo copy H-remapped values do not match the expected per-copy remap.",
                 )
+
+    # 224-r exact per-copy U remap law: recompute the keyed multiset
+    # digest from the STORED values and require equality with the
+    # pre-state expectation derived from the raw values before the
+    # rewrite. Repeated raw FK values (e.g. two gateway keys of one
+    # owner) must appear under the SAME per-copy remapped value; a raw
+    # (un-remapped) value or any other substitution breaks equality.
+    # Uniqueness is re-checked ONLY where the reviewed schema declares a
+    # single-column UNIQUE/PK on that column - the old blanket
+    # distinctness law was a false positive for repeated FK values.
+    u_expected = pre["u_expected"]  # type: ignore[assignment]
+    declared_unique = _declared_unique_single_columns(inventory["constraints"])
+    for table in sorted(u_expected):
+        for column in sorted(u_expected[table]):
+            _ensure_before_deadline(deadline)
+            rows = await conn.fetch(
+                f"SELECT {_q(column)} AS v FROM public.{_q(table)} "
+                f"WHERE {_q(column)} IS NOT NULL"
+            )
+            if (
+                _u_column_digest(
+                    seed, table, column, [str(r["v"]) for r in rows]
+                )
+                != u_expected[table][column]
+            ):
+                raise ds.DemoSnapshotError(
+                    verify_failed,
+                    "Demo copy U-remapped values do not match the expected per-copy remap.",
+                )
+            if column in declared_unique.get(table, frozenset()):
+                dup = int(
+                    await conn.fetchval(
+                        f"SELECT count(*) - count(DISTINCT {_q(column)}) "
+                        f"FROM public.{_q(table)} WHERE {_q(column)} IS NOT NULL"
+                    )
+                )
+                if dup:
+                    raise ds.DemoSnapshotError(
+                        verify_failed,
+                        "Demo copy U column violates a declared uniqueness constraint.",
+                    )
+
+    # 224-s exact per-copy S remap law: recompute the keyed multiset
+    # digest from the STORED values and require equality with the
+    # pre-state expectation derived from the raw values before the
+    # rewrite. Repeated raw values (e.g. the same operator_actor /
+    # db_actor across two catalog applies) must appear under the SAME
+    # per-copy remapped value; a raw (un-remapped) value or any other
+    # substitution breaks equality. Uniqueness is re-checked ONLY where
+    # the reviewed schema declares a single-column UNIQUE/PK on that
+    # column - the old blanket distinctness law was a false positive for
+    # naturally repeating text fields.
+    s_expected = pre["s_expected"]  # type: ignore[assignment]
+    for table in sorted(s_expected):
+        for column in sorted(s_expected[table]):
+            _ensure_before_deadline(deadline)
+            rows = await conn.fetch(
+                f"SELECT {_q(column)} AS v FROM public.{_q(table)} "
+                f"WHERE {_q(column)} IS NOT NULL"
+            )
+            if (
+                _s_column_digest(
+                    seed, table, column, [str(r["v"]) for r in rows]
+                )
+                != s_expected[table][column]
+            ):
+                raise ds.DemoSnapshotError(
+                    verify_failed,
+                    "Demo copy S-remapped values do not match the expected per-copy remap.",
+                )
+            if column in declared_unique.get(table, frozenset()):
+                dup = int(
+                    await conn.fetchval(
+                        f"SELECT count(*) - count(DISTINCT {_q(column)}) "
+                        f"FROM public.{_q(table)} WHERE {_q(column)} IS NOT NULL"
+                    )
+                )
+                if dup:
+                    raise ds.DemoSnapshotError(
+                        verify_failed,
+                        "Demo copy S column violates a declared uniqueness constraint.",
+                    )
+
+    # 224-r exact per-row clone-receipt law: recompute the keyed digest of
+    # every stored receipt from the STORED value and require equality with
+    # the pre-state expectation projected from the RAW source receipt, plus
+    # link consistency on a separate connection.
+    await _verify_clone_receipts(conn, pre, seed, deadline)
 
     public_connect = await conn.fetchval(
         "SELECT count(*) FROM pg_database d "
@@ -3369,22 +4056,51 @@ async def _sanitize_copy_async(
     return SanitizeCopyResult(SANITIZE_STATE_PROMOTED, None, manifest.job_id)
 
 
-def sanitize_copies(config: ds.DemoSnapshotConfig) -> SanitizeCopiesResult:
+def sanitize_copies(
+    config: ds.DemoSnapshotConfig,
+    *,
+    job_id: str | None = None,
+) -> SanitizeCopiesResult:
     """Fenced worker entry: sanitize every RAW_UNVERIFIED copy.
 
     Idempotent: already-sanitized copies are skipped, and a failed copy
     stays RAW_UNVERIFIED with a safe finite code so the operator can
     inspect and re-invoke.
+
+    ``job_id`` (224-b exact worker): sanitize EXACTLY that one custody
+    job (addressed by its closed ``snap-<32 hex>`` name, never by
+    directory order, timestamps or target database). A missing,
+    inconsistent or unexpected-state exact job is a safe finite failure
+    (``EXACT_COPY_UNAVAILABLE``); an already-sanitized exact job is an
+    idempotent no-op success. Unrelated pre-existing copies are never
+    touched or promoted.
     """
     ds._validate_custody_dir(config.custody_dir)
     fence_fd = ds._acquire_fence(config.custody_dir)
     started = time.monotonic()
     try:
         eligible: list[tuple[Path, ds.SnapshotManifest]] = []
-        for job_dir in ds._list_job_dirs(config.custody_dir):
-            manifest = ds._read_manifest(job_dir)
-            if manifest is not None and manifest.state == ds.STATE_RAW_UNVERIFIED:
-                eligible.append((job_dir, manifest))
+        if job_id is not None:
+            eligible, error, already_done = _select_exact_sanitize_job(
+                config, job_id
+            )
+            if error is not None:
+                return SanitizeCopiesResult(
+                    SANITIZE_STATE_FAILED, error, 0, 1,
+                    int((time.monotonic() - started) * 1000),
+                )
+            if already_done:
+                # Exact job already sanitized: idempotent no-op success
+                # (the worker's success contract requires SANITIZED).
+                return SanitizeCopiesResult(
+                    SANITIZE_STATE_SANITIZED, None, 0, 0,
+                    int((time.monotonic() - started) * 1000),
+                )
+        else:
+            for job_dir in ds._list_job_dirs(config.custody_dir):
+                manifest = ds._read_manifest(job_dir)
+                if manifest is not None and manifest.state == ds.STATE_RAW_UNVERIFIED:
+                    eligible.append((job_dir, manifest))
         if not eligible:
             return SanitizeCopiesResult(
                 SANITIZE_STATE_SKIPPED, None, 0, 0,
@@ -3424,3 +4140,31 @@ def sanitize_copies(config: ds.DemoSnapshotConfig) -> SanitizeCopiesResult:
         )
     finally:
         ds._release_fence(fence_fd)
+
+
+def _select_exact_sanitize_job(
+    config: ds.DemoSnapshotConfig,
+    job_id: str,
+) -> tuple[list[tuple[Path, ds.SnapshotManifest]], str | None, bool]:
+    """Resolve EXACTLY one custody job for the 224-b worker (no scan).
+
+    Returns ``(targets, error_code, already_done)``: zero or one target
+    and a safe finite error code when the exact job is missing,
+    inconsistent or in an unexpected state. An already-sanitized
+    (``DB_SANITIZED_UNPUBLISHED``) exact job yields an empty success with
+    ``already_done`` (idempotent no-op, still reported as ``SANITIZED``
+    so the worker's success contract holds). The job is addressed ONLY by
+    its closed ``snap-<32 hex>`` name under the validated custody root;
+    the manifest's own job id must agree.
+    """
+    if not isinstance(job_id, str) or not re.fullmatch(r"snap-[0-9a-f]{32}", job_id):
+        return [], ds.CODE_EXACT_COPY_UNAVAILABLE, False
+    job_dir = config.custody_dir / job_id
+    manifest = ds._read_manifest(job_dir)
+    if manifest is None or manifest.job_id != job_id:
+        return [], ds.CODE_EXACT_COPY_UNAVAILABLE, False
+    if manifest.state == ds.STATE_RAW_UNVERIFIED:
+        return [(job_dir, manifest)], None, False
+    if manifest.state == ds.STATE_DB_SANITIZED_UNPUBLISHED:
+        return [], None, True
+    return [], ds.CODE_EXACT_COPY_UNAVAILABLE, False

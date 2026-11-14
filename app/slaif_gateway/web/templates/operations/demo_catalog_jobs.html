@@ -1,0 +1,144 @@
+{% extends "base.html" %}
+
+{% block title %}Captured job records - SLAIF API Gateway{% endblock %}
+
+{% block body %}
+<section class="dashboard-shell wide" aria-labelledby="demo-catalog-jobs-heading">
+  <header class="dashboard-header">
+    <div>
+      <p class="eyebrow">Catalog snapshot</p>
+      <h1 id="demo-catalog-jobs-heading">Captured job records</h1>
+      <p class="muted">
+        Bounded HISTORICAL list of the captured sanitized job records
+        from your private demo copy, covering EVERY captured job
+        family (collect, supplied-bundle review, baseline export,
+        proposals) — the generic history is not attributed to any one
+        demo form. Names are remapped display IDs; original job
+        identifiers, source paths, seals, HMAC values and secrets are
+        never shown.
+      </p>
+    </div>
+    <div class="header-actions">
+      <a class="button-link secondary" href="/admin/operations/catalog/">Catalog index</a>
+      <form method="post" action="/admin/logout">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <button type="submit" class="signout">Sign out</button>
+      </form>
+    </div>
+  </header>
+
+  <div class="admin-flash" role="status">
+    <strong>Sanitized snapshot display:</strong> every status below is
+    frozen at capture time — historical, not live and not actionable.
+    This page carries no cancel, remove, refresh or apply authority.
+  </div>
+
+  <h2>Captured job records (historical, all job families)</h2>
+  <p class="muted" role="note">
+    {{ demo_job_entries | length }} shown — at most the
+    {{ demo_job_bound }} most-recently-captured records (bound); no
+    completeness claim beyond that bound.
+  </p>
+  {% if demo_job_entries %}
+  <ul aria-label="Captured job records">
+    {% for e in demo_job_entries %}
+    <li>
+      <a href="/admin/operations/catalog/jobs/?job={{ e.job_id }}">
+        <code>{{ e.job_id }}</code>
+      </a>
+      <span class="muted">— {{ e.byte_count | num }} bytes, captured {{ e.captured_utc }}</span>
+      {% if demo_selected and e.job_id == demo_selected.job_id %}<span class="muted">(selected)</span>{% endif %}
+    </li>
+    {% endfor %}
+  </ul>
+  {% else %}
+  <p>No captured job records in this snapshot.</p>
+  <p class="muted" role="note">
+    This does not establish that live catalog storage was unconfigured
+    or that no job ran.
+  </p>
+  {% endif %}
+
+  {% if demo_selected %}
+  <div class="dash-groups">
+    <div class="dash-group">
+      <h2>Selected captured job record (historical)</h2>
+      <dl class="detail-facts" aria-label="Sanitized job record summary">
+        <div>
+          <dt>Remapped job ID</dt>
+          <dd><code>{{ demo_selected.job_id }}</code></dd>
+        </div>
+        <div>
+          <dt>Record captured (UTC)</dt>
+          <dd>{{ demo_selected.captured_utc }}</dd>
+        </div>
+        {% if demo_job_detail %}
+        <div>
+          <dt>Job family</dt>
+          <dd><code>{{ demo_job_detail.family }}</code></dd>
+        </div>
+        <div>
+          <dt>Status (frozen at capture time)</dt>
+          <dd><code>{{ demo_job_detail.status }}</code></dd>
+        </div>
+        <div>
+          <dt>Created (historical, UTC)</dt>
+          <dd><code>{{ demo_job_detail.created_at }}</code></dd>
+        </div>
+        <div>
+          <dt>Updated (historical, UTC)</dt>
+          <dd><code>{{ demo_job_detail.updated_at }}</code></dd>
+        </div>
+        <div>
+          <dt>Progress (sanitized)</dt>
+          <dd>
+            {% if demo_job_detail.progress %}<code>{{ demo_job_detail.progress }}</code>{% else %}(neutralized — no progress detail in this sanitized copy){% endif %}
+          </dd>
+        </div>
+        <div>
+          <dt>Cancel requested</dt>
+          <dd>{% if demo_job_detail.cancel_requested %}yes{% else %}no{% endif %}</dd>
+        </div>
+        <div>
+          <dt>Dispatch</dt>
+          <dd>{% if demo_job_detail.dispatch %}<code>{{ demo_job_detail.dispatch }}</code>{% else %}none{% endif %}</dd>
+        </div>
+        <div>
+          <dt>Error code</dt>
+          <dd>none (fixed in this sanitized shape)</dd>
+        </div>
+        {% endif %}
+      </dl>
+      <p class="muted" role="note">
+        Free-text progress detail and error detail are neutralized in
+        this sanitized display copy.
+      </p>
+      {% if demo_job_detail and demo_job_detail.run_id %}
+      <p>
+        Run reference:
+        {% if demo_job_detail.run_verified %}
+        <a href="/admin/operations/catalog/runs/{{ demo_job_detail.run_id }}/"><code>{{ demo_job_detail.run_id }}</code></a>
+        {% else %}
+        <code>{{ demo_job_detail.run_id }}</code>
+        <span class="muted">(its captured run is not fully present in
+        this copy, so it is shown as plain text, not linked)</span>
+        {% endif %}
+      </p>
+      {% endif %}
+      {% if demo_job_detail and demo_job_detail.artifact_name %}
+      <p>
+        Upload reference:
+        {% if demo_job_detail.artifact_verified %}
+        <a href="/admin/operations/catalog/jobs/{{ demo_selected.job_id }}/artifact/{{ demo_job_detail.artifact_name }}"><code>{{ demo_job_detail.artifact_name }}</code></a>
+        {% else %}
+        <code>{{ demo_job_detail.artifact_name }}</code>
+        <span class="muted">(its captured upload is not present in
+        this copy, so it is shown as plain text, not linked)</span>
+        {% endif %}
+      </p>
+      {% endif %}
+    </div>
+  </div>
+  {% endif %}
+</section>
+{% endblock %}

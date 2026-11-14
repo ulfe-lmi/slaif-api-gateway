@@ -108,7 +108,13 @@ async def _assert_fresh_upgrade_state(database_url: str, head_revision: str) -> 
 
     missing = EXPECTED_APPLICATION_TABLES - tables
     assert not missing, f"Missing expected tables after fresh migration: {sorted(missing)}"
-    expected_demo_control_tables = {"fake_admin_accounts", "fake_admin_account_events"}
+    expected_demo_control_tables = {
+        "fake_admin_accounts",
+        "fake_admin_account_events",
+        # Objective 224-a: 0028 adds the demo web-control tables.
+        "demo_snapshot_requests",
+        "demo_web_sessions",
+    }
     missing_demo = expected_demo_control_tables - demo_tables
     assert not missing_demo, (
         f"Missing expected demo_control tables after fresh migration: {sorted(missing_demo)}"

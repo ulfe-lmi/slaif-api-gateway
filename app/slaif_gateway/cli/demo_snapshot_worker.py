@@ -20,6 +20,7 @@ import typer
 
 from slaif_gateway.cli.common import echo_kv
 from slaif_gateway.config import get_settings
+from slaif_gateway.services import demo_web_worker as dww
 from slaif_gateway.services.demo_snapshot import (
     DemoSnapshotError,
     config_from_settings,
@@ -39,7 +40,9 @@ from slaif_gateway.services.demo_snapshot_files import (
 app = typer.Typer(help="Bounded private demo PostgreSQL snapshot worker (worker-only)")
 
 
-def _fail(exc: DemoSnapshotError, *, json_output: bool) -> None:
+def _fail(
+    exc: DemoSnapshotError | dww.DemoWebWorkerError, *, json_output: bool
+) -> None:
     """Render the safe fixed-vocabulary error and exit non-zero."""
     if json_output:
         from slaif_gateway.cli.common import emit_json
@@ -204,4 +207,93 @@ def files(
         if result.state != "FILES_VERIFIED":
             raise typer.Exit(code=1)
     except DemoSnapshotError as exc:  # safe fixed vocabulary only
+        _fail(exc, json_output=json_output)
+
+
+@app.command("process-request")
+def process_request(
+    request_id: Annotated[
+        str, typer.Argument(help="The exact demo snapshot request UUID to process.")
+    ],
+    json_output: Annotated[
+        bool,
+        typer.Option("--json", help="Emit the safe result as a JSON object."),
+    ] = False,
+) -> None:
+    """Process ONE specific request: claim, ONE fresh 221 copy, 222 + 223
+    for THAT copy, worker-held proof, verified handoff (224-b, worker-only).
+
+    Requires the explicit worker-control credential configuration
+    (separate from the owner DATABASE_URL). Output is the safe fixed
+    vocabulary: state, finite failure code, elapsed milliseconds. The
+    job id and target database name are NEVER emitted.
+    """
+    import asyncio
+    import uuid as _uuid
+
+    from slaif_gateway.services.demo_web_worker import DemoWebWorkerError
+
+    try:
+        rid = _uuid.UUID(request_id)
+    except ValueError:
+        typer.secho(
+            "Error: The request id is not a valid UUID.", fg=typer.colors.RED, err=True
+        )
+        typer.secho("code: WEB_WORKER_MISCONFIGURED", fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=1)
+    try:
+        settings = get_settings()
+        config = dww.web_worker_config_from_settings(settings)
+        result = asyncio.run(
+            dww.process_request(config, settings, request_id=rid)
+        )
+        payload: dict[str, object] = result.to_safe_dict()
+        if json_output:
+            from slaif_gateway.cli.common import emit_json
+
+            emit_json(payload)
+        else:
+            echo_kv(payload)
+        if result.state != "verified_unpublished":
+            raise typer.Exit(code=1)
+    except (DemoSnapshotError, DemoWebWorkerError) as exc:
+        _fail(exc, json_output=json_output)
+
+
+@app.command("cleanup")
+def cleanup(
+    limit: Annotated[
+        int,
+        typer.Option("--limit", help="Bounded candidate scan size (1..100)."),
+    ] = 100,
+    json_output: Annotated[
+        bool,
+        typer.Option("--json", help="Emit the safe result as a JSON object."),
+    ] = False,
+) -> None:
+    """Bounded recovery/cleanup (224-b, worker-only, schedulable).
+
+    Reaps stuck pending/claimed rows, marks failed and session-released
+    verified rows cleanup_pending, then drops ONLY each bound target
+    database and removes ONLY its owned custody leaves before claiming
+    cleaned. Output is the safe fixed-vocabulary counts; retained rows
+    stay inspectable for retry.
+    """
+    import asyncio
+
+    from slaif_gateway.services.demo_web_worker import DemoWebWorkerError
+
+    try:
+        settings = get_settings()
+        config = dww.web_worker_config_from_settings(settings)
+        result = asyncio.run(dww.recover_and_cleanup(config, limit=limit))
+        payload: dict[str, object] = {"state": "CLEANUP_RAN"}
+        payload.update(result.to_safe_dict())
+        if json_output:
+            from slaif_gateway.cli.common import emit_json
+
+            emit_json(payload)
+        else:
+            echo_kv(payload)
+    except (DemoSnapshotError, DemoWebWorkerError) as exc:
         _fail(exc, json_output=json_output)

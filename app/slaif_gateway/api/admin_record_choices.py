@@ -195,7 +195,13 @@ async def _admin_lookup_context(
     refresh, so repeated dropdown searches never invalidate the
     already-rendered form's CSRF token and never mutate session rows.
     Invalid sessions receive the same 303 login redirect as the pages.
+
+    224-e demo host: the central gate stored the request-local fictional
+    context; return it directly (no real session read, no write).
     """
+    demo = getattr(request.state, "demo_admin", None)
+    if demo is not None:
+        return demo.session_context
     settings = _settings(request)
     session_token = request.cookies.get(settings.ADMIN_SESSION_COOKIE_NAME)
     if not session_token:

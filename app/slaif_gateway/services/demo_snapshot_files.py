@@ -71,6 +71,7 @@ from slaif_gateway.services import demo_snapshot as ds
 from slaif_gateway.services import demo_snapshot_sanitize as dss
 from slaif_gateway.services.demo_snapshot_sanitize import (
     demo_profile_id,
+    remap_str_id,
     remap_uuid,
 )
 from slaif_gateway.services.catalog_refresh import filesystem as catfs
@@ -79,6 +80,9 @@ from slaif_gateway.services.catalog_refresh.errors import (
     CatalogRefreshSealError,
 )
 from slaif_gateway.services.catalog_refresh.sealing import CONTENT_FILES
+from slaif_gateway.services.configuration_inspection import (
+    CONFIG_INSPECTION_ALLOWLIST,
+)
 
 # ---------------------------------------------------------------------------
 # Safe finite failure codes (never echo paths/values)
@@ -153,6 +157,10 @@ KIND_LLM_PROFILES = "upstream_llm_profiles"
 KIND_COMPLETION_CHOICES = "completion_choices"
 KIND_BRANDING = "branding"
 KIND_JOB_RECORD = "job_record"
+# 224-t: the ONE finite worker-observed process-configuration
+# projection captured at copy time (the reviewed allowlist values +
+# configured/default provenance only).
+KIND_PROCESS_CONFIG = "process_configuration"
 
 _ALL_KINDS = frozenset(
     {
@@ -172,6 +180,7 @@ _ALL_KINDS = frozenset(
         KIND_COMPLETION_CHOICES,
         KIND_BRANDING,
         KIND_JOB_RECORD,
+        KIND_PROCESS_CONFIG,
     }
 )
 
@@ -466,12 +475,23 @@ _COMPLETION_PROFILE_MAX_COUNT = 1000
 _PROFILE_ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$")
 
 def _demo_run_id(seed: bytes, run_id: str) -> str:
-    """Per-copy deterministic demo run id (slug-safe, link-preserving)."""
-    import hashlib as _hashlib
-    import hmac as _hmac
+    """Per-copy deterministic demo run id (slug-safe, link-preserving).
 
-    digest = _hmac.new(seed, b"run|" + run_id.encode("utf-8"), _hashlib.sha256).digest()
-    return f"demo-run-{digest[:12].hex()}"
+    224-y: the slug is the first 24 hex characters of the EXISTING
+    ``remap_str_id(seed, run_id)`` output (the same keyed ``b"s"``
+    digest domain the sanitizer applies to copied
+    ``catalog_refresh_applications.run_id`` values). Both producers
+    share the same per-login seed (``manifest.job_id``) and the same
+    canonical raw run id (the worker's ``bundle.run_id`` is written as
+    BOTH the sealed run directory name and the application row's
+    ``run_id``), so the slug's 96-bit prefix is a deterministic
+    DISPLAY correlation with the already-sanitized copy DB id. This
+    is a display mapping ONLY: never identity, authorization or
+    apply authority. Zero raw-id/seed exposure: the slug is the keyed
+    prefix (not the raw value), and per-copy seeds keep distinct
+    copies unlinkable.
+    """
+    return "demo-run-" + remap_str_id(seed, run_id)[4:28]
 
 
 def _demo_job_id(seed: bytes, job_id: str) -> str:
@@ -2163,6 +2183,95 @@ def _san_branding(raw: bytes, seed: bytes, slot: str | None) -> bytes:
     return data
 
 
+# ---------------------------------------------------------------------------
+# 224-t: the finite worker-observed process-configuration projection
+# ---------------------------------------------------------------------------
+#
+# The worker captures the EXISTING reviewed `CONFIG_INSPECTION_ALLOWLIST`
+# projection from THIS worker process's cached Settings at copy time
+# (`inspect_process_configuration`, "api" scope): each allowlisted
+# numeric/nullable-numeric value plus its configured/default provenance.
+# No wildcard model_dump, no environment scan, no file read, no secret,
+# no host, no path and no free text can be represented. The worker
+# process may hold different cached settings than the live API process;
+# the demo page labels the display accordingly (worker-observed
+# deployment configuration captured at copy time).
+_PROC_CONFIG_LOGICAL_NAME = "configuration/process-configuration.json"
+_PROC_CONFIG_INT_MAX = 2**63 - 1  # closed nonnegative integer ceiling
+# The three default key-policy rate limits are nullable in Settings
+# (None = no default); every other allowlisted setting is a plain int.
+_PROC_CONFIG_NULLABLE = frozenset(
+    {
+        "DEFAULT_RATE_LIMIT_REQUESTS_PER_MINUTE",
+        "DEFAULT_RATE_LIMIT_TOKENS_PER_MINUTE",
+        "DEFAULT_RATE_LIMIT_CONCURRENT_REQUESTS",
+    }
+)
+_PROC_CONFIG_SOURCES = frozenset({"configured", "default"})
+
+
+def _proc_config_entry_closed(row: object, name: str, field: str) -> None:
+    """One allowlisted entry: exact keys, closed value/source types."""
+    entry = _dict_keys(row, field)
+    if set(entry) != {"value", "source"}:
+        raise _unsupported(f"A demo file field has an unexpected shape: {field}")
+    value = entry["value"]
+    if name in _PROC_CONFIG_NULLABLE:
+        if value is not None and (
+            type(value) is not int or not 0 <= value <= _PROC_CONFIG_INT_MAX
+        ):
+            raise _unsupported(f"A demo file field has an unexpected shape: {field}")
+    elif type(value) is not int or not 0 <= value <= _PROC_CONFIG_INT_MAX:
+        raise _unsupported(f"A demo file field has an unexpected shape: {field}")
+    if entry["source"] not in _PROC_CONFIG_SOURCES:
+        raise _unsupported(f"A demo file field has an unexpected shape: {field}")
+
+
+def _san_process_configuration(raw: bytes, seed: bytes) -> bytes:
+    """The closed typed law for the process-configuration leaf (224-t).
+
+    The raw document is the worker producer's projection of the finite
+    reviewed allowlist; the sanitizer re-proves the EXACT closed shape
+    (the same 45 names, no more no less, each a nonnegative integer -
+    nullable only for the three default rate limits - plus the closed
+    configured/default provenance) and re-dumps the canonical display
+    document. Any drift is a finite closed refusal.
+    """
+    doc = _json_strict(raw)
+    entries = _dict_keys(doc, "process_configuration")
+    if set(entries) != {"display_version", "settings"}:
+        raise _unsupported(
+            "A demo process configuration document has an unexpected shape."
+        )
+    if _int(entries["display_version"], "process_configuration.display_version", 1, 1) != 1:
+        raise _unsupported(
+            "A demo process configuration document has an unexpected shape."
+        )
+    settings = _dict_keys(entries["settings"], "process_configuration.settings")
+    if set(settings) != set(CONFIG_INSPECTION_ALLOWLIST):
+        raise _unsupported(
+            "A demo process configuration document has an unexpected shape."
+        )
+    for name in CONFIG_INSPECTION_ALLOWLIST:
+        _proc_config_entry_closed(
+            settings[name], name, f"process_configuration.settings.{name}"
+        )
+    return _dump(
+        {
+            "schema": DEMO_SCHEMA_VERSION,
+            "kind": KIND_PROCESS_CONFIG,
+            "schema_version": 1,
+            "settings": {
+                name: {
+                    "source": settings[name]["source"],
+                    "value": settings[name]["value"],
+                }
+                for name in sorted(settings)
+            },
+        }
+    )
+
+
 _SANITIZERS: dict[str, object] = {
     KIND_REFRESH_BUNDLE: _san_refresh_bundle,
     KIND_BASELINE_DOC: _san_baseline_document,
@@ -2179,6 +2288,7 @@ _SANITIZERS: dict[str, object] = {
     KIND_LLM_PROFILES: _san_llm_profiles,
     KIND_COMPLETION_CHOICES: _san_completion_choices,
     KIND_JOB_RECORD: _sanitize_job_record,
+    KIND_PROCESS_CONFIG: _san_process_configuration,
 }
 
 
@@ -2508,6 +2618,18 @@ def capture_catalog(capture: _Capture, seed: bytes) -> None:
 def capture_branding(capture: _Capture, seed: bytes) -> None:
     """Capture the five fixed branding slots (neutralized at sanitize).
 
+    EVERY new copy publishes the COMPLETE finite five-slot display
+    set - configured or unconfigured: an unconfigured source still
+    gets the five neutral-substitute leaves (the same bytes a
+    configured source always shows after sanitization), so the
+    session-bound demo read law is one closed shape: EXACTLY five
+    ``branding/<slot>`` leaves (zero or a partial set is a damaged
+    or pre-upgrade copy and the demo read refuses; older copies from
+    before this law were unconfigured-without-leaves and are safely
+    refused on re-login). The private source record still
+    distinguishes configured from unconfigured (custody only; never
+    displayed).
+
     Slot selection reuses the EXISTING validated resolution law
     (``web.branding.resolve_slot``): an image slot resolves to exactly
     one of its fixed ``<slot>.svg``/``<slot>.png`` files, with the
@@ -2525,7 +2647,31 @@ def capture_branding(capture: _Capture, seed: bytes) -> None:
     config = capture.config
     if config.branding_dir is None:
         capture.not_configured.append("branding")
-        capture.source_records["branding"] = {"configured": False}
+        # 224-u: the unconfigured source still publishes the complete
+        # finite five-slot neutral display set (the session-bound
+        # demo read requires exactly five leaves; the private record
+        # keeps the unconfigured provenance).
+        slots: dict[str, dict[str, object]] = {}
+        for slot in _BRANDING_SLOTS:
+            capture.add_display(
+                kind=KIND_BRANDING,
+                source="branding",
+                source_ref=f"branding:{slot}",
+                logical_name=f"branding/{slot}",
+                raw=b"",
+                seed=seed,
+                slot=slot,
+            )
+            slots[slot] = {
+                "resolved": False,
+                "file_name": None,
+                "content_type": None,
+                "substituted": True,
+            }
+        capture.source_records["branding"] = {
+            "configured": False,
+            "slots": slots,
+        }
         return
     try:
         handle = catfs.open_anchored_handle(config.branding_dir)
@@ -2784,6 +2930,49 @@ def capture_completion_profiles(capture: _Capture, seed: bytes) -> None:
         handle.close()
 
 
+def capture_process_configuration(capture: _Capture) -> None:
+    """Capture the ONE finite worker-observed process-configuration
+    projection for this copy (224-t).
+
+    The source is the EXISTING reviewed allowlist projection
+    (`inspect_process_configuration`, "api" scope) of THIS worker
+    process's cached Settings: each allowlisted numeric/nullable-numeric
+    value plus its configured/default provenance. There is no wildcard
+    model_dump, no environment scan, no file read and no credential,
+    host, path or free text in the projection. The capture time is the
+    leaf's own capture time (separate from the PostgreSQL snapshot);
+    the worker process may hold different cached settings than the live
+    API process, and the demo page labels the display as the
+    worker-observed deployment configuration captured at copy time.
+    A missing, unknown, oversize or corrupt projection fails the copy
+    publication closed through the shared add_display law.
+    """
+    from slaif_gateway.services.configuration_inspection import (
+        inspect_process_configuration,
+    )
+
+    payload = inspect_process_configuration(capture.settings, process_scope="api")
+    entries = payload["config"]["settings"]
+    raw = json.dumps(
+        {
+            "display_version": 1,
+            "settings": {
+                name: {"value": entries[name]["value"], "source": entries[name]["source"]}
+                for name in sorted(CONFIG_INSPECTION_ALLOWLIST)
+            },
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    capture.add_display(
+        kind=KIND_PROCESS_CONFIG,
+        source="process_configuration",
+        source_ref="configuration:process-configuration",
+        logical_name=_PROC_CONFIG_LOGICAL_NAME,
+        raw=raw,
+    )
+
+
 def capture_pinned_references(capture: _Capture) -> None:
     """Record versioned identity references for packaged invariant data.
 
@@ -2847,6 +3036,7 @@ def capture_all(config: FileSnapshotConfig, settings: Settings, seed: bytes) -> 
     capture = _Capture(config, settings)
     capture_catalog(capture, seed)
     capture_branding(capture, seed)
+    capture_process_configuration(capture)
     capture_upstream_llm_profiles(capture, seed)
     capture_completion_profiles(capture, seed)
     capture_pinned_references(capture)
@@ -3026,6 +3216,42 @@ _ISO_RE = re.compile(
 def _v_iso():
     def check(value: object) -> None:
         if not isinstance(value, str) or not _ISO_RE.fullmatch(value):
+            raise _v_unexpected()
+
+    return check
+
+
+def _v_opt_iso():
+    base = _v_iso()
+
+    def check(value: object) -> None:
+        if value is None:
+            return
+        base(value)
+
+    return check
+
+
+_CURRENCY_CODE_RE = re.compile(r"^[A-Z]{3}$")
+
+
+def _v_currency():
+    def check(value: object) -> None:
+        if not isinstance(value, str) or not _CURRENCY_CODE_RE.fullmatch(value):
+            raise _v_unexpected()
+
+    return check
+
+
+def _v_positive_decimal():
+    def check(value: object) -> None:
+        if not isinstance(value, str):
+            raise _v_unexpected()
+        try:
+            number = decimal.Decimal(value)
+        except (decimal.InvalidOperation, ValueError):
+            raise _v_unexpected()
+        if not number.is_finite() or number <= 0:
             raise _v_unexpected()
 
     return check
@@ -3899,10 +4125,86 @@ def _v_doc_job_record(document: dict[str, object]) -> None:
 
 
 
+# 224-t: the closed verifier law for the process-configuration leaf.
+# The EXACT reviewed allowlist names (nothing else), each entry a
+# nonnegative integer - nullable only for the three default rate
+# limits - plus the closed configured provenance vocabulary.
+def _proc_config_source_check(value: object) -> None:
+    if value not in _PROC_CONFIG_SOURCES:
+        raise _v_unexpected()
+
+
+def _v_fx_rows(count_max: int = _MAX_ROWS):
+    """Exact closed FX fact rows as emitted by ``_san_fx_json``: the
+    source invariants (distinct currencies, positive rate, valid_until
+    after valid_from) are preserved in the display projection, so a leaf
+    violating them is not a sanitized output."""
+    row_spec = {
+        "base_currency": _v_currency(),
+        "quote_currency": _v_currency(),
+        "rate": _v_positive_decimal(),
+        "valid_from": _v_iso(),
+        "valid_until": _v_opt_iso(),
+    }
+
+    def check(value: object) -> None:
+        if not isinstance(value, list) or len(value) > count_max:
+            raise _v_unexpected()
+        for row in value:
+            _v_row_spec(row_spec)(row)
+            if row["base_currency"] == row["quote_currency"]:
+                raise _v_unexpected()
+            if row["valid_until"] is not None:
+                if _dt.fromisoformat(row["valid_until"]) <= _dt.fromisoformat(
+                    row["valid_from"]
+                ):
+                    raise _v_unexpected()
+
+    return check
+
+
+def _v_doc_fx_json(document: dict[str, object]) -> None:
+    _v_spec(
+        document,
+        {
+            "schema": _v_const(DEMO_SCHEMA_VERSION),
+            "kind": _v_const(KIND_FX_JSON),
+            "fx": _v_fx_rows(),
+        },
+    )
+
+
+def _v_doc_process_configuration(document: dict[str, object]) -> None:
+    _v_spec(
+        document,
+        {
+            "schema": _v_const(DEMO_SCHEMA_VERSION),
+            "kind": _v_const(KIND_PROCESS_CONFIG),
+            "schema_version": _v_const(1),
+            "settings": _v_row_spec(
+                {
+                    name: _v_row_spec(
+                        {
+                            "value": (
+                                _v_opt_int(0, _PROC_CONFIG_INT_MAX)
+                                if name in _PROC_CONFIG_NULLABLE
+                                else _v_int(0, _PROC_CONFIG_INT_MAX)
+                            ),
+                            "source": _proc_config_source_check,
+                        }
+                    )
+                    for name in CONFIG_INSPECTION_ALLOWLIST
+                }
+            ),
+        },
+    )
+
+
 _JSON_DOC_VALIDATORS: dict[str, object] = {
     KIND_REFRESH_BUNDLE: _v_doc_refresh_bundle,
     KIND_COMPLETION_CHOICES: _v_doc_completion_choices,
     KIND_BASELINE_DOC: _v_doc_baseline,
+    KIND_FX_JSON: _v_doc_fx_json,
     KIND_VALIDATION_JSON: _v_doc_validation,
     KIND_NORMALIZED_JSON: _v_doc_normalized,
     KIND_SOURCE_MANIFEST: _v_doc_source_manifest,
@@ -3910,6 +4212,7 @@ _JSON_DOC_VALIDATORS: dict[str, object] = {
     KIND_PACKAGE_MANIFEST: _v_doc_package_manifest,
     KIND_LLM_PROFILES: _v_doc_llm_profiles,
     KIND_JOB_RECORD: _v_doc_job_record,
+    KIND_PROCESS_CONFIG: _v_doc_process_configuration,
 }
 
 
@@ -3983,26 +4286,39 @@ def _verify_leaf_policy(kind: object, data: bytes, slot: str | None) -> None:
     _verify_json_policy(kind, data)
 
 
-def verify_files(
+def verified_leaf_entries(
     job_dir: Path,
-    manifest: ds.SnapshotManifest,
     config: FileSnapshotConfig,
     deadline: float,
-) -> None:
-    """Independently re-prove the job's display tree (read-only).
+    expected_job_identity: tuple[int, int] | None = None,
+):
+    """Shared read-only re-proof of the job's display tree (224-b),
+    yielding ONE fully re-proven leaf at a time (224-g).
 
-    Re-reads every leaf through the anchored boundary and rechecks the
-    files-directory identity, the exact leaf set (no foreign entry, no
-    missing leaf), per-leaf digest / byte count / 0600 mode / inode
-    identity and the per-leaf display policy. Per-file and cumulative
-    byte bounds come from the TRUSTED configured caps (bounded by the
-    absolute verification ceilings); the untrusted manifest counts only
-    ever shrink the read. The caller's ABSOLUTE deadline is re-checked
-    before every leaf read and before a clean return, so a large
-    verifier re-read can never outlive the copy budget. Any drift is a
-    FILES_VERIFY_FAILED refusal;
-    only a fully re-proven tree allows the caller to promote the main
-    manifest.
+    The complete identity/inventory law: every leaf re-read through the
+    anchored no-follow boundary; the files-directory identity; the
+    EXACT leaf set (no foreign entry, no missing leaf, no duplicate or
+    invalid name); per-leaf regular type / 0600 mode / byte count /
+    inode identity; and the per-leaf digest plus display policy. It
+    deliberately has NO already-verified short-circuit: a promoted
+    (``FILES_VERIFIED``) tree is re-proven from the held files exactly
+    as hard as a fresh one. Per-file and cumulative byte bounds come
+    from the TRUSTED configured caps (bounded by the absolute
+    verification ceilings); the untrusted manifest counts only ever
+    shrink the read. The ABSOLUTE deadline is re-checked before every
+    leaf read and before a clean return.
+
+    ``expected_job_identity`` (224-b): when given, the freshly opened
+    job-directory handle must have EXACTLY this ``(st_dev, st_ino)`` -
+    the identity captured by a PRECEDING held handle on the same job
+    directory. A directory swapped between the two handles (the
+    per-handle name binding alone cannot detect a swap across two
+    unrelated opens) is a refusal.
+
+    Yields ``(entry, data)`` - the exact manifest entry document plus
+    the re-proven leaf bytes - for each accepted leaf, one bounded
+    leaf at a time (never the aggregate in memory). Any drift is a
+    ``FILES_VERIFY_FAILED`` refusal.
     """
 
     def _deadline_check() -> None:
@@ -4012,17 +4328,17 @@ def verify_files(
                 "File verification exceeded its elapsed bound."
             )
 
-    _deadline_check()
-    if manifest.state != ds.STATE_DB_SANITIZED_UNPUBLISHED:
-        raise ds.DemoSnapshotError(
-            CODE_FILES_VERIFY_FAILED,
-            "The copy is not in the 222 verified DB state.",
-        )
-    if manifest.files_state == FILES_STATE_VERIFIED:
-        return  # already verified: idempotent
     handle = catfs.open_anchored_handle(job_dir)
     try:
         handle.assert_name_binding(str(job_dir))
+        if (
+            expected_job_identity is not None
+            and handle.identity != tuple(expected_job_identity)
+        ):
+            raise ds.DemoSnapshotError(
+                CODE_FILES_VERIFY_FAILED,
+                "The job directory identity drifted between reads.",
+            )
         try:
             files_fd = os.open(
                 FILES_DIR_NAME,
@@ -4163,14 +4479,78 @@ def verify_files(
                     slot = logical.split("/", 1)[1]
                 _verify_leaf_policy(entry.get("kind"), data, slot)
                 total_bytes += len(data)
-            manifest.files_bytes = total_bytes
-            manifest.files_count = len(entries)
+                yield entry, data
         finally:
             os.close(files_fd)
         handle.assert_name_binding(str(job_dir))
     finally:
         handle.close()
     _deadline_check()
+
+
+def _reprove_files_tree(
+    job_dir: Path,
+    config: FileSnapshotConfig,
+    deadline: float,
+    expected_job_identity: tuple[int, int] | None = None,
+) -> tuple[int, int]:
+    """Shared read-only re-proof of the job's display tree (224-b).
+
+    Consumes the single shared re-proof
+    (``verified_leaf_entries``) and returns ``(total_bytes,
+    leaf_count)``; any drift inside the shared law is a
+    ``FILES_VERIFY_FAILED`` refusal.
+    """
+    total_bytes = 0
+    leaf_count = 0
+    for _entry, data in verified_leaf_entries(
+        job_dir, config, deadline, expected_job_identity
+    ):
+        total_bytes += len(data)
+        leaf_count += 1
+    return total_bytes, leaf_count
+
+def verify_files(
+    job_dir: Path,
+    manifest: ds.SnapshotManifest,
+    config: FileSnapshotConfig,
+    deadline: float,
+) -> None:
+    """Independently re-prove the job's display tree (read-only).
+
+    Re-reads every leaf through the anchored boundary and rechecks the
+    files-directory identity, the exact leaf set (no foreign entry, no
+    missing leaf), per-leaf digest / byte count / 0600 mode / inode
+    identity and the per-leaf display policy. Per-file and cumulative
+    byte bounds come from the TRUSTED configured caps (bounded by the
+    absolute verification ceilings); the untrusted manifest counts only
+    ever shrink the read. The caller's ABSOLUTE deadline is re-checked
+    before every leaf read and before a clean return, so a large
+    verifier re-read can never outlive the copy budget. Any drift is a
+    FILES_VERIFY_FAILED refusal;
+    only a fully re-proven tree allows the caller to promote the main
+    manifest.
+    The re-proof itself is the shared ``_reprove_files_tree`` law
+    (no short-circuit inside it); this wrapper adds the 223 state
+    gates and the idempotent already-verified return, then records
+    the proven totals on the manifest.
+    """
+
+    if time.monotonic() > deadline:
+        raise ds.DemoSnapshotError(
+            CODE_FILES_BUDGET_EXCEEDED,
+            "File verification exceeded its elapsed bound."
+        )
+    if manifest.state != ds.STATE_DB_SANITIZED_UNPUBLISHED:
+        raise ds.DemoSnapshotError(
+            CODE_FILES_VERIFY_FAILED,
+            "The copy is not in the 222 verified DB state.",
+        )
+    if manifest.files_state == FILES_STATE_VERIFIED:
+        return  # already verified: idempotent
+    total_bytes, leaf_count = _reprove_files_tree(job_dir, config, deadline)
+    manifest.files_bytes = total_bytes
+    manifest.files_count = leaf_count
 
 
 # ---------------------------------------------------------------------------
@@ -4509,7 +4889,42 @@ def _completion_link_gate(
         )
 
 
-def run_files_job(config: FileSnapshotConfig, settings: Settings) -> FilesJobResult:
+def _select_exact_files_job(
+    config: FileSnapshotConfig,
+    job_id: str,
+) -> tuple[list[Path], str | None, bool]:
+    """Resolve EXACTLY one custody job for the 224-b worker (no scan).
+
+    Returns ``(job_dirs, error_code, already_verified)``: the single
+    addressable job to process, a safe finite error code when the exact
+    job is missing, inconsistent or in an unexpected state, or a
+    ``already_verified`` flag when the exact job is already
+    file-verified (idempotent no-op success). The job is addressed ONLY
+    by its closed ``snap-<32 hex>`` name under the validated custody
+    root; the manifest's own job id must agree. Unrelated pre-existing
+    copies are never touched or promoted.
+    """
+    if not isinstance(job_id, str) or not re.fullmatch(r"snap-[0-9a-f]{32}", job_id):
+        return [], ds.CODE_EXACT_COPY_UNAVAILABLE, False
+    job_dir = config.custody_dir / job_id
+    manifest = ds.read_manifest(job_dir)
+    if manifest is None or manifest.job_id != job_id:
+        return [], ds.CODE_EXACT_COPY_UNAVAILABLE, False
+    if manifest.state == ds.STATE_DB_AND_FILES_VERIFIED_UNPUBLISHED:
+        if manifest.files_state == FILES_STATE_VERIFIED:
+            return [], None, True
+        return [], ds.CODE_EXACT_COPY_UNAVAILABLE, False
+    if manifest.state == ds.STATE_DB_SANITIZED_UNPUBLISHED:
+        return [job_dir], None, False
+    return [], ds.CODE_EXACT_COPY_UNAVAILABLE, False
+
+
+def run_files_job(
+    config: FileSnapshotConfig,
+    settings: Settings,
+    *,
+    job_id: str | None = None,
+) -> FilesJobResult:
     """Run the bounded files stage over every 222 verified copy.
 
     Idempotent: already file-verified copies are skipped. Each copy gets
@@ -4519,6 +4934,14 @@ def run_files_job(config: FileSnapshotConfig, settings: Settings) -> FilesJobRes
     its partial display tree is cleaned (exact leaves only); a cleanup
     failure is reported as FILES_CLEANUP_FAILED and the artifacts are
     retained for operator inspection.
+
+    ``job_id`` (224-b exact worker): run the files stage for EXACTLY
+    that one custody job (addressed by its closed ``snap-<32 hex>``
+    name, never by directory order, timestamps or target database). A
+    missing, inconsistent or unexpected-state exact job is a safe
+    finite failure (``EXACT_COPY_UNAVAILABLE``); an already
+    file-verified exact job is an idempotent no-op success. Unrelated
+    pre-existing copies are never touched or promoted.
     """
     ds.validate_custody_dir(config.custody_dir)
     # The combined DB/files link gate addresses the exact copied
@@ -4533,7 +4956,32 @@ def run_files_job(config: FileSnapshotConfig, settings: Settings) -> FilesJobRes
     failed = 0
     first_failure_code: str | None = None
     try:
-        for job_dir in ds.list_job_dirs(config.custody_dir):
+        targets: list[Path] = []
+        if job_id is not None:
+            targets, exact_error, already_verified = _select_exact_files_job(
+                config, job_id
+            )
+            if exact_error is not None:
+                return FilesJobResult(
+                    "FAILED", 0, 1,
+                    int((time.monotonic() - started) * 1000),
+                    exact_error,
+                )
+            if already_verified:
+                return FilesJobResult(
+                    "FILES_VERIFIED", 0, 0,
+                    int((time.monotonic() - started) * 1000),
+                    None,
+                )
+        else:
+            for job_dir in ds.list_job_dirs(config.custody_dir):
+                manifest = ds.read_manifest(job_dir)
+                if (
+                    manifest is not None
+                    and manifest.state == ds.STATE_DB_SANITIZED_UNPUBLISHED
+                ):
+                    targets.append(job_dir)
+        for job_dir in targets:
             manifest = ds.read_manifest(job_dir)
             if manifest is None or manifest.state != ds.STATE_DB_SANITIZED_UNPUBLISHED:
                 continue

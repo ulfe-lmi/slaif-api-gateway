@@ -283,7 +283,11 @@ def test_all_eleven_get_limit_lists_have_bound_rows_selectors() -> None:
             problems.append(f"{template}: preset loop missing")
         if "{{ filters.limit }} (current)" not in src:
             problems.append(f"{template}: custom-current option missing")
-        if "{{ " + var + "|length }} rows shown" not in src:
+        # 224-f: the label may be the direct interpolation or the shared
+        # rows_shown_label(...) pluralization helper over the same value.
+        direct = "{{ " + var + "|length }} rows shown"
+        helper = "{{ rows_shown_label(" + var + "|length) }}"
+        if direct not in src and helper not in src:
             problems.append(f"{template}: displayed count is not the real {{{var}|length}} interpolation")
         limit_inputs = re.findall(r"<input\b[^>]*name=\"limit\"[^>]*>", src, flags=re.DOTALL)
         if any('type="hidden"' in i for i in limit_inputs):

@@ -41,7 +41,7 @@
   <p class="field-help" id="cohorts-help-filter">Filters narrow the cohort list: within one field, rows match any selected value (OR); different fields combine with AND. Blank fields are unrestricted. Active is the cohort's lifecycle state.</p>
 
   <div class="table-toolbar" aria-label="Cohorts rows">
-    <span class="rows-shown" id="cohorts-rows-shown">{{ cohorts|length }} rows shown</span>
+    <span class="rows-shown" id="cohorts-rows-shown">{{ rows_shown_label(cohorts|length) }}</span>
     <label>Rows
       <select name="limit" id="cohorts-limit" form="cohorts-filter" aria-describedby="cohorts-help-rows">
         {% for n in (10, 25, 50, 100, 200) %}

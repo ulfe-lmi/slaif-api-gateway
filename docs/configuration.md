@@ -1740,6 +1740,7 @@ and operator-setup reference.
 | `DEMO_SNAPSHOT_TARGET_HOST` | empty | Separate demo PostgreSQL service host. |
 | `DEMO_SNAPSHOT_TARGET_PORT` | `5432` | Target service port. |
 | `DEMO_SNAPSHOT_TARGET_USER` | empty | Target admin user (worker-only; the only role that can read raw copies). |
+| `DEMO_SNAPSHOT_TARGET_READER_ROLE` | empty | Closed-name identifier of the operator-created STATIC target-copy reader role (224-d). The worker requires it (fail-closed when missing/malformed) and grants ONLY that role `CONNECT`/`USAGE`/`SELECT` on ONE fully verified disposable copy, in one atomic transaction, only after the combined 222+223 proof. Nothing here creates roles; the role must be LOGIN with no privilege bits, no memberships, and must not be the target admin (see `docs/demo-admin.md`, Demo verified copy reader). |
 | `DEMO_SNAPSHOT_PGPASSFILE` | empty | Absolute path to a restrictive (0600) pgpass file for the PG client tools; passwords never use argv or logs. |
 | `DEMO_SNAPSHOT_CUSTODY_DIR` | empty | Absolute operator-owned `0700` custody directory outside the repo and databases. |
 | `DEMO_SNAPSHOT_MAX_EXPORT_BYTES` | `268435456` (256 MiB) | Hard per-job export byte cap; the dump is killed before a complete claim can exceed it. |
@@ -1782,6 +1783,113 @@ display law and fail-closed codes.
 | `DEMO_SNAPSHOT_FILES_MAX_FILE_BYTES` | `33554432` (32 MiB) | Per-file byte cap for raw admission AND sanitized display bytes (1 MiB–128 MiB). |
 | `DEMO_SNAPSHOT_FILES_MAX_TOTAL_BYTES` | `134217728` (128 MiB) | Aggregate byte cap across all captured files of one copy (64 MiB–4096 MiB); must be at least the per-file cap. |
 | `DEMO_SNAPSHOT_FILES_MAX_ELAPSED_SECONDS` | `300` | ONE absolute elapsed deadline per copy covering capture, write and independent verification (10–3600 s). |
+
+### Demo web worker control connection (objective 224-b)
+
+The 224-b worker handoff commands (`demo-snapshot-worker
+process-request` / `cleanup`) connect to the control database with a
+dedicated WORKER-only PostgreSQL role — never the owner
+`DATABASE_URL` credential. All five values must be set together for the
+worker path (the 224-a role grant matrix is documented in
+`docs/database-schema.md`); they are validated feature-locally in the
+worker path only, so missing or malformed values refuse the worker
+command with `WEB_WORKER_MISCONFIGURED` and can never affect ordinary
+gateway startup while the demo worker is off. The code validates closed
+PostgreSQL identifier syntax for the user and database (no interpolation
+escape); the operator contract is that the worker role is granted
+exactly the 224-a matrix on that database. The password is used only to
+build the worker control connection URL and is never rendered in output,
+logs or errors.
+
+| Setting | Default | Meaning |
+| --- | --- | --- |
+| `DEMO_WEB_WORKER_CONTROL_HOST` | empty | Control PostgreSQL host for the worker role. |
+| `DEMO_WEB_WORKER_CONTROL_PORT` | `5432` | Control PostgreSQL port. |
+| `DEMO_WEB_WORKER_CONTROL_DATABASE` | empty | Control database name (the operator must grant the worker role the 224-a matrix on this database). |
+| `DEMO_WEB_WORKER_CONTROL_USER` | empty | Dedicated worker-only control role (column-limited SELECT on account facts, UPDATE on its own request transitions, column-limited SELECT on session facts — never `token_hash`). |
+| `DEMO_WEB_WORKER_CONTROL_PASSWORD` | empty | Worker role password; never emitted anywhere. |
+
+### Demo web entry (objective 224-c)
+
+The 224-c demo web entry is a purpose-built STANDALONE ASGI process
+(`create_demo_app`) that serves only the `/fakeadmin` entry surface
+(login / wait / ready / logout). It is DEFAULT OFF and is configured
+entirely by its own environment prefix, deliberately separate from the
+gateway `Settings`: nothing here runs unless `DEMO_WEB_ENABLED` is
+true AND the complete control-connection set plus a strong cookie
+secret are present; a misconfigured enabled demo refuses to start with
+a safe finite error, and a malformed optional value (e.g. the port)
+never breaks a default-off startup. The process registers no `/v1` or
+`/admin` routes, holds no owner `DATABASE_URL`, no worker credential,
+no provider credential, no Redis and no catalog seal key, and a web
+request never imports or spawns the privileged snapshot worker (the
+224-b `process-request` CLI is the separate-process handoff). Its only
+database connection is the dedicated demo WEB control role (the
+reviewed 224-a column grants) with an explicit no-TLS `ssl=False`
+stage boundary: the operator must keep the control endpoint on a
+trusted private loopback/Compose network. See `docs/demo-admin.md`
+(Demo web entry) for the entry law, cookies and operator setup.
+
+| Setting | Default | Meaning |
+| --- | --- | --- |
+| `DEMO_WEB_ENABLED` | `false` | Master switch for the demo web entry process. |
+| `DEMO_WEB_CONTROL_HOST` | empty | Control PostgreSQL host for the web role (required when enabled). |
+| `DEMO_WEB_CONTROL_PORT` | `5432` | Control PostgreSQL port (required to be a valid port when enabled). |
+| `DEMO_WEB_CONTROL_DATABASE` | empty | Control database name (required when enabled; the operator must grant the web role the 224-a matrix on this database). |
+| `DEMO_WEB_CONTROL_USER` | empty | Dedicated web-only control role (required when enabled). |
+| `DEMO_WEB_CONTROL_PASSWORD` | empty | Web role password; never rendered anywhere (required when enabled). |
+| `DEMO_WEB_COOKIE_SECRET` | empty | Independent cookie-signing secret, at least 32 characters (required when enabled); distinct from every other secret in the deployment. |
+| `DEMO_WEB_COPY_HOST` | empty | Target COPY READER connection: the demo PostgreSQL service host (224-d; required when enabled). This is the copy reader role's OWN connection, never the worker's target-admin passfile, the source-export credential, the owner `DATABASE_URL`, Redis or a provider secret. |
+| `DEMO_WEB_COPY_PORT` | `5432` | Copy reader connection port (required to be a valid port when enabled). |
+| `DEMO_WEB_COPY_USER` | empty | The static target-copy reader role (must match the worker's `DEMO_SNAPSHOT_TARGET_READER_ROLE`); required when enabled. |
+| `DEMO_WEB_COPY_PASSWORD` | empty | Copy reader role password; never rendered anywhere (required when enabled). |
+
+Behavioral guarantees: every route 404s when zero fake-admin accounts
+are enabled (no credential or existence oracle); login verifies the
+credential with the precomputed uniform-cost Argon2id path, one
+constant failure message, a bounded attempt window, signed
+double-submit CSRF and finite body/field bounds; the wait surface
+rechecks the live account fence (enabled, credential generation) on
+EVERY poll and issues exactly one session at the verified moment; every
+page revalidates the session on use; logout revokes idempotently and
+clears all demo cookies. 224-d adds the read-only copy preview
+(`/fakeadmin/copy-preview`): bounded counts from the session's ONE
+verified copy under the SELECT-only reader role, per-request
+read-only connection (disposed after use, `Cache-Control: no-store`),
+and one safe note for any unreadable/expired/wrong binding — no target
+name, DSN or internal error ever reaches the page.
+
+### Demo admin core read gate (objective 224-e)
+
+224-e introduces NO new settings. The standalone demo web process
+additionally mounts the existing admin routers behind a central
+server-side default-deny gate and serves a first, bounded set of
+database-backed admin pages (dashboard, the four core lists, their
+canonical-UUID detail pages and the record-choices lookup) read-only
+from the session's verified copy under the same `DEMO_WEB_COPY_*`
+reader connection (request-local sessionmaker, database-side
+read-only, disposed after each response). Every other admin path
+stays default-denied, every unsafe method is a pre-handler no-op,
+and the demo remains an incomplete core preview rather than the
+full admin GUI (see `docs/demo-admin.md`, Demo admin core read
+gate). 224-f adds no settings either: it admits seven more
+database-backed list/detail sections under the same reader
+connection and makes every dynamic `/admin` response
+`Cache-Control: private, no-store` (revisioned `/admin/static`
+assets keep their own cache policy).
+
+224-g adds NO new settings either: the worker's target-only display
+ingest reuses the existing file-job bounds
+(`DEMO_SNAPSHOT_FILES_MAX_FILE_BYTES`,
+`DEMO_SNAPSHOT_FILES_MAX_TOTAL_BYTES`,
+`DEMO_SNAPSHOT_FILES_MAX_ELAPSED_SECONDS` - the last as the ONE
+finite ingest deadline) and the worker's existing target-admin
+passfile credential, and the web display reader reuses the existing
+`DEMO_WEB_COPY_*` reader connection. It publishes the 223-verified
+sanitized display leaves into a target-only `demo_display` schema
+inside the exact disposable copy (no source/ordinary-DB schema
+change) and adds the metadata-only `/fakeadmin/files-preview` page
+(`no-store`; no body rendering).
 
 ## Production Notes
 

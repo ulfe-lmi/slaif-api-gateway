@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Demo Ready</title>
+  <link rel="stylesheet" href="/fakeadmin/static/css/admin.css">
+</head>
+<body>
+  <section class="auth-panel" aria-labelledby="ready-heading">
+    <div class="auth-header">
+      <h1 id="ready-heading">Your demo snapshot is ready</h1>
+    </div>
+
+    <p>
+      Your private, identity-masked demo snapshot is ready and this
+      session is active. It is a frozen view of the source captured
+      at sign-in (database and file captures carry their own recorded
+      times); usage patterns are retained, and operational controls
+      on the demo pages have no effect.
+    </p>
+    <p>
+      <a class="primary-link" href="/admin">Open the admin dashboard
+      (demo view)</a>
+    </p>
+    <p class="muted small">
+      Optional previews from your own verified copy:
+      <a href="/fakeadmin/copy-preview">read-only copy preview</a>
+      (bounded row counts) and
+      <a href="/fakeadmin/files-preview">read-only files preview</a>
+      (bounded display-file metadata).
+    </p>
+
+    <form method="post" action="/fakeadmin/logout" class="form-stack">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <button type="submit">Log out</button>
+    </form>
+  </section>
+</body>
+</html>

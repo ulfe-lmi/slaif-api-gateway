@@ -44,8 +44,8 @@ class _FakeConnection:
 def test_get_alembic_head_revision_reads_single_head() -> None:
     head = schema_status.get_alembic_head_revision()
 
-    # Objective 220: 0027_demo_admin_accounts is the single successor head.
-    assert head == "0027_demo_admin_accounts"
+    # Objective 224-a: 0028_demo_web_control is the single successor head.
+    assert head == "0028_demo_web_control"
 
 
 @pytest.mark.asyncio

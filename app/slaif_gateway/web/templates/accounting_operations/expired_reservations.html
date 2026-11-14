@@ -15,6 +15,9 @@
         bounded projection: a short or empty list does NOT prove the database is complete. Use the
         key detail and usage pages for exact lookup.
       </p>
+      {% if demo_admin %}
+      <p class="warning-text">Demo snapshot: the reservation rows are snapshot data, and which rows count as expired is calculated at view time against the snapshot - not at snapshot time.</p>
+      {% endif %}
     </div>
     <div class="header-actions">
       <a class="button-link secondary" href="/admin/accounting-operations/">Accounting operations</a>

@@ -17,7 +17,7 @@
     </div>
     <div class="header-actions">
       <a class="button-link secondary" href="/admin/email-deliveries">Email deliveries</a>
-      <a class="button-link secondary" href="/admin/operations">Operations</a>
+      <a class="button-link secondary" href="/admin/operations{% if demo_admin %}/{% endif %}">Operations</a>
       <form method="post" action="/admin/logout">
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         <button type="submit" class="signout">Sign out</button>
@@ -25,7 +25,21 @@
     </div>
   </header>
 
-  {% if not readiness.available %}
+  {%- if demo_admin %}
+  <section class="action-panel" aria-labelledby="smtp-test-demo-heading">
+    <h2 id="smtp-test-demo-heading">Demo snapshot view</h2>
+    <p class="muted small">
+      The source deployment's email and SMTP settings were not recorded in this
+      sanitized copy, so no readiness state is shown and the demo process's own
+      settings are never used as readiness. The form below is shown for
+      familiarity: submitting it does nothing in this demo - no reviewed test is
+      ever prepared and no message is ever sent. No SMTP host, user, or password
+      is displayed or used.
+    </p>
+  </section>
+  {%- endif %}
+
+  {% if not readiness.available and not demo_admin %}
   <section class="action-panel" aria-labelledby="smtp-test-unavailable-heading">
     <h2 id="smtp-test-unavailable-heading">Unavailable</h2>
     <p class="muted small">
@@ -65,9 +79,9 @@
     <p class="muted small">
       Cooldown: at most {{ budget_attempts }} test attempts per {{ budget_window_seconds }} seconds per admin
       (attempted and unconfirmed sends both count). Each reviewed intent is one-use: an accidental
-      double submit sends at most one message.
+      double submit sends at most one message.{% if demo_admin %} In this demo, submitting this form does nothing: no reviewed test is prepared and no message is sent, and the cooldown numbers shown are this demo process's own settings - not the source deployment's.{% endif %}
     </p>
-    <button type="submit">Prepare reviewed test</button>
+    <button type="submit">Prepare reviewed test{% if demo_admin %} (demo no-op){% endif %}</button>
   </form>
   </section>
   {% endif %}
