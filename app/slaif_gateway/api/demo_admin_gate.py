@@ -38,6 +38,7 @@ import json
 import re
 import uuid
 from dataclasses import dataclass
+from functools import lru_cache
 
 from fastapi import FastAPI
 from starlette.requests import Request
@@ -198,6 +199,30 @@ ADMITTED_CATALOG_JOBS_PATH = "/admin/operations/catalog/jobs/"
 # subpaths) stays default-denied for later suffixes.
 ADMITTED_OPERATIONS_INDEX_PATH = "/admin/operations/"
 ADMITTED_OPERATIONS_PROCESS_CONFIG_PATH = "/admin/operations/process-configuration"
+# 224-u: the five EXACT literal branding asset endpoints (the four
+# image slots live under /admin/branding/). No query, alternate slash,
+# arbitrary slot, prefix passthrough or unsafe method is admitted;
+# these endpoints are TOTAL before and after login (with a verified
+# session the visitor's own neutral copy leaf is served; before login
+# the packaged neutral fallback - the live operator branding directory
+# is never read).
+ADMITTED_BRANDING_PATHS = (
+    "/admin/branding/style.css",
+    "/admin/branding/logo",
+    "/admin/branding/logo-compact",
+    "/admin/branding/favicon",
+    "/admin/branding/hero",
+)
+# 224-u: the exact read-only Codex compatibility GET family. The index
+# REQUIRES its trailing slash; the shipped preset page takes the EXACT
+# validated preset name from the package's finite preset loader and its
+# exact /download child; the key page takes the canonical lowercase
+# dashed UUID only. Every near miss, alternate slash, unknown subpath
+# and ANY query stays default-denied; every unsafe method (including
+# the review/apply POSTs) remains the unchanged pre-body quiet 204 cut.
+ADMITTED_COMPATIBILITY_INDEX_PATH = "/admin/operations/compatibility/"
+ADMITTED_COMPATIBILITY_PRESET_PREFIX = "/admin/operations/compatibility/preset/"
+ADMITTED_COMPATIBILITY_KEY_PREFIX = "/admin/operations/compatibility/key/"
 # 224-q: the three exact key read-page GET shapes (canonical
 # lowercase dashed UUID + exact suffix, no extra path components):
 # calibration, clone and clone/receipts. Malformed/uppercase/
@@ -359,6 +384,26 @@ def _key_read_page_query_admitted(path: str, query_string: bytes) -> bool:
     return len(value) <= _KEY_RECEIPTS_OPERATION_MAX_LEN
 
 
+@lru_cache(maxsize=1)
+def _shipped_preset_names() -> frozenset[str]:
+    """The package's finite shipped preset name vocabulary (224-u).
+
+    Computed ONCE from the reviewed preset loader (package-owned,
+    credential-free reference material). Any loader failure fails
+    closed: no compatibility preset path is admitted at all.
+    """
+    try:
+        from slaif_gateway.modules.codex_profile_data import (
+            list_codex_presets,
+        )
+
+        return frozenset(
+            name for name, _path, _profile in list_codex_presets()
+        )
+    except Exception:
+        return frozenset()
+
+
 def _is_admitted_path(path: str) -> bool:
     """The exact closed 224-e/224-f/224-i/224-j/224-k GET admission law."""
     return _is_admitted_path_with_query(path, b"")
@@ -394,6 +439,34 @@ def _is_admitted_path_with_query(path: str, query_string: bytes) -> bool:
         # parameters at all; ANY query is refused (before session
         # resolution or routing), like the 224-p form pages.
         return not query_string
+    # 224-u: the five exact branding asset literals define NO query
+    # parameters (ANY query refused) and never match a prefix.
+    if path in ADMITTED_BRANDING_PATHS:
+        return not query_string
+    # 224-u: the exact read-only compatibility GET family.
+    if path == ADMITTED_COMPATIBILITY_INDEX_PATH:
+        return not query_string
+    if path.startswith(ADMITTED_COMPATIBILITY_PRESET_PREFIX):
+        rest = path[len(ADMITTED_COMPATIBILITY_PRESET_PREFIX) :]
+        # The preset name is an EXACT member of the package's finite
+        # shipped vocabulary (it can never contain a slash, so every
+        # subpath shape is refused here).
+        if rest and rest in _shipped_preset_names():
+            return not query_string
+        if rest.endswith("/download"):
+            name = rest[: -len("/download")]
+            if name and name in _shipped_preset_names():
+                return not query_string
+        return False
+    if path.startswith(ADMITTED_COMPATIBILITY_KEY_PREFIX):
+        rest = path[len(ADMITTED_COMPATIBILITY_KEY_PREFIX) :]
+        # exactly ONE remaining segment, canonical lowercase UUID
+        return (
+            rest
+            and "/" not in rest
+            and _CANONICAL_UUID_RE.fullmatch(rest) is not None
+            and not query_string
+        )
     if _KEY_READ_PAGE_RE.fullmatch(path) is not None:
         # 224-q: exact shape admitted only under the bounded query
         # law (the receipts page's single optional `operation`).
@@ -603,6 +676,32 @@ class DemoAdminGate:
                 path, scope.get("query_string") or b""
             ):
                 projection = await self._resolve_session(scope)
+                if path in ADMITTED_BRANDING_PATHS:
+                    # 224-u: the five fixed branding asset endpoints
+                    # are TOTAL before and after login. With a
+                    # validated session the visitor's exact verified
+                    # copy is bound and its neutral branding leaves
+                    # are served; before login the packaged neutral
+                    # fallback is served (no login redirect for a
+                    # subresource, never a live-directory read).
+                    if projection is not None:
+                        state = await self._build_copy_state(
+                            scope, projection
+                        )
+                        if state is None:
+                            # A present but broken binding is a safe
+                            # refusal: the fallback must not mask a
+                            # session whose copy cannot be verified.
+                            await _respond_refusal(send)
+                            return
+                        scope.setdefault("state", {})["demo_admin"] = state
+                        try:
+                            await self._app(scope, receive, send)
+                            return
+                        finally:
+                            await _safe_dispose(state.engine)
+                    await self._app(scope, receive, send)
+                    return
                 if projection is None:
                     await _respond_login_redirect(send)
                     return

@@ -333,6 +333,32 @@ def _branding_context(request: Request) -> dict[str, object]:
     separately created apps stay isolated; operator assets are never cached,
     and these values grant no access rights or state.
     """
+    # 224-u demo host: the central gate validated the demo session
+    # and stored the request-local state; the page references the
+    # FIVE exact demo-admitted slot URLs, which resolve privately to
+    # this visitor's neutral copy leaves (or the packaged neutral
+    # fallback before login) - the live operator branding directory
+    # is never resolved here. Normal requests never carry the
+    # state, so normal rendering is byte-identical.
+    if getattr(request.state, "demo_admin", None) is not None:
+        from slaif_gateway.web.branding import (
+            STYLE_CSS,
+            asset_url,
+        )
+
+        return {
+            "branding_enabled": True,
+            "branding_css_link": (
+                f'<link rel="stylesheet" href="{asset_url(STYLE_CSS)}">'
+            ),
+            "branding_icon_link": (
+                f'<link rel="icon" type="image/svg+xml" '
+                f'href="{asset_url("favicon")}">'
+            ),
+            "branding_logo_src": asset_url("logo"),
+            "branding_logo_compact_src": asset_url("logo-compact"),
+            "branding_hero_src": asset_url("hero"),
+        }
     value = getattr(request.app.state.settings, "SLAIF_BRANDING_DIR", None)
     branding_dir = value if isinstance(value, str) else None
     return {

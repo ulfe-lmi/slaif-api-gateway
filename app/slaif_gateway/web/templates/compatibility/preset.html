@@ -9,6 +9,9 @@
       <p class="eyebrow">Operations / Codex Compatibility</p>
       <h1 id="preset-heading">Compatibility preset: <code>{{ name }}</code></h1>
       <p class="muted">Bounded safe facts and the exact validated document. Registered and loaded never means every newer Codex is supported.</p>
+      {%- if demo_admin %}
+      <p class="muted">Demo snapshot: this preset is package-owned credential-free reference material validated by the shipped loader (not a per-login operator file); the download serves the exact validated bytes. Compatibility operations on this demo host are illustrative and have no effect.</p>
+      {%- endif %}
     </div>
     <div class="header-actions">
       <a class="button-link secondary" href="/admin/operations/compatibility/">Compatibility</a>

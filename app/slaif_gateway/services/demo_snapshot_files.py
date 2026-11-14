@@ -2606,6 +2606,18 @@ def capture_catalog(capture: _Capture, seed: bytes) -> None:
 def capture_branding(capture: _Capture, seed: bytes) -> None:
     """Capture the five fixed branding slots (neutralized at sanitize).
 
+    EVERY new copy publishes the COMPLETE finite five-slot display
+    set - configured or unconfigured: an unconfigured source still
+    gets the five neutral-substitute leaves (the same bytes a
+    configured source always shows after sanitization), so the
+    session-bound demo read law is one closed shape: EXACTLY five
+    ``branding/<slot>`` leaves (zero or a partial set is a damaged
+    or pre-upgrade copy and the demo read refuses; older copies from
+    before this law were unconfigured-without-leaves and are safely
+    refused on re-login). The private source record still
+    distinguishes configured from unconfigured (custody only; never
+    displayed).
+
     Slot selection reuses the EXISTING validated resolution law
     (``web.branding.resolve_slot``): an image slot resolves to exactly
     one of its fixed ``<slot>.svg``/``<slot>.png`` files, with the
@@ -2623,7 +2635,31 @@ def capture_branding(capture: _Capture, seed: bytes) -> None:
     config = capture.config
     if config.branding_dir is None:
         capture.not_configured.append("branding")
-        capture.source_records["branding"] = {"configured": False}
+        # 224-u: the unconfigured source still publishes the complete
+        # finite five-slot neutral display set (the session-bound
+        # demo read requires exactly five leaves; the private record
+        # keeps the unconfigured provenance).
+        slots: dict[str, dict[str, object]] = {}
+        for slot in _BRANDING_SLOTS:
+            capture.add_display(
+                kind=KIND_BRANDING,
+                source="branding",
+                source_ref=f"branding:{slot}",
+                logical_name=f"branding/{slot}",
+                raw=b"",
+                seed=seed,
+                slot=slot,
+            )
+            slots[slot] = {
+                "resolved": False,
+                "file_name": None,
+                "content_type": None,
+                "substituted": True,
+            }
+        capture.source_records["branding"] = {
+            "configured": False,
+            "slots": slots,
+        }
         return
     try:
         handle = catfs.open_anchored_handle(config.branding_dir)

@@ -47,7 +47,9 @@ import asyncio
 import json
 import os
 import re
+import shutil
 import socket
+import tempfile
 import threading
 import time
 import uuid
@@ -290,7 +292,36 @@ def test_e2e_admin_gate_two_sessions_distinct_copies(
         "CHAT_MAX_IMAGES_PER_REQUEST": "7",
         "DEFAULT_RATE_LIMIT_REQUESTS_PER_MINUTE": "99",
     }
-    cli_env_a = {**cli_env, **_T_CANARY_ENV}
+    # 224-u: the two workers each capture a DISTINCT configured source
+    # branding (canary tokens, not secrets): after sanitization BOTH
+    # copies must show the SAME packaged neutral bytes, no source
+    # token may ever appear, and each session must read only its own
+    # copy (cross-read proven by corrupting copy A's leaf).
+    _U_BRAND_A = Path(tempfile.mkdtemp(prefix="slaif224u-a-"))
+    _U_BRAND_B = Path(tempfile.mkdtemp(prefix="slaif224u-b-"))
+    _U_TOK_A = "demo224u-token-" + uuid.uuid4().hex[:12]
+    _U_TOK_B = "demo224u-token-" + uuid.uuid4().hex[:12]
+    for _dir, _tok in ((_U_BRAND_A, _U_TOK_A), (_U_BRAND_B, _U_TOK_B)):
+        (_dir / "style.css").write_bytes(
+            f"/* {_tok} */\nbody {{ color: rgb(1, 1, 1); }}".encode()
+        )
+        (_dir / "logo.svg").write_bytes(
+            f'<svg xmlns="http://www.w3.org/2000/svg" width="8" '
+            f'height="8" data-token="{_tok}">'
+            f'<rect width="8" height="8" fill="#ff0000"/></svg>'.encode()
+        )
+        _dir.chmod(0o700)
+    request.addfinalizer(
+        lambda: shutil.rmtree(_U_BRAND_A, ignore_errors=True)
+    )
+    request.addfinalizer(
+        lambda: shutil.rmtree(_U_BRAND_B, ignore_errors=True)
+    )
+    cli_env_a = {
+        **cli_env,
+        **_T_CANARY_ENV,
+        "SLAIF_BRANDING_DIR": str(_U_BRAND_A),
+    }
     out_a = _run_worker_cli(
         ["process-request", str(rid_a), "--json"], cli_env_a, monkeypatch
     )
@@ -352,7 +383,11 @@ def test_e2e_admin_gate_two_sessions_distinct_copies(
     # the BUILT-IN defaults (copy isolation for the projection).
     for _k in _T_CANARY_ENV:
         monkeypatch.delenv(_k, raising=False)
-    out_b = _run_worker_cli(["process-request", str(rid_b), "--json"], cli_env, monkeypatch)
+    # 224-u: worker B captures its OWN distinct source branding.
+    cli_env_b = {**cli_env, "SLAIF_BRANDING_DIR": str(_U_BRAND_B)}
+    out_b = _run_worker_cli(
+        ["process-request", str(rid_b), "--json"], cli_env_b, monkeypatch
+    )
     assert "verified_unpublished" in out_b
     row_b = _request_row(env, rid_b)
     target_b = row_b["worker_target_db"]
@@ -1847,7 +1882,9 @@ def test_e2e_admin_gate_two_sessions_distinct_copies(
                         # Not-yet-admitted pages are marked unavailable
                         # WITHOUT a usable link.
                         assert 'href="/admin/operations/diagnostics"' not in r.text
-                        assert 'href="/admin/operations/compatibility/"' not in r.text
+                        # 224-u: the compatibility page is now admitted
+                        # and linked (with the illustrative note).
+                        assert 'href="/admin/operations/compatibility/"' in r.text
                         assert target not in r.text
                         r = await client.get(
                             "/admin/operations/process-configuration"
@@ -1943,7 +1980,10 @@ def test_e2e_admin_gate_two_sessions_distinct_copies(
                             "/admin/operations",
                             "/admin/operations//",
                             "/admin/operations/diagnostics",
-                            "/admin/operations/compatibility/",
+                            # 224-u: /admin/operations/compatibility/
+                            # is now ADMITTED (proven in the 224-u
+                            # block); its near misses are proven there.
+                            "/admin/operations/compatibility",
                             "/admin/operations/replay-maintenance/",
                             "/admin/operations/process-configuration/",
                             "/admin/operations/process-configuration?x=1",
@@ -1959,6 +1999,225 @@ def test_e2e_admin_gate_two_sessions_distinct_copies(
                                 headers={"content-type": "text/garbage"},
                             )
                             assert r.status_code == 204, method
+                            assert r.content == b""
+
+                    # --- 224-u: neutral branding + compatibility -------
+                    import hashlib as _u_hashlib
+
+                    from slaif_gateway.modules.codex_profile_data import (
+                        list_codex_presets as _u_list_presets,
+                        read_codex_preset as _u_read_preset,
+                    )
+                    from slaif_gateway.web import branding as _u_branding
+
+                    _U_SLOTS = ("style.css", "logo", "logo-compact", "favicon", "hero")
+
+                    def _u_target_conn(target):
+                        return asyncpg.connect(**_conn_kwargs(
+                            san_env.target["host"], san_env.target["port"],
+                            san_env.target["user"], san_env.target["password"],
+                            target,
+                        ))
+
+                    # Both simultaneous copies (DISTINCT source
+                    # branding) serve the SAME packaged neutral bytes
+                    # for every fixed slot - the source canary tokens
+                    # never appear.
+                    for client, target, tok in (
+                        (client_a, target_a, _U_TOK_A),
+                        (client_b, target_b, _U_TOK_B),
+                    ):
+                        for slot in _U_SLOTS:
+                            r = await client.get(f"/admin/branding/{slot}")
+                            assert r.status_code == 200, (slot, r.status_code)
+                            data, content_type = _u_branding.fallback_asset(slot)
+                            assert r.content == data, slot
+                            assert r.headers["content-type"].startswith(
+                                content_type.split(";")[0]
+                            ), slot
+                            assert r.headers.get("x-content-type-options") == "nosniff", slot
+                            assert r.headers.get("cache-control") == "private, no-store", slot
+                            assert tok not in r.content.decode("latin-1"), slot
+                        for p in (
+                            "/admin/branding/",
+                            "/admin/branding/style.css/",
+                            "/admin/branding/logos",
+                            "/admin/branding/logo?x=1",
+                        ):
+                            assert (await client.get(p)).status_code == 404, p
+                    # Each copy holds the COMPLETE finite five-slot
+                    # leaf set, all neutral and self-consistent.
+                    for target in (target_a, target_b):
+                        s = await _u_target_conn(target)
+                        try:
+                            rows = await s.fetch(
+                                "SELECT logical_name, kind, byte_count, sha256, "
+                                "octet_length(body) AS actual "
+                                "FROM demo_display.leaves "
+                                "WHERE logical_name IN "
+                                "('branding/style.css','branding/logo',"
+                                "'branding/logo-compact','branding/favicon',"
+                                "'branding/hero')"
+                            )
+                        finally:
+                            await s.close()
+                        assert len(rows) == 5, (target, len(rows))
+                        for row in rows:
+                            expected = _u_branding.fallback_asset(
+                                row["logical_name"].rsplit("/", 1)[1]
+                            )[0]
+                            assert row["kind"] == "branding", target
+                            assert row["byte_count"] == len(expected), target
+                            assert row["sha256"] == _u_hashlib.sha256(expected).hexdigest(), target
+                            assert row["actual"] == row["byte_count"], target
+                    # Cross-read/corruption proof (TARGET-SIDE mutation,
+                    # restored in finally): corrupting COPY A's logo
+                    # leaf makes A's slot a fixed safe 503 while B's
+                    # identical slot stays 200 (B never reads A's
+                    # copy); deleting one of A's five leaves (a
+                    # PARTIAL set) is the same fixed safe 503.
+                    s = await _u_target_conn(target_a)
+                    await s.execute(
+                        "UPDATE demo_display.leaves SET sha256 = $2 "
+                        "WHERE logical_name = $1",
+                        "branding/logo",
+                        "f" * 64,
+                    )
+                    row_a_hero = await s.fetchrow(
+                        "SELECT captured_at FROM demo_display.leaves "
+                        "WHERE logical_name = 'branding/hero'"
+                    )
+                    await s.execute(
+                        "DELETE FROM demo_display.leaves "
+                        "WHERE logical_name = 'branding/hero'"
+                    )
+                    await s.close()
+                    assert row_a_hero is not None
+                    try:
+                        r = await client_a.get("/admin/branding/logo")
+                        assert r.status_code == 503
+                        assert r.headers.get("cache-control") == "private, no-store"
+                        assert _U_TOK_A not in r.text
+                        # Copy B is untouched by A's corruption.
+                        r = await client_b.get("/admin/branding/logo")
+                        assert r.status_code == 200
+                        # A PARTIAL five-slot set refuses too.
+                        r = await client_a.get("/admin/branding/hero")
+                        assert r.status_code == 503
+                    finally:
+                        logo_body = _u_branding.fallback_asset("logo")[0]
+                        hero_body = _u_branding.fallback_asset("hero")[0]
+                        s = await _u_target_conn(target_a)
+                        await s.execute(
+                            "UPDATE demo_display.leaves SET sha256 = $2, "
+                            "byte_count = $3, body = $4 "
+                            "WHERE logical_name = $1",
+                            "branding/logo",
+                            _u_hashlib.sha256(logo_body).hexdigest(),
+                            len(logo_body),
+                            logo_body,
+                        )
+                        await s.execute(
+                            "INSERT INTO demo_display.leaves "
+                            "(logical_name, kind, sha256, byte_count, "
+                            "captured_at, body) VALUES ($1, $2, $3, $4, $5, $6)",
+                            "branding/hero",
+                            "branding",
+                            _u_hashlib.sha256(hero_body).hexdigest(),
+                            len(hero_body),
+                            row_a_hero["captured_at"],
+                            hero_body,
+                        )
+                        await s.close()
+                        # Restored: A's slots are 200 again.
+                        r = await client_a.get("/admin/branding/logo")
+                        assert r.status_code == 200
+                        r = await client_a.get("/admin/branding/hero")
+                        assert r.status_code == 200
+                    # --- 224-u: the read-only compatibility family ---
+                    _U_SHIPPED = tuple(n for n, _p, _pr in _u_list_presets())
+                    for client, target in (
+                        (client_a, target_a),
+                        (client_b, target_b),
+                    ):
+                        r = await client.get("/admin/operations/compatibility/")
+                        assert r.status_code == 200
+                        assert r.headers["cache-control"] == "private, no-store"
+                        assert "Demo preview:" in r.text
+                        comp_text = " ".join(r.text.split())
+                        assert "Compatibility operations are illustrative" in comp_text
+                        assert "have no effect" in comp_text
+                        assert "no compatibility or replay authority" in comp_text
+                        assert "adopts no API startup compatibility profile" in comp_text
+                        assert "not published as display data to this page yet" in comp_text
+                        # No runnable profile artifact is offered...
+                        assert "/codex-profile/" not in r.text
+                        # ...and the package-owned shipped presets are
+                        # listed with their exact demo hrefs.
+                        for name in _U_SHIPPED:
+                            assert (
+                                f'href="/admin/operations/compatibility/preset/{name}"'
+                                in r.text
+                            )
+                        assert target not in r.text
+                        name = _U_SHIPPED[0]
+                        r = await client.get(
+                            f"/admin/operations/compatibility/preset/{name}"
+                        )
+                        assert r.status_code == 200
+                        assert (
+                            "package-owned credential-free reference material"
+                            in " ".join(r.text.split())
+                        )
+                        # The exact canonical credential-free bytes.
+                        r = await client.get(
+                            f"/admin/operations/compatibility/preset/{name}/download"
+                        )
+                        assert r.status_code == 200
+                        assert r.content == _u_read_preset(name).encode("utf-8")
+                        assert f'attachment; filename="{name}.json"' in r.headers[
+                            "content-disposition"
+                        ]
+                        # The key page for this copy's OWN (per-copy
+                        # remapped) canonical key UUID.
+                        ukey = await _first_id(san_env, target, "gateway_keys")
+                        r = await client.get(
+                            f"/admin/operations/compatibility/key/{ukey}"
+                        )
+                        assert r.status_code == 200, (target, r.status_code)
+                        key_text = " ".join(r.text.split())
+                        assert "Demo snapshot: the key binding shown is a FROZEN read" in key_text
+                        assert "the form has no effect" in key_text
+                        assert target not in r.text
+                        # Near misses stay gate-denied with the session.
+                        for p in (
+                            "/admin/operations/compatibility",
+                            "/admin/operations/compatibility//",
+                            "/admin/operations/compatibility/extra",
+                            "/admin/operations/compatibility/preset/",
+                            "/admin/operations/compatibility/preset/unknown",
+                            f"/admin/operations/compatibility/preset/{name}/download/extra",
+                            f"/admin/operations/compatibility/preset/{name}/downloads",
+                            "/admin/operations/compatibility/key/",
+                            f"/admin/operations/compatibility/key/{ukey.upper()}",
+                            f"/admin/operations/compatibility/key/{ukey}/extra",
+                            "/admin/operations/compatibility/?x=1",
+                        ):
+                            assert (await client.get(p)).status_code == 404, p
+                        # The review/apply POSTs and the index POST are
+                        # the SAME pre-body quiet 204 cut (no review is
+                        # signed, nothing is applied).
+                        for p in (
+                            f"/admin/operations/compatibility/key/{ukey}/review",
+                            f"/admin/operations/compatibility/key/{ukey}/apply",
+                            "/admin/operations/compatibility/",
+                        ):
+                            r = await client.post(
+                                p,
+                                content=b"x" * 200_000,
+                                headers={"content-type": "text/garbage"},
+                            )
+                            assert r.status_code == 204, p
                             assert r.content == b""
 
                     # --- operational POST families: quiet 204 no-ops -----
@@ -2787,6 +3046,124 @@ def test_browser_smoke_demo_copy_pages(
             )
             page.screenshot(path=str(shot_t))
             print(f"DEMO_BROWSER_224T_SCREENSHOT={shot_t}")
+
+            # --- 224-u: neutral branding slots + read-only
+            # compatibility views in the real browser -------------
+            from slaif_gateway.modules.codex_profile_data import (
+                list_codex_presets as _u_list_presets,
+            )
+            from slaif_gateway.web import branding as _u_branding
+
+            # The demo base header references the FIVE exact fixed
+            # slot URLs: the icon and stylesheet links plus the wide
+            # and compact logo images (hero renders only on the
+            # public page). Assert the rendered href/src values, then
+            # explicitly request EVERY fixed slot and compare the
+            # exact neutral bytes + safety headers (no reliance on
+            # the browser auto-fetching favicon/hero).
+            page.goto("/admin/keys")
+            content = page.content()
+            for slot in ("favicon", "style.css"):
+                assert f'href="/admin/branding/{slot}"' in content, slot
+            for slot in ("logo", "logo-compact"):
+                assert f'src="/admin/branding/{slot}"' in content, slot
+            for slot in ("style.css", "logo", "logo-compact", "favicon", "hero"):
+                r = page.goto(f"/admin/branding/{slot}")
+                assert r is not None and r.status == 200, slot
+                data, content_type = _u_branding.fallback_asset(slot)
+                assert r.body() == data, slot
+                assert r.headers["content-type"].startswith(
+                    content_type.split(";")[0]
+                ), slot
+                assert r.headers.get("x-content-type-options") == "nosniff", slot
+                assert r.headers.get("cache-control") == "private, no-store", slot
+            for pth in (
+                "/admin/branding/",
+                "/admin/branding/logos",
+                "/admin/branding/style.css?x=1",
+            ):
+                r = page.goto(pth)
+                assert r is not None and r.status == 404, pth
+            # The operations index renders the admitted compatibility
+            # index link (demo reads only).
+            r = page.goto("/admin/operations/")
+            assert r is not None and r.status == 200
+            assert 'href="/admin/operations/compatibility/"' in page.content()
+            r = page.goto("/admin/operations/compatibility/")
+            assert r is not None and r.status == 200
+            assert r.headers["cache-control"] == "private, no-store"
+            content = page.content()
+            assert "Demo preview:" in content
+            _u_flat = " ".join(content.split())
+            assert "Compatibility operations are illustrative" in _u_flat
+            assert "have no effect" in _u_flat
+            assert "no compatibility or replay authority" in _u_flat
+            assert "adopts no API startup compatibility profile" in _u_flat
+            assert "not published as display data to this page yet" in _u_flat
+            assert "/codex-profile/" not in content
+            assert target not in content
+            _u_presets = tuple(n for n, _p, _pr in _u_list_presets())
+            assert _u_presets
+            for name in _u_presets:
+                assert (
+                    f'href="/admin/operations/compatibility/preset/{name}"'
+                    in content
+                )
+            _u_preset = _u_presets[0]
+            r = page.goto(
+                f"/admin/operations/compatibility/preset/{_u_preset}"
+            )
+            assert r is not None and r.status == 200
+            assert (
+                "package-owned credential-free reference material"
+                in " ".join(page.content().split())
+            )
+            # The key page for this copy's own copied key; the demo
+            # form has no effect (the review POST below is the quiet
+            # pre-body 204 cut in the real browser context).
+            page.goto("/admin/keys")
+            _u_key_href = page.locator(
+                'tbody a[href^="/admin/keys/"]'
+            ).first.get_attribute("href")
+            assert _u_key_href
+            _u_key_id = _u_key_href.rsplit("/", 1)[-1]
+            r = page.goto(
+                f"/admin/operations/compatibility/key/{_u_key_id}"
+            )
+            assert r is not None and r.status == 200
+            assert r.headers["cache-control"] == "private, no-store"
+            _u_k_flat = " ".join(page.content().split())
+            assert (
+                "Demo snapshot: the key binding shown is a FROZEN read"
+                in _u_k_flat
+            )
+            assert "the form has no effect" in _u_k_flat
+            assert target not in _u_k_flat
+            # Desktop-width screenshot of the SUCCESSFUL compatibility
+            # key render (taken before the near-miss loop navigates
+            # away; run-owned /tmp path, never committed).
+            shot_u = Path(
+                f"/tmp/slaif-224u-browser-compat-{os.getpid()}-{uuid.uuid4().hex[:10]}.png"
+            )
+            page.screenshot(path=str(shot_u))
+            print(f"DEMO_BROWSER_224U_SCREENSHOT={shot_u}")
+            for pth in (
+                "/admin/operations/compatibility",
+                "/admin/operations/compatibility/extra",
+                f"/admin/operations/compatibility/preset/{_u_preset}/extra",
+                "/admin/operations/compatibility/key/",
+                f"/admin/operations/compatibility/key/{_u_key_id}/extra",
+                "/admin/operations/compatibility/?x=1",
+            ):
+                r = page.goto(pth)
+                assert r is not None and r.status == 404, pth
+            resp = context.request.post(
+                f"/admin/operations/compatibility/key/{_u_key_id}/review",
+                data=b"x" * 2000,
+                headers={"content-type": "text/garbage"},
+            )
+            assert resp.status == 204
+            assert resp.body() == b""
 
             # --- 224-r: chooser + positive selection against copy A,
             # then copy-B isolation --------------------------------------

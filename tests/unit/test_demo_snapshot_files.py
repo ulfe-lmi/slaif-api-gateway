@@ -1746,13 +1746,28 @@ def test_capture_sealed_catalog_run_read_only_and_display_not_applicable(
     capture = dsf.capture_all(config, _settings(), seed)
     assert "catalog" not in capture.not_configured
     # 224-t: EVERY capture also carries the required worker-observed
-    # process-configuration projection leaf.
+    # process-configuration projection leaf; 224-u: and the complete
+    # finite five-slot neutral branding display set. The non-catalog
+    # leaf set is exactly those six fixed names.
     assert any(
         leaf.logical_name == "configuration/process-configuration.json"
         for leaf in capture.leaves
     )
+    assert {
+        leaf.logical_name
+        for leaf in capture.leaves
+        if not leaf.logical_name.startswith("catalog/")
+    } == {
+        "configuration/process-configuration.json",
+        "branding/style.css",
+        "branding/logo",
+        "branding/logo-compact",
+        "branding/favicon",
+        "branding/hero",
+    }
     assert (
-        len(capture.leaves) == len(sealing.CONTENT_FILES) + 1
+        sum(1 for leaf in capture.leaves if leaf.logical_name.startswith("catalog/"))
+        == len(sealing.CONTENT_FILES)
     )
 
     # The source custody is byte-for-byte untouched (worker is read-only).
@@ -1817,8 +1832,26 @@ def test_upload_artifact_names_never_reach_private_manifest(tmp_path, umask_022)
     capture = dsf.capture_all(config, _settings(), seed)
     assert "catalog" not in capture.not_configured
     # 224-t: the required process-configuration leaf joins the
-    # catalog capture.
-    assert len(capture.leaves) == 2
+    # catalog capture; 224-u: the complete finite five-slot neutral
+    # branding display set joins it too. The non-catalog leaf set is
+    # exactly those six fixed names (the single catalog leaf stays
+    # the upload artifact).
+    assert {
+        leaf.logical_name
+        for leaf in capture.leaves
+        if not leaf.logical_name.startswith("catalog/")
+    } == {
+        "configuration/process-configuration.json",
+        "branding/style.css",
+        "branding/logo",
+        "branding/logo-compact",
+        "branding/favicon",
+        "branding/hero",
+    }
+    assert (
+        sum(1 for leaf in capture.leaves if leaf.logical_name.startswith("catalog/"))
+        == 1
+    )
 
     job_dir, _manifest = _seeded_job(tmp_path, config)
     dsf._write_files(job_dir, capture)

@@ -2982,3 +2982,160 @@ per-key policy, not the limits of every worker or the reverse proxy,
 and "configured" means explicitly supplied to the worker process at
 construction time (a configured database URL is not connectivity
 proof).
+
+## Neutral branding assets and read-only Codex compatibility views (objective 224-u)
+
+The demo host admits two more exact GET families, after the same
+session/account/copy checks:
+
+* the FIVE literal branding slot paths
+  `GET /admin/branding/style.css`, `/admin/branding/logo`,
+  `/admin/branding/logo-compact`, `/admin/branding/favicon` and
+  `GET /admin/branding/hero` - no query, alternate slash, arbitrary
+  slot, prefix passthrough or unsafe method;
+* the exact read-only Codex compatibility GET family -
+  `GET /admin/operations/compatibility/` (REQUIRED trailing slash),
+  `GET /admin/operations/compatibility/preset/{shipped-name}`,
+  `GET /admin/operations/compatibility/preset/{shipped-name}/download`
+  and `GET /admin/operations/compatibility/key/{canonical-lowercase-UUID}`
+  - with NO query parameters at all.
+
+Every near miss, alternate slash shape, subpath, unknown slot/preset,
+non-canonical key UUID and unknown query stays default-denied (fixed
+404); every unsafe method on every admitted path (including the
+compatibility review/apply POSTs) remains the unchanged pre-body
+quiet 204 cut (no key pin, quota, usage, replay, audit or permission
+mutation, no review signed, nothing applied). All other
+not-yet-admitted surfaces remain default-denied for later suffixes.
+
+### Neutral branding: capture law (worker-owned, at copy time)
+
+The 223 worker display capture now publishes the COMPLETE finite
+five-slot branding leaf set for EVERY new copy, whether the operator
+source's branding directory was configured or not:
+
+* a CONFIGURED source directory is replaced by the 223 worker policy
+  with the packaged neutral substitutes - the operator's original
+  CSS/image bytes never enter the display copy (source paths,
+  filenames and tokens never appear);
+* an UNCONFIGURED source yields the same packaged neutral bytes
+  (empty stylesheet, packaged neutral logo);
+* the private custody `source_records` keeps the configured flag and
+  per-slot facts for custody only - that flag is NOT part of the
+  display copy, so absence of a leaf is never treated as
+  "unconfigured".
+
+### Neutral branding: read law (demo process, verified copy only)
+
+* **Pre-login** (no demo session): the fixed packaged neutral
+  fallback is served (package default) - NO database read, no
+  login redirect; the five slot URLs resolve publicly only to that
+  fallback.
+* **With a demo session**: one request-local SELECT-only
+  transaction on the gate-bound engine, with the independent
+  `current_database()` / `transaction_read_only` recheck INSIDE the
+  transaction. The metadata query (parameterized exact slot names,
+  database-computed `octet_length(body)`) runs FIRST and enforces
+  the **complete finite five-slot copy law**: the copy must carry
+  EXACTLY the five fixed `branding/<slot>` leaves. ZERO leaves (a
+  damaged copy or an older PRE-UPGRADE copy built before this stage)
+  or a PARTIAL set (a damaged configured copy) is one fixed safe 503
+  refusal - the packaged fallback never masks a corrupted
+  configured leaf, and a pre-upgrade copy safely refuses (re-login
+  rebuilds a conforming copy). Each leaf must satisfy the closed
+  metadata law (kind `branding`, non-boolean integer size within the
+  reviewed 256 KiB slot maximum, canonical SHA256, actual bytes
+  equal to the claimed byte count) BEFORE any body fetch; the
+  bounded body fetch re-asserts name/size/digest/kind as bound
+  parameters and the fetched bytes are re-verified (exact length +
+  SHA256) and re-proven against the 223 `branding` display policy
+  verifier. Any violation or driver error is one fixed safe 503 with
+  no input echo. Every response carries `nosniff` and private
+  no-store. The live operator branding directory is NEVER read by
+  the demo process, and the normal admin rendering and assets are
+  byte-identical (the normal app never carries the demo state).
+* The demo template branding context references the FIVE exact
+  fixed slot URLs (icon, stylesheet, logo, logo-compact, hero), so
+  every rendered link resolves privately to the same visitor's
+  neutral copy leaves (or the pre-login package fallback).
+
+### Codex compatibility: copy-backed read law (demo process)
+
+The compatibility index and key pages compute ALL qualification
+facts from the request-local verified SELECT-only copy (same
+`current_database()` / read-only recheck law; a failed recheck is
+one fixed safe 503). The demo process's dummy Settings, the
+current app-global Codex startup profile, the live public base URL,
+the environment and the provider network are NEVER used as
+installation facts. Concretely:
+
+* **Index** (`/admin/operations/compatibility/`): the copy-backed
+  qualification display with the existing known-incoming-secret-alias
+  withholding applied to rendered facts. NO runnable profile
+  artifact is offered: the startup-profile section renders a demo
+  note stating the demo process adopts no API startup compatibility
+  profile and that the 223-captured module identity is not
+  published as display data to this page yet (never fabricated,
+  never read live). The shipped preset list comes from the
+  package's finite preset loader, and each preset link is a demo
+  read of that package-owned document.
+* **Preset page / download**: the exact canonical credential-free
+  bytes of the shipped preset, validated by the existing package
+  loader (finite shipped names only), explicitly labeled
+  package-owned credential-free reference material - not a
+  per-login operator file. The download offers the exact bytes as an
+  attachment and remains withheld (403) whenever the existing
+  secret-alias check fires.
+* **Key page** (`/key/{canonical-lowercase-UUID}`): the same
+  copy-bound key dashboard scope and pin/options projection the
+  normal page uses, rendered over the verified copy only, with the
+  persistent demo note that the key binding shown is a FROZEN read
+  of this session's verified copy and the form has NO effect
+  (submitting changes nothing, signs no review, applies nothing,
+  and grants no compatibility or replay authority).
+
+The Operations index's compatibility marker is a real link to the
+admitted index once these GETs work (previously "unavailable in
+this demo"). No raw key, provider credential, operator source
+path/host, signed review payload or writable action endpoint appears
+in any demo response; links remain safe links to copy-backed pages
+only.
+
+### Evidence (224-u)
+
+* **Focused mocked units**: 18 new `test_u_` unit tests in
+  `tests/unit/test_demo_web.py` (gate exact-path/near-miss/unsafe-204
+  law for both families; branding positive five-leaf law with
+  bound-parameter assertions, zero/partial-set refusal, corrupt
+  metadata, body mismatch/policy refusal, copy-mismatch and
+  pre-login no-DB fallback; compatibility index/preset/key/download
+  positives with alias withholding and exact credential-free bytes,
+  near misses, recheck refusals) - plus the directly affected
+  pre-existing unit sweep (demo web, snapshot files, worker,
+  design/usability inventory, documentation contract) green.
+* **Owned PostgreSQL, two simultaneous copies**: the owned two-copy
+  fixture (disposable source + two disposable target copies, each
+  worker capturing a DISTINCT configured source branding with canary
+  tokens) proves both sessions serve the SAME packaged neutral bytes
+  for every slot (source tokens never appear), the complete
+  five-slot leaf set per copy (metadata self-consistent,
+  database-computed actual bytes), cross-copy isolation and
+  corruption refusal (corrupting copy A's leaf makes A a fixed safe
+  503 while B stays 200; deleting one of A's five leaves is the
+  same refusal; exact restore verified), and the compatibility
+  family per copy (copy-backed facts, exact preset download bytes,
+  key page for the copy's own remapped key, near misses, pre-body
+  204 cuts). The 223 sanitize owned-PG suite also re-ran green
+  (unconfigured captures now carry the five neutral leaves).
+* **Real Chromium**: the owned browser fixture (one copy, real
+  worker) proves the rendered slot href/src values, explicit
+  per-slot requests with exact neutral bytes and safety headers,
+  near-miss 404s, the operations-index compatibility link, the
+  compatibility index/preset/key demo renders and the quiet 204
+  review POST boundary in the real browser context.
+* Normal admin rendering and assets are byte-identical (the normal
+  app never carries the demo state; the demo branches are
+  state-gated), and no schema migration, role, grant,
+  configuration, release, deployment or merge is introduced.
+* Synthetic fixtures are not a real company installation; objective
+  225's configured-file installed acceptance remains later.

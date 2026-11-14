@@ -2859,8 +2859,10 @@ def test_catalog_index_positive_gated_page(monkeypatch):
             assert "separate, bounded phase" in text
             assert "no original seal or apply authority" in text
             # Non-catalog leaves are NOT catalog artifacts: the
-            # branding leaf stays off this page...
-            assert "branding/logo" not in text
+            # branding leaf has no catalog-artifact row/link on this
+            # page (the base header's demo branding asset reference
+            # is a different, admitted slot URL - 224-u)...
+            assert "name=branding/logo" not in r.text
             # ...and no copy name, DSN or credential escapes.
             assert COPY_OK not in text
             assert "unit-test-copy-password" not in text
@@ -6189,7 +6191,11 @@ def test_t_gate_admission_exact_paths():
                 "/admin/operations/x",          # unknown first segment
                 "/admin/operations/diagnostics",
                 "/admin/operations/diagnostics/lookup",
-                "/admin/operations/compatibility/",
+                # 224-u: /admin/operations/compatibility/ is now
+                # ADMITTED (proven in the 224-u tests); its near
+                # misses stay denied there.
+                "/admin/operations/compatibility",
+                "/admin/operations/compatibility//",
                 "/admin/operations/replay-maintenance/",
                 "/admin/email-operations/smtp-test",
                 T_PC_URL + "/",                 # trailing slash
@@ -6270,7 +6276,9 @@ def test_t_index_page_from_verified_copy(monkeypatch):
             # WITHOUT a usable link.
             assert "unavailable in this demo" in r.text
             assert 'href="/admin/operations/diagnostics"' not in r.text
-            assert 'href="/admin/operations/compatibility/"' not in r.text
+            # 224-u: the compatibility page is now admitted and
+            # linked (with the illustrative-operations note).
+            assert 'href="/admin/operations/compatibility/"' in r.text
             assert 'href="/admin/email-operations/smtp-test"' not in r.text
             # No copy name or credential material.
             assert COPY_OK not in r.text
@@ -6640,5 +6648,810 @@ def test_t_pc_no_demo_state_404():
         )
         assert response.status_code == 404
         assert response.body == b"Not Found"
+
+    asyncio.run(run())
+
+
+# ===========================================================================
+# 224-u: neutral branding assets + read-only Codex compatibility views
+# ===========================================================================
+
+import hashlib as _u_hashlib  # noqa: E402
+import uuid as _u_uuid  # noqa: E402
+from contextlib import asynccontextmanager  # noqa: E402
+from types import SimpleNamespace as _U_NS  # noqa: E402
+
+from slaif_gateway.api import admin_compatibility as _u_adcom  # noqa: E402
+from slaif_gateway.api import demo_admin_branding as _u_dab  # noqa: E402
+from slaif_gateway.api import demo_admin_compatibility as _u_dacom  # noqa: E402
+from slaif_gateway.modules.codex_profile_data import (  # noqa: E402
+    list_codex_presets as _u_list_presets,
+    read_codex_preset as _u_read_preset,
+)
+from slaif_gateway.services.admin_key_dashboard import (  # noqa: E402
+    AdminKeyNotFoundError as _U_KeyNotFound,
+)
+from slaif_gateway.web import branding as _u_web_branding  # noqa: E402
+
+_U_SLOTS = ("style.css", "logo", "logo-compact", "favicon", "hero")
+_U_BRAND_URL = {slot: f"/admin/branding/{slot}" for slot in _U_SLOTS}
+_U_COMP_INDEX = "/admin/operations/compatibility/"
+_U_SHIPPED = tuple(name for name, _p, _prof in _u_list_presets())
+_U_KEY_UUID = str(_u_uuid.uuid4())  # canonical lowercase dashed
+
+
+class _U_Row:
+    def __init__(self, mapping: dict) -> None:
+        self._mapping = dict(mapping)
+
+    def __getitem__(self, i):
+        return list(self._mapping.values())[i]
+
+
+class _U_Result:
+    def __init__(self, rows) -> None:
+        self._rows = rows
+
+    def first(self):
+        return self._rows[0] if self._rows else None
+
+    def all(self):
+        return list(self._rows)
+
+
+def _u_neutral_body_map() -> dict:
+    return {
+        f"branding/{slot}": _u_web_branding.fallback_asset(slot)[0]
+        for slot in _U_SLOTS
+    }
+
+
+class _UBrandFakeSession:
+    """One fake request-local copy session for the demo branding law:
+    preflight scalars, the five-slot metadata query (rows with
+    ``_mapping``) and the bounded body query (the stored bytes are
+    looked up by the REQUESTED slot name, as the parameterized body
+    statement binds); every statement and its bound parameters are
+    recorded."""
+
+    def __init__(self, meta_rows, body_rows=None, db=COPY_OK, ro="on") -> None:
+        self.meta_rows = meta_rows
+        # body_rows: a dict {logical_name: bytes} (the stored body per
+        # slot) or an explicit list of raw byte rows.
+        self.body_rows = body_rows
+        self.db = db
+        self.ro = ro
+        self.executed: list[tuple[str, dict]] = []
+
+    def begin(self):
+        return self
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *a):
+        return False
+
+    async def scalar(self, clause):
+        text = str(clause)
+        if "current_database" in text:
+            return self.db
+        return self.ro
+
+    async def execute(self, clause, params=None):
+        text = str(clause)
+        params = dict(params or {})
+        self.executed.append((text, params))
+        if "logical_name IN" in text:
+            return _U_Result([_U_Row(m) for m in self.meta_rows])
+        if text.lstrip().startswith("SELECT body"):
+            rows = []
+            if isinstance(self.body_rows, dict):
+                data = self.body_rows.get(params.get("name"))
+                if data is not None:
+                    rows.append(_U_Row({"body": data}))
+            else:
+                rows = [_U_Row({"body": b}) for b in (self.body_rows or [])]
+            return _U_Result(rows)
+        return _U_Result([])
+
+
+def _u_brand_meta_rows() -> list[dict]:
+    """The intact five-slot metadata set (every leaf is the packaged
+    neutral substitute, self-consistent size/digest)."""
+    rows = []
+    for slot in _U_SLOTS:
+        body, _ct = _u_web_branding.fallback_asset(slot)
+        rows.append(
+            {
+                "logical_name": f"branding/{slot}",
+                "kind": "branding",
+                "byte_count": len(body),
+                "sha256": _u_hashlib.sha256(body).hexdigest(),
+                "actual_bytes": len(body),
+            }
+        )
+    return rows
+
+
+def _u_brand_app(fake, monkeypatch, session):
+    fake.worker_target_db = COPY_OK
+    _preflight_case(monkeypatch, COPY_OK, "on")
+    monkeypatch.setattr(
+        _u_dab, "get_sessionmaker_from_app", lambda _req: lambda: session
+    )
+    return _app(fake), fake
+
+
+class _UComFakeSession:
+    """Fake copy session for the demo compatibility recheck (the
+    qualification read is separately faked)."""
+
+    def __init__(self, db=COPY_OK, ro="on") -> None:
+        self.db = db
+        self.ro = ro
+        self.executed: list[str] = []
+
+    def begin(self):
+        return self
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *a):
+        return False
+
+    async def scalar(self, clause):
+        text = str(clause)
+        if "current_database" in text:
+            return self.db
+        return self.ro
+
+    async def execute(self, clause, params=None):
+        self.executed.append(str(clause))
+        return _U_Result([])
+
+
+def _u_com_app(fake, monkeypatch, session):
+    fake.worker_target_db = COPY_OK
+    _preflight_case(monkeypatch, COPY_OK, "on")
+    monkeypatch.setattr(
+        _u_dacom, "get_sessionmaker_from_app", lambda _req: lambda: session
+    )
+    # _compat_session (the qualification read) reaches the copy through
+    # the admin_compatibility module's own seam.
+    monkeypatch.setattr(
+        _u_adcom, "get_sessionmaker_from_app", lambda _req: lambda: session
+    )
+    return _app(fake), fake
+
+
+def _u_qual_row(**kw) -> _U_NS:
+    base = dict(
+        ready=False,
+        profile_id=None,
+        route_id=str(_u_uuid.uuid4()),
+        client_module_id=None,
+        client_module_version=None,
+        reason_codes=("missing_profile",),
+        badge="Not ready",
+        requested_model="gpt-x",
+        provider="openai",
+        endpoint="chat/completions",
+        metadata_version="0162-v1",
+    )
+    base.update(kw)
+    return _U_NS(**base)
+
+
+class _UFakeQualService:
+    def __init__(self, results) -> None:
+        self._results = results
+
+    async def inspect(self):
+        return self._results
+
+
+def _u_patch_qual(monkeypatch, results) -> None:
+    monkeypatch.setattr(
+        _u_dacom,
+        "_qualification_service",
+        lambda _s: _UFakeQualService(results),
+    )
+
+
+def test_u_gate_branding_exact_paths_total():
+    async def run():
+        app = _app(FakeFacade())
+        async with _client(app) as client:
+            # The five EXACT literals are admitted BEFORE login and
+            # serve the packaged neutral fallback (never a login
+            # redirect, never the live directory).
+            for slot, url in _U_BRAND_URL.items():
+                r = await client.get(url)
+                assert r.status_code == 200, url
+                data, content_type = _u_web_branding.fallback_asset(slot)
+                assert r.content == data, url
+                assert r.headers["content-type"].startswith(content_type.split(";")[0]), url
+                assert r.headers.get("x-content-type-options") == "nosniff", url
+                assert r.headers.get("cache-control") == "private, no-store", url
+            # Every near miss, alternate slash, unknown slot and query
+            # stays default-denied 404.
+            for p in (
+                "/admin/branding",
+                "/admin/branding/",
+                "/admin/branding/",
+                "/admin/branding/style.css/",
+                "/admin/branding/style.css.map",
+                "/admin/branding/logos",
+                "/admin/branding/logo/extra",
+                "/admin/branding/LOGO",
+                "/admin/brandingx/logo",
+                _U_BRAND_URL["logo"] + "?x=1",
+            ):
+                r = await client.get(p)
+                assert r.status_code == 404, p
+        # Zero active accounts: every /admin path is 404 (fail closed).
+        fake = FakeFacade()
+        fake.active = 0
+        app = _app(fake)
+        async with _client(app) as client:
+            _session_cookie(client)
+            for url in _U_BRAND_URL.values():
+                assert (await client.get(url)).status_code == 404, url
+
+    asyncio.run(run())
+
+
+def test_u_gate_branding_unsafe_methods_quiet_noop():
+    async def run():
+        app = _app(FakeFacade())
+        async with _client(app) as client:
+            _session_cookie(client)
+            for method in ("POST", "PUT", "PATCH", "DELETE"):
+                r = await client.request(
+                    method,
+                    _U_BRAND_URL["style.css"],
+                    content=b"x" * 200_000,
+                    headers={"content-type": "text/garbage"},
+                )
+                assert r.status_code == 204, method
+                assert r.content == b""
+        async with _client(app) as anon:
+            r = await anon.post(_U_BRAND_URL["logo"], content=b"y" * 200_000)
+            assert r.status_code == 404
+
+    asyncio.run(run())
+
+
+def test_u_gate_compatibility_exact_paths():
+    async def run():
+        app = _app(FakeFacade())
+        async with _client(app) as client:
+            # The exact family is admitted (no session -> entry
+            # redirect, the session-required law)...
+            r = await client.get(_U_COMP_INDEX)
+            assert r.status_code == 303
+            assert r.headers["location"] == "/fakeadmin/login"
+            for name in _U_SHIPPED:
+                r = await client.get(f"/admin/operations/compatibility/preset/{name}")
+                assert r.status_code == 303, name
+                r = await client.get(
+                    f"/admin/operations/compatibility/preset/{name}/download"
+                )
+                assert r.status_code == 303, name
+            r = await client.get(
+                f"/admin/operations/compatibility/key/{_U_KEY_UUID}"
+            )
+            assert r.status_code == 303
+            # ...and every near miss, unknown preset name, noncanonical
+            # key ID and ANY query stays default-denied 404.
+            for p in (
+                "/admin/operations/compatibility",  # missing slash
+                "/admin/operations/compatibility//",
+                "/admin/operations/compatibility/extra",
+                "/admin/operations/compatibility/x/",
+                "/admin/operations/compatibility/preset/",
+                "/admin/operations/compatibility/preset/unknown",
+                "/admin/operations/compatibility/preset/Unknown",
+                "/admin/operations/compatibility/preset/a/b",
+                "/admin/operations/compatibility/preset/downloads",
+                "/admin/operations/compatibility/key/",
+                "/admin/operations/compatibility/key/" + _U_KEY_UUID.upper(),
+                "/admin/operations/compatibility/key/" + _U_KEY_UUID.replace("-", ""),
+                "/admin/operations/compatibility/key/" + _U_KEY_UUID[:13],
+                f"/admin/operations/compatibility/key/{_U_KEY_UUID}/extra",
+                f"/admin/operations/compatibility/key/{_U_KEY_UUID}/review",
+                _U_COMP_INDEX + "?x=1",
+            ):
+                r = await client.get(p)
+                assert r.status_code == 404, p
+            # An admitted shape with ANY query is refused too.
+            for p in (
+                f"/admin/operations/compatibility/preset/{_U_SHIPPED[0]}?x=1",
+                f"/admin/operations/compatibility/preset/{_U_SHIPPED[0]}/download?x=1",
+                f"/admin/operations/compatibility/key/{_U_KEY_UUID}?x=1",
+            ):
+                r = await client.get(p)
+                assert r.status_code == 404, p
+        # Zero active accounts: 404.
+        fake = FakeFacade()
+        fake.active = 0
+        app = _app(fake)
+        async with _client(app) as client:
+            _session_cookie(client)
+            assert (await client.get(_U_COMP_INDEX)).status_code == 404
+
+    asyncio.run(run())
+
+
+def test_u_compatibility_unsafe_methods_quiet_noop():
+    async def run():
+        app = _app(FakeFacade())
+        async with _client(app) as client:
+            _session_cookie(client)
+            for p in (
+                _U_COMP_INDEX,
+                f"/admin/operations/compatibility/preset/{_U_SHIPPED[0]}",
+                f"/admin/operations/compatibility/preset/{_U_SHIPPED[0]}/download",
+                f"/admin/operations/compatibility/key/{_U_KEY_UUID}",
+                f"/admin/operations/compatibility/key/{_U_KEY_UUID}/review",
+                f"/admin/operations/compatibility/key/{_U_KEY_UUID}/apply",
+            ):
+                r = await client.post(
+                    p,
+                    content=b"x" * 200_000,
+                    headers={"content-type": "text/garbage"},
+                )
+                assert r.status_code == 204, p
+                assert r.content == b""
+        async with _client(app) as anon:
+            r = await anon.post(_U_COMP_INDEX, content=b"y" * 200_000)
+            assert r.status_code == 404
+
+    asyncio.run(run())
+
+
+def test_u_branding_positive_five_leaf_copy(monkeypatch):
+    async def run():
+        fake = FakeFacade()
+        session = _UBrandFakeSession(_u_brand_meta_rows(), _u_neutral_body_map())
+        app, _ = _u_brand_app(fake, monkeypatch, session)
+        async with _client(app) as client:
+            await _verified_session_client(fake, client)
+            for slot, url in _U_BRAND_URL.items():
+                before = len(session.executed)
+                r = await client.get(url)
+                assert r.status_code == 200, url
+                data, content_type = _u_web_branding.fallback_asset(slot)
+                assert r.content == data, url
+                assert r.headers["content-type"].startswith(content_type.split(";")[0]), url
+                assert r.headers.get("x-content-type-options") == "nosniff", url
+                assert r.headers.get("cache-control") == "private, no-store", url
+                # THIS request ran the five-slot metadata law
+                # (parameterized) then exactly ONE bounded body fetch
+                # re-asserting kind/size/digest as bound parameters.
+                new_stmts = session.executed[before:]
+                meta_sqls = [s for s, _p in new_stmts if "logical_name IN" in s]
+                body_sqls = [
+                    (s, p)
+                    for s, p in new_stmts
+                    if s.lstrip().startswith("SELECT body")
+                ]
+                assert len(meta_sqls) == 1, url
+                assert len(body_sqls) == 1, url
+                _bsql, bparams = body_sqls[0]
+                assert bparams["kind"] == "branding", url
+                assert bparams["name"] == f"branding/{slot}", url
+                assert bparams["size"] == len(data), url
+                assert bparams["digest"] == _u_hashlib.sha256(data).hexdigest(), url
+                assert bparams["cap"] == 256 * 1024, url
+            # Across the five requests: five metadata laws, five bodies.
+            assert len(
+                [s for s, _p in session.executed if "logical_name IN" in s]
+            ) == 5
+            assert len(
+                [
+                    s
+                    for s, _p in session.executed
+                    if s.lstrip().startswith("SELECT body")
+                ]
+            ) == 5
+
+    asyncio.run(run())
+
+
+def test_u_branding_zero_or_partial_leaf_set_refuses(monkeypatch):
+    async def run():
+        fake = FakeFacade()
+        session = _UBrandFakeSession([], [])  # ZERO leaves: damaged/pre-upgrade
+        app, _ = _u_brand_app(fake, monkeypatch, session)
+        async with _client(app) as client:
+            await _verified_session_client(fake, client)
+            r = await client.get(_U_BRAND_URL["logo"])
+            assert r.status_code == 503
+            assert r.headers.get("cache-control") == "private, no-store"
+            assert COPY_OK not in r.text
+            # PARTIAL set (four of five): damaged configured copy.
+            rows = _u_brand_meta_rows()
+            session.meta_rows = rows[:4]
+            r = await client.get(_U_BRAND_URL["hero"])
+            assert r.status_code == 503
+            session.meta_rows = [rows[0]]  # one of five: refused too
+            r = await client.get(_U_BRAND_URL["favicon"])
+            assert r.status_code == 503
+            # No body fetch ever ran (the set law refused first).
+            assert not [
+                s for s, _p in session.executed if s.lstrip().startswith("SELECT body")
+            ]
+
+    asyncio.run(run())
+
+
+def test_u_branding_corrupt_metadata_refuses(monkeypatch):
+    async def run():
+        for field, value in (
+            ("kind", "job_record"),
+            ("byte_count", 256 * 1024 + 1),   # over the reviewed slot cap
+            ("byte_count", -1),
+            ("byte_count", True),             # bool is not a size
+            ("sha256", "zz" * 32),            # not canonical hex
+            ("actual_bytes", 12345),          # != claimed byte_count
+        ):
+            fake = FakeFacade()
+            rows = _u_brand_meta_rows()
+            rows[0][field] = value
+            session = _UBrandFakeSession(rows, [])
+            app, _ = _u_brand_app(fake, monkeypatch, session)
+            async with _client(app) as client:
+                await _verified_session_client(fake, client)
+                r = await client.get(_U_BRAND_URL["style.css"])
+                assert r.status_code == 503, (field, value)
+                assert "unit-test-copy-password" not in r.text
+            # The metadata law refused BEFORE any body fetch.
+            assert not [
+                s for s, _p in session.executed if s.lstrip().startswith("SELECT body")
+            ], (field, value)
+
+    asyncio.run(run())
+
+
+def test_u_branding_body_mismatch_and_policy_refuses(monkeypatch):
+    async def run():
+        body_bytes, _ct = _u_web_branding.fallback_asset("logo")
+        # (a) the bounded body fetch returns no row (concurrent change).
+        fake = FakeFacade()
+        session = _UBrandFakeSession(_u_brand_meta_rows(), [])
+        app, _ = _u_brand_app(fake, monkeypatch, session)
+        async with _client(app) as client:
+            await _verified_session_client(fake, client)
+            assert (await client.get(_U_BRAND_URL["logo"])).status_code == 503
+        # (b) the fetched bytes fail length/digest (metadata is
+        # self-consistent for OTHER bytes than the neutral substitute).
+        fake = FakeFacade()
+        foreign = b"\x00" * 16
+        rows = _u_brand_meta_rows()
+        for row in rows:
+            if row["logical_name"] == "branding/logo":
+                row["byte_count"] = len(foreign)
+                row["sha256"] = _u_hashlib.sha256(foreign).hexdigest()
+                row["actual_bytes"] = len(foreign)
+        bodies = _u_neutral_body_map()
+        bodies["branding/logo"] = foreign
+        session = _UBrandFakeSession(rows, bodies)
+        app, _ = _u_brand_app(fake, monkeypatch, session)
+        async with _client(app) as client:
+            await _verified_session_client(fake, client)
+            # The bytes pass size+digest but FAIL the 223 display
+            # policy (not the packaged neutral substitute): fixed 503.
+            r = await client.get(_U_BRAND_URL["logo"])
+            assert r.status_code == 503
+            assert foreign not in r.content
+
+    asyncio.run(run())
+
+
+def test_u_branding_copy_mismatch_refuses(monkeypatch):
+    async def run():
+        for db, ro in (("some_other_db", "on"), (COPY_OK, "off")):
+            fake = FakeFacade()
+            session = _UBrandFakeSession(_u_brand_meta_rows(), db=db, ro=ro)
+            app, _ = _u_brand_app(fake, monkeypatch, session)
+            async with _client(app) as client:
+                await _verified_session_client(fake, client)
+                r = await client.get(_U_BRAND_URL["style.css"])
+                assert r.status_code == 503, (db, ro)
+                assert db != COPY_OK or COPY_OK not in r.text
+
+    asyncio.run(run())
+
+
+def test_u_branding_prelogin_fallback_no_db(monkeypatch):
+    async def run():
+        fake = FakeFacade()
+        calls = []
+
+        def _boom(_req):
+            calls.append(1)
+            raise AssertionError("the pre-login fallback must not touch the copy")
+
+        app = _app(fake)
+        _preflight_case(monkeypatch, COPY_OK, "on")
+        monkeypatch.setattr(_u_dab, "get_sessionmaker_from_app", _boom)
+        async with _client(app) as client:
+            # NO session cookie: the packaged neutral fallback, no DB.
+            for slot, url in _U_BRAND_URL.items():
+                r = await client.get(url)
+                assert r.status_code == 200, url
+                data, _ct = _u_web_branding.fallback_asset(slot)
+                assert r.content == data, url
+        assert calls == []
+
+    asyncio.run(run())
+
+
+def test_u_compatibility_index_positive(monkeypatch):
+    async def run():
+        fake = FakeFacade()
+        ready_row = _u_qual_row(
+            ready=True,
+            profile_id="codex-0162-demo",
+            badge="Protocol-qualified",
+            reason_codes=(),
+        )
+        _u_patch_qual(monkeypatch, [ready_row, _u_qual_row()])
+        session = _UComFakeSession()
+        app, _ = _u_com_app(fake, monkeypatch, session)
+        async with _client(app) as client:
+            await _verified_session_client(fake, client)
+            r = await client.get(_U_COMP_INDEX)
+            assert r.status_code == 200
+            assert r.headers.get("cache-control") == "private, no-store"
+            text = " ".join(r.text.split())
+            # The persistent demo note (illustrative, no effect)...
+            assert "Compatibility operations are illustrative" in text
+            assert "have no effect" in text
+            assert "no compatibility or replay authority" in text
+            # ...the demo web process adopts no startup profile...
+            assert "adopts no API startup compatibility profile" in text
+            assert "not published as display data to this page yet" in text
+            # ...the qualification rows render from the (fake) copy...
+            assert "Protocol-qualified" in text
+            assert "codex-0162-demo" in text
+            # ...NO runnable profile artifact is offered...
+            assert "/codex-profile/" not in r.text
+            assert "Not offered in the demo snapshot" in text
+            # ...and the package-owned shipped presets are listed with
+            # their exact demo hrefs.
+            for name in _U_SHIPPED:
+                assert f'href="/admin/operations/compatibility/preset/{name}"' in r.text
+                assert (
+                    f'href="/admin/operations/compatibility/preset/{name}/download"'
+                    in r.text
+                )
+            # The base header references the FIVE demo-admitted slot
+            # URLs (the demo branding context), which resolve to this
+            # visitor's neutral copy or the packaged fallback.
+            assert '<link rel="stylesheet" href="/admin/branding/style.css">' in r.text
+            assert (
+                '<link rel="icon" type="image/svg+xml" href="/admin/branding/favicon">'
+                in r.text
+            )
+            assert 'src="/admin/branding/logo"' in r.text
+            assert 'src="/admin/branding/logo-compact"' in r.text
+            # No copy name or credential material.
+            assert COPY_OK not in r.text
+            assert "postgresql" not in r.text.lower()
+
+    asyncio.run(run())
+
+
+def test_u_compatibility_index_alias_withheld(monkeypatch):
+    async def run():
+        fake = FakeFacade()
+        alias_route = "sk-slaif-" + "a1" * 20
+        ready_row = _u_qual_row(
+            ready=True,
+            profile_id="codex-0162-demo",
+            route_id=alias_route,
+            badge="Protocol-qualified",
+            reason_codes=(),
+        )
+        _u_patch_qual(monkeypatch, [ready_row])
+        monkeypatch.setattr(
+            _u_dacom,
+            "_is_known_alias",
+            lambda _req, value: value == alias_route,
+        )
+        session = _UComFakeSession()
+        app, _ = _u_com_app(fake, monkeypatch, session)
+        async with _client(app) as client:
+            await _verified_session_client(fake, client)
+            r = await client.get(_U_COMP_INDEX)
+            assert r.status_code == 200
+            assert "Withheld: route ID matches a known credential value." in r.text
+            # The withheld route ID is displayed withheld and its copy-
+            # backed link is dropped (no href at all).
+            assert f'href="/admin/routes/{alias_route}"' not in r.text
+
+    asyncio.run(run())
+
+
+def test_u_compatibility_index_qualification_error_safe(monkeypatch):
+    async def run():
+        fake = FakeFacade()
+
+        class _Boom:
+            async def inspect(self):
+                raise RuntimeError("boom")
+
+        monkeypatch.setattr(_u_dacom, "_qualification_service", lambda _s: _Boom())
+        session = _UComFakeSession()
+        app, _ = _u_com_app(fake, monkeypatch, session)
+        async with _client(app) as client:
+            await _verified_session_client(fake, client)
+            r = await client.get(_U_COMP_INDEX)
+            assert r.status_code == 200
+            assert "boom" not in r.text
+            assert "The qualification projection is unavailable right now" in r.text
+            # The package presets still render.
+            assert f'href="/admin/operations/compatibility/preset/{_U_SHIPPED[0]}"' in r.text
+
+    asyncio.run(run())
+
+
+def test_u_compatibility_preset_page_and_download(monkeypatch):
+    async def run():
+        name = _U_SHIPPED[0]
+        fake = FakeFacade()
+        session = _UComFakeSession()
+        app, _ = _u_com_app(fake, monkeypatch, session)
+        async with _client(app) as client:
+            await _verified_session_client(fake, client)
+            r = await client.get(f"/admin/operations/compatibility/preset/{name}")
+            assert r.status_code == 200
+            assert r.headers.get("cache-control") == "private, no-store"
+            text = " ".join(r.text.split())
+            assert f"Compatibility preset: <code>{name}</code>" in r.text or name in text
+            assert "package-owned credential-free reference material" in text
+            from markupsafe import escape as _u_escape
+
+            document = _u_read_preset(name)
+            assert str(_u_escape(document)) in r.text
+            # The exact canonical credential-free bytes, bounded,
+            # forced attachment, nosniff, no-store.
+            r = await client.get(
+                f"/admin/operations/compatibility/preset/{name}/download"
+            )
+            assert r.status_code == 200
+            assert r.content == document.encode("utf-8")
+            assert r.headers["content-type"].startswith("application/json")
+            assert f'attachment; filename="{name}.json"' in r.headers[
+                "content-disposition"
+            ]
+            assert r.headers.get("x-content-type-options") == "nosniff"
+            assert r.headers.get("cache-control") == "private, no-store"
+
+    asyncio.run(run())
+
+
+def test_u_compatibility_preset_download_withheld(monkeypatch):
+    async def run():
+        name = _U_SHIPPED[0]
+        fake = FakeFacade()
+        monkeypatch.setattr(
+            _u_dacom, "_is_known_alias", lambda _req, value: True
+        )
+        session = _UComFakeSession()
+        app, _ = _u_com_app(fake, monkeypatch, session)
+        async with _client(app) as client:
+            await _verified_session_client(fake, client)
+            r = await client.get(
+                f"/admin/operations/compatibility/preset/{name}/download"
+            )
+            assert r.status_code == 403
+            assert "known credential value" in r.text
+            # The page display is withheld too (document hidden).
+            r = await client.get(f"/admin/operations/compatibility/preset/{name}")
+            assert r.status_code == 200
+            assert "withheld for display" in r.text
+
+    asyncio.run(run())
+
+
+def test_u_compatibility_key_page_positive(monkeypatch):
+    async def run():
+        key_detail = _U_NS(
+            public_key_id="slaif-pub-key-1",
+            id=_u_uuid.UUID(_U_KEY_UUID),
+            computed_display_status="active",
+            owner_display_name="Owner One",
+            owner_email=None,
+            responses_policy=None,
+        )
+
+        @asynccontextmanager
+        async def _fake_scope(_req):
+            class _Svc:
+                async def get_key_detail(self, kid):
+                    if str(kid) != _U_KEY_UUID:
+                        raise _U_KeyNotFound()
+                    return key_detail
+
+            yield _Svc()
+
+        monkeypatch.setattr(_u_dacom, "_admin_key_dashboard_service_scope", _fake_scope)
+        fake = FakeFacade()
+        session = _UComFakeSession()
+        app, _ = _u_com_app(fake, monkeypatch, session)
+        async with _client(app) as client:
+            await _verified_session_client(fake, client)
+            r = await client.get(
+                f"/admin/operations/compatibility/key/{_U_KEY_UUID}"
+            )
+            assert r.status_code == 200
+            assert r.headers.get("cache-control") == "private, no-store"
+            text = " ".join(r.text.split())
+            assert "slaif-pub-key-1" in text
+            assert "Owner One" in text
+            assert "Demo snapshot: the key binding shown is a FROZEN read" in text
+            assert "the form has no effect" in text
+            assert "No readable client-module binding on this key" in text
+            # No copy name or credential material.
+            assert COPY_OK not in r.text
+
+    asyncio.run(run())
+
+
+def test_u_compatibility_key_page_not_found(monkeypatch):
+    async def run():
+        @asynccontextmanager
+        async def _fake_scope(_req):
+            class _Svc:
+                async def get_key_detail(self, _kid):
+                    raise _U_KeyNotFound()
+
+            yield _Svc()
+
+        monkeypatch.setattr(_u_dacom, "_admin_key_dashboard_service_scope", _fake_scope)
+        fake = FakeFacade()
+        session = _UComFakeSession()
+        app, _ = _u_com_app(fake, monkeypatch, session)
+        async with _client(app) as client:
+            await _verified_session_client(fake, client)
+            r = await client.get(
+                f"/admin/operations/compatibility/key/{_u_uuid.uuid4()}"
+            )
+            assert r.status_code == 404
+
+    asyncio.run(run())
+
+
+def test_u_compatibility_recheck_refusals_and_no_session(monkeypatch):
+    async def run():
+        # A present but wrong-bound copy is a fixed safe 503 on every
+        # demo compatibility GET.
+        for db, ro in (("some_other_db", "on"), (COPY_OK, "off")):
+            fake = FakeFacade()
+            session = _UComFakeSession(db=db, ro=ro)
+            app, _ = _u_com_app(fake, monkeypatch, session)
+            async with _client(app) as client:
+                await _verified_session_client(fake, client)
+                r = await client.get(_U_COMP_INDEX)
+                assert r.status_code == 503, (db, ro)
+                assert COPY_OK not in r.text
+        # No session at all: the entry redirect (the pages are
+        # session-required, unlike the total branding endpoints).
+        app = _app(FakeFacade())
+        async with _client(app) as client:
+            for p in (
+                _U_COMP_INDEX,
+                f"/admin/operations/compatibility/preset/{_U_SHIPPED[0]}",
+                f"/admin/operations/compatibility/preset/{_U_SHIPPED[0]}/download",
+                f"/admin/operations/compatibility/key/{_U_KEY_UUID}",
+            ):
+                r = await client.get(p)
+                assert r.status_code == 303, p
+                assert r.headers["location"] == "/fakeadmin/login"
 
     asyncio.run(run())

@@ -853,6 +853,9 @@ def _mount_demo_admin_routers(app: FastAPI) -> None:
         router as admin_accounting_operations_router,
     )
     from slaif_gateway.api.admin_accounts import router as admin_accounts_router
+    from slaif_gateway.api.demo_admin_branding import (
+        router as demo_admin_branding_router,
+    )
     from slaif_gateway.api.demo_admin_catalog import router as demo_admin_catalog_router
     from slaif_gateway.api.admin_catalog_refresh import (
         router as admin_catalog_refresh_router,
@@ -865,6 +868,9 @@ def _mount_demo_admin_routers(app: FastAPI) -> None:
     )
     from slaif_gateway.api.admin_key_batch import router as admin_key_batch_router
     from slaif_gateway.api.admin_key_clone import router as admin_key_clone_router
+    from slaif_gateway.api.demo_admin_compatibility import (
+        router as demo_admin_compatibility_router,
+    )
     from slaif_gateway.api.demo_admin_operations import (
         router as demo_admin_operations_router,
     )
@@ -887,6 +893,9 @@ def _mount_demo_admin_routers(app: FastAPI) -> None:
         StaticFiles(directory=str(static_dir)),
         name="admin_static",
     )
+    # Demo-specific neutral branding endpoints win over the normal
+    # live-directory branding routes (224-u).
+    app.include_router(demo_admin_branding_router)
     app.include_router(branding_router)
     app.include_router(admin_record_choices_router)
     app.include_router(admin_router)
@@ -903,6 +912,9 @@ def _mount_demo_admin_routers(app: FastAPI) -> None:
     # pages win over the normal live-Settings operations routes (224-t).
     app.include_router(demo_admin_operations_router)
     app.include_router(admin_operations_router)
+    # Demo-specific read-only compatibility views win over the
+    # normal compatibility router (224-u).
+    app.include_router(demo_admin_compatibility_router)
     app.include_router(admin_compatibility_router)
     app.include_router(admin_replay_maintenance_router)
     app.include_router(admin_reports_router)
