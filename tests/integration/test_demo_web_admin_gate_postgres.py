@@ -44,6 +44,7 @@ No provider HTTP, no email, no normal admin auth. Synthetic data only.
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import re
 import socket
@@ -63,7 +64,13 @@ from httpx import ASGITransport, AsyncClient
 
 from slaif_gateway.api.demo_admin_gate import _demo_csrf_token
 from slaif_gateway.demo_web import PgDemoWebFacade, create_demo_app
-from tests.integration.test_demo_snapshot_sanitize_postgres import _Env
+from tests.integration.test_demo_snapshot_sanitize_postgres import (
+    PROVIDER,
+    _Env,
+    _FLOW_AFFECTED_TABLES,
+    _flow_delete_ids,
+    _flow_table_ids,
+)
 from tests.integration.test_demo_web_postgres import (
     _parse_pending,
     _request_row,
@@ -1937,6 +1944,186 @@ async def _count_table(san: _Env, copy_db: str, table: str) -> int:
         await s.close()
 
 
+# ---------------------------------------------------------------------------
+# 224-r browser proof helpers: a clone receipt WRITTEN BY THE SUPPORTED
+# CLONE FLOW (208) in the source -> worker copy A -> projected receipt
+# (remapped links) -> Chromium chooser + positive selection; then the flow
+# rows leave the source before copy B is processed, so copy B must not
+# carry them (copy isolation). Flow-owned rows are removed by exact
+# id-set diff (children first) so the shared module seed is byte-identical.
+# ---------------------------------------------------------------------------
+
+
+def _r_source_url(san: _Env) -> str:
+    return (
+        f"postgresql+asyncpg://{san.source['user']}:{san.source['password']}"
+        f"@{san.source['host']}:{san.source['port']}/{san.source['database']}"
+    )
+
+
+async def _r_flow_baseline(san: _Env) -> dict[str, set[str]]:
+    s = await asyncpg.connect(**_conn_kwargs(
+        san.source["host"], san.source["port"],
+        san.source["user"], san.source["password"],
+        str(san.source["database"]),
+    ))
+    try:
+        return {t: await _flow_table_ids(s, t) for t in _FLOW_AFFECTED_TABLES}
+    finally:
+        await s.close()
+
+
+async def _r_source_flow_cleanup(san: _Env, flow: dict[str, object]) -> None:
+    """Remove exactly the flow-owned rows (id-set diff vs the baseline)."""
+    baseline = flow.get("baseline")
+    if not baseline:
+        return
+    s = await asyncpg.connect(**_conn_kwargs(
+        san.source["host"], san.source["port"],
+        san.source["user"], san.source["password"],
+        str(san.source["database"]),
+    ))
+    try:
+        for table in _FLOW_AFFECTED_TABLES:
+            current = await _flow_table_ids(s, table)
+            await _flow_delete_ids(s, table, current - baseline[table])
+    finally:
+        await s.close()
+
+
+async def _r_source_flow(san: _Env) -> dict[str, object]:
+    """Run the SUPPORTED clone flow on the shared source DB.
+
+    Creates a login-able admin and drives the live guided flow (create
+    key -> review -> apply) for the SAME owner as the seeded canary key;
+    returns the flow ground truth (source2/target ids + the receipt the
+    flow itself persisted - never a hand-built seed).
+    """
+    from fastapi.testclient import TestClient
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+    from slaif_gateway.db.repositories.admin_users import AdminUsersRepository
+    from slaif_gateway.main import create_app
+    from slaif_gateway.utils.passwords import hash_admin_password
+
+    from tests.integration.test_admin_key_clone_208_postgres import (
+        ADMIN_PASSWORD,
+        TOKEN_RE,
+        _apply,
+        _create_key,
+        _login,
+        _review,
+        _settings,
+    )
+
+    s = await asyncpg.connect(**_conn_kwargs(
+        san.source["host"], san.source["port"],
+        san.source["user"], san.source["password"],
+        str(san.source["database"]),
+    ))
+    try:
+        url = _r_source_url(san)
+        engine = create_async_engine(url)
+        factory = async_sessionmaker(engine, expire_on_commit=False)
+        try:
+            async with factory() as session:
+                async with session.begin():
+                    admin = await AdminUsersRepository(session).create_admin_user(
+                        email=f"clone-flow-{uuid.uuid4().hex[:8]}@example.org",
+                        display_name="224r Flow Admin",
+                        password_hash=hash_admin_password(ADMIN_PASSWORD),
+                        role="superadmin",
+                        is_active=True,
+                    )
+        finally:
+            await engine.dispose()
+
+        app = create_app(_settings(url))
+        with TestClient(app) as client:
+            _login(client, {"admin_email": str(admin.email)})
+            pre = await _flow_table_ids(s, "gateway_keys")
+            _create_key(
+                client,
+                owner_id=san.ids["owner"],
+                extra={
+                    "reason": "224-r browser clone flow source key",
+                    # The canary seed's single provider row: the create
+                    # form refuses an empty provider selection.
+                    "allowed_providers": PROVIDER,
+                },
+            )
+            new_src = (await _flow_table_ids(s, "gateway_keys")) - pre
+            assert len(new_src) == 1
+            source2 = uuid.UUID(next(iter(new_src)))
+            review = _review(
+                client,
+                source2,
+                validity_mode="duration-from-now",
+                duration_value="3601",
+                duration_unit="seconds",
+                delivery_mode="none",
+                target_owner_id=str(san.ids["owner"]),
+            )
+            assert review.status_code == 200, review.text[:800]
+            token_match = TOKEN_RE.search(review.text)
+            assert token_match is not None
+            applied = _apply(
+                client, source2, token_match.group(1), "224-r browser clone flow"
+            )
+            assert applied.status_code == 200, applied.text[:800]
+
+        post = await _flow_table_ids(s, "gateway_keys")
+        new_tgt = post - pre - new_src
+        assert len(new_tgt) == 1
+        target_id = uuid.UUID(next(iter(new_tgt)))
+        receipt_row = await s.fetchrow(
+            "SELECT metadata FROM gateway_keys WHERE id = $1", target_id
+        )
+        receipt = json.loads(receipt_row["metadata"])["clone_receipt"]
+        return {
+            "source2": source2,
+            "target": target_id,
+            "receipt": receipt,
+        }
+    finally:
+        await s.close()
+
+
+async def _r_copy_receipt_info(san: _Env, copy_db: str) -> dict[str, str]:
+    """The copied receipt's remapped links in one copy (target/source/op)."""
+    s = await asyncpg.connect(**_conn_kwargs(
+        san.target["host"], san.target["port"],
+        san.target["user"], san.target["password"], copy_db,
+    ))
+    try:
+        row = await s.fetchrow(
+            "SELECT id, metadata FROM public.gateway_keys "
+            "WHERE metadata IS NOT NULL AND metadata <> '{}'::jsonb"
+        )
+        assert row is not None, f"copy {copy_db} carries no receipt row"
+        receipt = json.loads(row["metadata"])["clone_receipt"]
+        return {
+            "target": str(row["id"]),
+            "source": str(receipt["source_gateway_key_id"]),
+            "op": str(receipt["operation_uuid"]),
+        }
+    finally:
+        await s.close()
+
+
+async def _r_copy_single_key(san: _Env, copy_db: str) -> str:
+    s = await asyncpg.connect(**_conn_kwargs(
+        san.target["host"], san.target["port"],
+        san.target["user"], san.target["password"], copy_db,
+    ))
+    try:
+        row = await s.fetchrow("SELECT id FROM public.gateway_keys")
+        assert row is not None
+        return str(row["id"])
+    finally:
+        await s.close()
+
+
 async def _admin_creds(
     san: _Env, which: str, copy_db: str | None = None
 ) -> list[tuple[str, str, str]]:
@@ -2025,11 +2212,25 @@ async def _inst_names(san: _Env, copy_db: str) -> list[str]:
 def test_browser_smoke_demo_copy_pages(
     san_env: _Env, webenv: dict[str, Any], custody: Path,
     monkeypatch: pytest.MonkeyPatch,
+    request: pytest.FixtureRequest,
 ) -> None:
     pw = pytest.importorskip("playwright.sync_api")
 
     env = webenv
     cfg = _web_config(env, san_env)
+
+    # 224-r: the positive chooser/projection proof needs a REAL clone
+    # receipt in the source, written by the supported clone flow (208)
+    # for the same owner as the canary key. Copy A is built while the
+    # flow rows exist; they leave the source before copy B is built, so
+    # copy B must not carry them (copy isolation). Exact id-set-diff
+    # cleanup is finalizer-guarded for any later failure.
+    flow: dict[str, object] = {}
+    flow["baseline"] = asyncio.run(_r_flow_baseline(san_env))
+    request.addfinalizer(
+        lambda: asyncio.run(_r_source_flow_cleanup(san_env, flow))
+    )
+    flow.update(asyncio.run(_r_source_flow(san_env)))
 
     # One login -> one real worker-processed copy -> one demo session.
     rid, pending = asyncio.run(_login_phase(cfg, env))
@@ -2040,6 +2241,26 @@ def test_browser_smoke_demo_copy_pages(
     assert isinstance(target, str) and target.startswith("demo_snap_")
     token = asyncio.run(_wait_phase(cfg, pending))
     names = asyncio.run(_inst_names(san_env, target))
+
+    # 224-r: copy B - the flow rows leave the source NOW (copy A already
+    # includes them), so copy B's snapshot must not carry the flow keys
+    # or the receipt.
+    asyncio.run(_r_source_flow_cleanup(san_env, flow))
+    rid_b, pending_b = asyncio.run(_login_phase(cfg, env))
+    out_b = _run_worker_cli(
+        ["process-request", str(rid_b), "--json"], cli_env, monkeypatch
+    )
+    assert "verified_unpublished" in out_b
+    target_b = _request_row(env, rid_b)["worker_target_db"]
+    assert isinstance(target_b, str) and target_b.startswith("demo_snap_")
+    assert target_b != target
+    token_b = asyncio.run(_wait_phase(cfg, pending_b))
+
+    # 224-r pre-computed copy facts: the async DB reads must stay OUT of
+    # the sync_playwright greenlet block (asyncio.run cannot run there).
+    a_info = asyncio.run(_r_copy_receipt_info(san_env, target))
+    b_key = asyncio.run(_r_copy_single_key(san_env, target_b))
+    b_key_count = asyncio.run(_count_table(san_env, target_b, "gateway_keys"))
 
     port = _free_port()
     base_url = f"http://127.0.0.1:{port}"
@@ -2339,6 +2560,62 @@ def test_browser_smoke_demo_copy_pages(
             )
             page.screenshot(path=str(shot_cat))
             print(f"DEMO_BROWSER_CATALOG_SCREENSHOT={shot_cat}")
+
+            # --- 224-r: chooser + positive selection against copy A,
+            # then copy-B isolation --------------------------------------
+            # Copy A carries the flow's copied receipt: the copied
+            # SOURCE key's receipts page lists the copied operation in
+            # the SELECT-only chooser (real SQLAlchemy Row transport),
+            # and selecting it renders the read-only projection of the
+            # copied receipt (remapped links, never raw source values).
+            r = page.goto(f"/admin/keys/{a_info['source']}/clone/receipts")
+            assert r is not None and r.status == 200
+            assert r.headers["cache-control"] == "private, no-store"
+            _ra_page = " ".join(page.content().split())
+            assert "Historical clone operations" in _ra_page
+            _ra_href = (
+                f"/admin/keys/{a_info['source']}/clone/receipts"
+                f"?operation={a_info['op']}"
+            )
+            assert _ra_href in page.content()
+            page.click(f'a[href="{_ra_href}"]')
+            page.wait_for_url(_ra_href)
+            _rp_page = page.content()
+            _rp_flat = " ".join(_rp_page.split())
+            assert "This operation completed and created exactly one target key" in _rp_flat
+            assert a_info["target"] in _rp_page
+            assert "duration-from-now" in _rp_page
+            # Raw source identifiers never render: only per-copy remapped
+            # values (the raw receipt UUIDs/public id are absent).
+            _raw_receipt = flow["receipt"]
+            assert str(_raw_receipt["operation_uuid"]) not in _rp_page
+            assert str(_raw_receipt["source_public_key_id"]) not in _rp_page
+            assert str(flow["source2"]) not in _rp_page
+            assert target not in _rp_page
+            # Copy-B isolation: a fresh session over the SECOND copy
+            # (built after the flow rows left the source) must not see
+            # the flow keys or the receipt - honest empty chooser state.
+            assert b_key_count == 1
+            context_b = browser.new_context(base_url=base_url)
+            page_b = context_b.new_page()
+            context_b.add_cookies([
+                {"name": "slaif_demo_session", "value": token_b, "url": f"{base_url}/"},
+            ])
+            r = page_b.goto(f"/admin/keys/{b_key}/clone/receipts")
+            assert r is not None and r.status == 200
+            _rb_page = " ".join(page_b.content().split())
+            assert (
+                "No historical clone receipts are visible for this source "
+                "in this snapshot"
+            ) in _rb_page
+            assert a_info["op"] not in _rb_page
+            assert a_info["target"] not in _rb_page
+            context_b.close()
+            shot_r = Path(
+                f"/tmp/slaif-224r-browser-receipt-{os.getpid()}-{uuid.uuid4().hex[:10]}.png"
+            )
+            page.screenshot(path=str(shot_r))
+            print(f"DEMO_BROWSER_224R_SCREENSHOT={shot_r}")
 
             # --- 224-i: an admitted form renders; the operational submit
             # is a quiet 204 no-op that changes nothing -------------------

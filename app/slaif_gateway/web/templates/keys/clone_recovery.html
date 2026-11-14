@@ -26,6 +26,42 @@
   </div>
   {% endif %}
 
+  {% if demo_admin and demo_receipts %}
+  {% if not demo_receipts.available %}
+  <section class="action-panel" aria-labelledby="demo-receipts-heading">
+    <h2 id="demo-receipts-heading">Historical clone operations</h2>
+    <p class="muted">
+      Historical clone receipt history is unavailable in this snapshot, so
+      no operations are listed. This says nothing about the source key's
+      real operations.
+    </p>
+  </section>
+  {% else %}
+  <section class="action-panel" aria-labelledby="demo-receipts-heading">
+    <h2 id="demo-receipts-heading">Historical clone operations</h2>
+    {% if demo_receipts.operations %}
+    <p class="field-help">
+      Copied operation IDs recovered from this snapshot's receipt rows
+      (historical, newest target first){% if demo_receipts.capped %}, showing
+      at most the first 100{% endif %}. Selecting one renders its read-only
+      projection.
+    </p>
+    <ul aria-label="Copied clone operation IDs">
+      {% for op in demo_receipts.operations %}
+      <li><a href="/admin/keys/{{ key.id }}/clone/receipts?operation={{ op }}">{{ op }}</a></li>
+      {% endfor %}
+    </ul>
+    {% else %}
+    <p class="muted">
+      No historical clone receipts are visible for this source in this
+      snapshot. An empty list reflects only this sanitized copy - it does
+      not establish whether the source had clone operations.
+    </p>
+    {% endif %}
+  </section>
+  {% endif %}
+  {% endif %}
+
   <section class="action-panel" aria-labelledby="recovery-form-heading">
     <h2 id="recovery-form-heading">Operation</h2>
     <form method="get" action="/admin/keys/{{ key.id }}/clone/receipts">

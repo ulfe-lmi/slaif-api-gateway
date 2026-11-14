@@ -2667,6 +2667,12 @@ snapshot. A bounded sanitizer projection repair that preserves
 sanitized clone receipts is a separately ordered follow-up and is
 required before objective 224 can be complete.
 
+That follow-up is objective 224-r (below): it repairs the sanitizer
+with the dedicated, closed `gateway_keys.metadata` clone-receipt
+projection, so a worker-built copy from a source that has a real
+clone receipt now carries the projected (remapped) receipt, and the
+receipts page can render it positively.
+
 A copied key may be unsupported for calibration or cloning: the
 existing safe refusal / eligibility warning renders instead of a
 false success. Query handling stays bounded at the gate (raw bytes,
@@ -2725,3 +2731,135 @@ source ID, raw metadata or unmasked personal identity is exposed.
   404s; the whole phase leaves source and both copies' counts
   unchanged; the real-Chromium key detail shows the admitted read
   links and the receipts page renders the honest help/banner state.
+
+## Clone-receipt sanitizer projection and demo chooser (objective 224-r)
+
+224-r (same PR #383) repairs the sanitizer limitation documented under
+224-q: a worker-built demo copy from a source that has a real clone
+receipt now carries the projected (per-copy remapped) receipt, and the
+224-q receipts page can render it positively. The scope is exactly the
+follow-up that was ordered - a dedicated narrow sanitizer projection
+plus its verifier proof and the demo chooser. No schema, migration,
+route, job or normal-admin change.
+
+* **Sanitizer (`gateway_keys.metadata`, new closed `KR` action).**
+  Ordinary metadata is cleared to `{}` exactly as before. A
+  recognized, well-formed 208 clone receipt (the exact 17 reviewed
+  members, no more, no less) is projected into the copy with EVERY
+  identifying value remapped per copy: UUIDs through the global
+  per-copy bijection, the source public key ID through the string
+  remap, and both fingerprints through the column-salted 64-hex remap.
+  The bounded nonsecret validity members and the display status are
+  preserved, but the optional timestamp members (`source_valid_until`,
+  `validity_from`, `validity_until`) must be valid ISO-8601 timestamp
+  strings: the clone flow writes `source_valid_until` with
+  `datetime.isoformat()` and in absolute mode preserves
+  operator-supplied ISO-8601 text verbatim, so the law accepts any
+  well-formed ISO-8601 timestamp (offset- or Z-bearing, naive, or
+  space-separated) that parses with `datetime.fromisoformat`. Bare
+  date-only, blank, padded or arbitrary free-text values are NOT
+  rewritten or discarded - they fail the whole copy closed (nothing is
+  published; the error carries only the member name, never the raw
+  value). A malformed, unknown or
+  secret-bearing receipt fails the whole copy closed likewise. The
+  receipt vocabulary and validity modes are imported from the product's
+  own 208 schema constants, so the demo law cannot drift from the
+  supported clone flow's shape.
+* **Independent post-commit verifier.** On a separate read-only
+  connection after commit, the verifier re-proves the per-row
+  receipt law: the SET of stored non-empty receipts exactly equals the
+  pre-state expectation set; every stored receipt's keyed digest
+  (computed from the STORED value, keyed by the per-copy seed and the
+  remapped row ID) equals the expectation projected from the RAW
+  source receipt before the rewrite, so an adversarial mutation of any
+  single projected field fails publication; and link consistency
+  holds (the receipt's target ID equals its containing key row, and
+  its source ID is a real copied `gateway_keys.id` - no dangling or
+  cross-copy links).
+* **U-column verifier repair (224-r demonstrated blocker).** The old
+  blanket U-distinctness law rejected any repeated FK value, which
+  wrongly refused two legitimate gateway keys of the SAME owner - the
+  approved demo clone scenario. It is replaced by (a) a per-column
+  keyed multiset digest over EVERY U column (pre-state projects the
+  raw UUIDs to the expected per-copy remaps; the verifier recomputes
+  over the stored values and requires equality), which proves repeated
+  FK values keep the SAME per-copy mapping while an un-remapped raw
+  value or any substitution breaks it; and (b) a distinctness
+  re-check ONLY where the reviewed schema declares a single-column
+  UNIQUE or PRIMARY KEY on that column (a composite UNIQUE proves no
+  per-column distinctness and is not enforced).
+* **Demo-only chooser (224-r).** On the 224-q receipts page in demo
+  mode, a bounded, SELECT-only chooser lists at most the 100 newest
+  copied operations whose receipt references this source (a capped
+  note when more exist), each linked to the exact 224-q
+  `?operation=` selector, which renders the existing read-only
+  projection. The chooser runs only on a demo request, on the
+  request-local gate-validated copy sessionmaker, and re-verifies
+  `current_database()` and `transaction_read_only` inside a read-only
+  transaction; a refused or failed copy query is a fixed safe refusal
+  (an explicit "unavailable" note), never a silent empty list and
+  never a leak. An empty chooser list is an honest
+  snapshot-only statement (it does not establish whether the source
+  had clone operations).
+
+Guarantee and limits: the receipt and its projection are HISTORICAL
+display data frozen at snapshot time. The demo chooser and projection
+carry NO replay, retry, delivery or clone authority; selecting an
+operation only renders the copied receipt's read-only projection. The
+copy is SELECT-only for every demo read, and no plaintext key
+material, one-time secret, original source ID or raw metadata is
+exposed - only per-copy remapped values.
+
+### Evidence (224-r)
+
+* Focused unit (mocked, no database): the closed KR projection
+  (well-formed receipt remapped/preserved; ordinary metadata cleared;
+  sibling members dropped; deterministic and seed-dependent; unknown,
+  missing, wrong-typed, invalid-UUID, invalid-fingerprint, wrong-mode
+  and wrong-status members fail closed; optional UUID nulls stay
+  null); the validity-timestamp law (valid ISO-8601 timestamps -
+  offset/Z, naive, space-separated - preserved verbatim; bare date-only,
+  padded, free-text, blank or wrong-type non-null values FAIL THE COPY
+  CLOSED with a member-name-only error, and the independent structural
+  check rejects a stored value the projection could never emit); the
+  U-column
+  keyed multiset law
+  (repeated FK values keep the same remapped value twice; an
+  un-remapped raw pass-through, a dropped duplicate or a substitution
+  breaks the digest; same column name in a different table has a
+  separate key space; per-copy seed dependence); the declared-unique
+  parser (single-column PK/UNIQUE declared, composite UNIQUE
+  excluded, non-unique constraints ignored); the demo chooser law
+  against REAL SQLAlchemy 2.0 Row objects (the asyncpg/SQLAlchemy
+  stack's Row API - 2.0 removed string subscripting from Row):
+  no-admin, refused read-only recheck, wrong current database,
+  happy path, failed query, no-sessionmaker fail-closed, and the
+  101 -> 100 cap.
+* Owned PostgreSQL 16 fixture (owned source/target services, real
+  worker snapshot + real sanitizer/verifier chain): the positive
+  chain runs the SUPPORTED clone flow (208 guided flow - live create
+  key, review, apply) against the source for the SAME owner as the
+  seeded canary key, so the receipt ground truth is the row the flow
+  itself persisted (not a hand-built seed), and its flow-shape
+  relationships are asserted before the snapshot (the receipt matches
+  the source key's real public ID; its one-time secret is
+  TARGET-linked, never a source-linked row). After snapshot +
+  sanitize + independent verification, the copy carries exactly the
+  expected projection: three copied keys all sharing the ONE remapped
+  owner (the two-keys-of-one-owner regression that the old blanket
+  law wrongly refused), the receipt on the remapped flow target with
+  every identifying value per-copy remapped (never the raw value),
+  the copied one-time secret still target-linked, the raw flow
+  identifiers absent, and the source left byte-identical (flow-owned
+  rows removed by exact id-set diff). The full owned sanitize module
+  passes on the repaired verifier.
+* Owned Chromium browser proof (real worker-built copy over the owned
+  PG16 source carrying the flow's real receipt): the copied source
+  key's receipts page renders the chooser with the copied operation
+  (real SQLAlchemy Row transport), selecting it renders the read-only
+  projection (copied target key ID, validity mode, fingerprints -
+  never the raw source operation UUID, public ID or key ID, and
+  never the copy DB name); a second copy built after the flow rows
+  left the source renders the honest empty chooser state and carries
+  exactly the one canary key (copy isolation - copy B does not see
+  copy A's receipt or flow keys).

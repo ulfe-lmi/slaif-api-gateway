@@ -1,4 +1,5 @@
 import re
+import asyncio
 import uuid
 from contextlib import asynccontextmanager
 from dataclasses import asdict, replace
@@ -818,3 +819,262 @@ def test_q_clone_recovery_normal_still_shows_retry_guidance(monkeypatch) -> None
         assert "Retry a still-unconsumed pending delivery" in _q_norm(r.text)
         assert "rotate the key" in _q_norm(r.text)
         assert "Sanitized demo snapshot display" not in _q_norm(r.text)
+
+
+# --- 224-r: demo-only historical clone-receipt chooser ----------------------
+
+
+def test_r_clone_recovery_demo_chooser_renders(monkeypatch) -> None:
+    """The demo chooser renders copied operations as links, with honest
+    historical / non-inference wording; the normal render is unchanged."""
+    from slaif_gateway.api import admin_key_clone as _akc
+
+    key = _detail()
+
+    def _patch_chooser(chooser) -> None:
+        async def _chooser(_request, _source_id):
+            return chooser
+
+        monkeypatch.setattr(_akc, "_demo_source_receipt_chooser", _chooser)
+
+    op1 = str(uuid.uuid4())
+    op2 = str(uuid.uuid4())
+
+    # Positive: a finite list of copied operations renders as links (the
+    # copy's own remapped ids only), with the historical (view-time) label.
+    _patch_chooser(_akc._DemoReceiptChooser((op1, op2), False, True))
+    with _q_client(monkeypatch, key) as client:
+        r = client.get(f"/admin/keys/{key.id}/clone/receipts")
+        assert r.status_code == 200
+        assert "Historical clone operations" in _q_norm(r.text)
+        assert f'href="/admin/keys/{key.id}/clone/receipts?operation={op1}"' in r.text
+        assert f'href="/admin/keys/{key.id}/clone/receipts?operation={op2}"' in r.text
+        assert "at most the first 100" not in _q_norm(r.text)
+
+    # Capped: the finite bound (100) is disclosed.
+    _patch_chooser(_akc._DemoReceiptChooser((op1, op2), True, True))
+    with _q_client(monkeypatch, key) as client:
+        r = client.get(f"/admin/keys/{key.id}/clone/receipts")
+        assert r.status_code == 200
+        assert "at most the first 100" in _q_norm(r.text)
+
+    # Empty: the non-inference wording, no operation links.
+    _patch_chooser(_akc._DemoReceiptChooser((), False, True))
+    with _q_client(monkeypatch, key) as client:
+        r = client.get(f"/admin/keys/{key.id}/clone/receipts")
+        assert r.status_code == 200
+        assert "No historical clone receipts are visible" in _q_norm(r.text)
+        assert "does not establish whether the source had clone operations" in _q_norm(r.text)
+        assert "/clone/receipts?operation=" not in r.text
+
+    # Unavailable: the fixed safe refusal, no links, no false-empty claim.
+    _patch_chooser(_akc._DemoReceiptChooser((), False, False))
+    with _q_client(monkeypatch, key) as client:
+        r = client.get(f"/admin/keys/{key.id}/clone/receipts")
+        assert r.status_code == 200
+        assert "Historical clone receipt history is unavailable in this snapshot" in _q_norm(r.text)
+        assert "/clone/receipts?operation=" not in r.text
+
+    # Normal (non-demo) render: the chooser is absent entirely.
+    _patch_chooser(_akc._DemoReceiptChooser((op1, op2), False, True))
+    with _q_client(monkeypatch, key, demo=False) as client:
+        client.cookies.set("slaif_admin_session", "session-token-must-not-render")
+        r = client.get(f"/admin/keys/{key.id}/clone/receipts")
+        assert r.status_code == 200
+        assert "Historical clone operations" not in _q_norm(r.text)
+        assert "/clone/receipts?operation=" not in r.text
+
+
+def _kr_real_rows(ops: tuple[str, ...]) -> list[object]:
+    """Real SQLAlchemy 2.0 Row objects for the chooser fake.
+
+    The gate-validated copy session returns ``sqlalchemy.engine.Row``
+    (never dicts); SQLAlchemy 2.0 removed string subscripting from Row,
+    so the fake must exercise the exact API surface the production
+    chooser receives (an in-memory stdlib-sqlite engine produces the
+    same Row class the asyncpg stack returns).
+    """
+    from sqlalchemy import create_engine, text
+
+    if not ops:
+        return []
+    eng = create_engine("sqlite://")
+    try:
+        with eng.connect() as conn:
+            clauses = " UNION ALL ".join(
+                f"SELECT :op{i} AS op" for i in range(len(ops))
+            )
+            return list(
+                conn.execute(
+                    text(clauses), {f"op{i}": op for i, op in enumerate(ops)}
+                ).all()
+            )
+    finally:
+        eng.dispose()
+
+
+class _KrChooserResult:
+    def __init__(self, rows) -> None:
+        self._rows = rows
+
+    def all(self):
+        return self._rows
+
+
+class _KrChooserSession:
+    def __init__(self, *, current_db, ro, ops=(), exc=False) -> None:
+        self._current_db = current_db
+        self._ro = ro
+        self._ops = ops
+        self._exc = exc
+
+    def begin(self):
+        @asynccontextmanager
+        async def _begin():
+            yield
+
+        return _begin()
+
+    async def scalar(self, stmt) -> object:
+        s = str(stmt)
+        if "current_database" in s:
+            return self._current_db
+        if "transaction_read_only" in s:
+            return self._ro
+        return None
+
+    async def execute(self, stmt, params):
+        if self._exc:
+            raise RuntimeError("chooser query failed")
+        return _KrChooserResult(_kr_real_rows(self._ops))
+
+
+def _kr_chooser_request(sessionmaker, *, target_db="copydb") -> object:
+    from starlette.requests import Request
+
+    from slaif_gateway.demo_web import _demo_display_settings
+
+    scope = {
+        "type": "http",
+        "method": "GET",
+        "path": "/admin/keys/x/clone/receipts",
+        "root_path": "",
+        "headers": [],
+        "query_string": b"",
+        "server": ("demo.test", 443),
+        "client": ("127.0.0.1", 1234),
+        "app": SimpleNamespace(
+            state=SimpleNamespace(
+                demo_mode=True, settings=_demo_display_settings()
+            )
+        ),
+    }
+    if sessionmaker is not _SENTINEL_NO_ADMIN:
+        scope["state"] = {
+            "demo_admin": SimpleNamespace(
+                target_db=target_db,
+                sessionmaker=sessionmaker,
+            )
+        }
+    return Request(scope)
+
+
+_SENTINEL_NO_ADMIN = object()
+
+
+def _kr_chooser_factory(session: _KrChooserSession):
+    @asynccontextmanager
+    async def factory():
+        yield session
+
+    return factory
+
+
+def test_r_demo_source_receipt_chooser_law() -> None:
+    from slaif_gateway.api import admin_key_clone as _akc
+
+    # Normal (no demo_admin): no copy query, reported available.
+    req = _kr_chooser_request(_SENTINEL_NO_ADMIN)
+    assert asyncio.run(
+        _akc._demo_source_receipt_chooser(req, uuid.UUID(int=1))
+    ) == _akc._DemoReceiptChooser((), False, True)
+
+    op1, op2, op3 = (str(uuid.uuid4()) for _ in range(3))
+
+    # A refused read-only recheck is a fixed safe refusal (available=False).
+    req = _kr_chooser_request(
+        _kr_chooser_factory(_KrChooserSession(current_db="copydb", ro="off"))
+    )
+    assert asyncio.run(
+        _akc._demo_source_receipt_chooser(req, uuid.UUID(int=1))
+    ) == _akc._DemoReceiptChooser((), False, False)
+
+    # A wrong current database is a fixed safe refusal.
+    req = _kr_chooser_request(
+        _kr_chooser_factory(
+            _KrChooserSession(current_db="other_db", ro="on", ops=(op1,))
+        )
+    )
+    assert asyncio.run(
+        _akc._demo_source_receipt_chooser(req, uuid.UUID(int=1))
+    ) == _akc._DemoReceiptChooser((), False, False)
+
+    # Happy path: copied operations are returned (newest order preserved).
+    req = _kr_chooser_request(
+        _kr_chooser_factory(
+            _KrChooserSession(current_db="copydb", ro="on", ops=(op1, op2, op3))
+        )
+    )
+    assert asyncio.run(
+        _akc._demo_source_receipt_chooser(req, uuid.UUID(int=1))
+    ) == _akc._DemoReceiptChooser((op1, op2, op3), False, True)
+
+    # A failed copy query is a fixed safe refusal (never a silent empty).
+    req = _kr_chooser_request(
+        _kr_chooser_factory(
+            _KrChooserSession(current_db="copydb", ro="on", exc=True)
+        )
+    )
+    assert asyncio.run(
+        _akc._demo_source_receipt_chooser(req, uuid.UUID(int=1))
+    ) == _akc._DemoReceiptChooser((), False, False)
+
+    # A demo_admin without a usable sessionmaker fails closed (available=False).
+    from starlette.requests import Request
+
+    from slaif_gateway.demo_web import _demo_display_settings
+
+    scope = {
+        "type": "http",
+        "method": "GET",
+        "path": "/admin/keys/x/clone/receipts",
+        "root_path": "",
+        "headers": [],
+        "query_string": b"",
+        "server": ("demo.test", 443),
+        "client": ("127.0.0.1", 1234),
+        "app": SimpleNamespace(
+            state=SimpleNamespace(
+                demo_mode=True, settings=_demo_display_settings()
+            )
+        ),
+        "state": {"demo_admin": SimpleNamespace(target_db="copydb")},
+    }
+    assert asyncio.run(
+        _akc._demo_source_receipt_chooser(Request(scope), uuid.UUID(int=1))
+    ) == _akc._DemoReceiptChooser((), False, False)
+
+    # The bounded cap: 101 operations -> 100 returned and capped=True.
+    many = tuple(str(uuid.uuid4()) for _ in range(101))
+    req = _kr_chooser_request(
+        _kr_chooser_factory(
+            _KrChooserSession(current_db="copydb", ro="on", ops=many)
+        )
+    )
+    result = asyncio.run(
+        _akc._demo_source_receipt_chooser(req, uuid.UUID(int=1))
+    )
+    assert result.available is True
+    assert result.capped is True
+    assert len(result.operations) == 100
+    assert result.operations == many[:100]

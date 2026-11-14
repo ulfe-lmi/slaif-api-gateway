@@ -34,10 +34,13 @@ from __future__ import annotations
 
 import uuid
 from contextlib import asynccontextmanager
+from dataclasses import dataclass
 from typing import Any, AsyncIterator
 
 from fastapi import APIRouter, Form, Request, Response
 from fastapi.responses import HTMLResponse
+from sqlalchemy import text
+
 
 from slaif_gateway.api.admin import (
     _admin_action_context,
@@ -860,6 +863,83 @@ async def clone_key_apply(
     return response
 
 
+# ---------------------------------------------------------------------------
+# 224-r demo-only historical clone-receipt chooser
+# ---------------------------------------------------------------------------
+
+_DEMO_RECEIPT_CHOOSER_LIMIT = 100
+
+
+@dataclass(frozen=True)
+class _DemoReceiptChooser:
+    """Bounded, SELECT-only chooser of this source's historical clone
+    operations visible in the CURRENT sanitized copy (224-r).
+
+    ``operations`` holds at most ``_DEMO_RECEIPT_CHOOSER_LIMIT`` copied
+    (per-copy remapped) operation UUIDs, newest target first. ``capped`` is
+    True when more than the bound exist. ``available`` is False when the
+    copy query was refused/failed - a fixed safe refusal, never a silent
+    empty list and never a leak.
+    """
+
+    operations: tuple[str, ...]
+    capped: bool
+    available: bool
+
+
+async def _demo_source_receipt_chooser(
+    request: Request, source_id: uuid.UUID
+) -> _DemoReceiptChooser:
+    """Demo-only, SELECT-only chooser of a source's copied clone operations.
+
+    Runs ONLY on a demo request (the central gate sets
+    ``request.state.demo_admin``) and uses ONLY the request-local,
+    gate-validated copy sessionmaker - the same binding the artifact and
+    catalog reads use. It re-verifies ``current_database()`` and
+    ``transaction_read_only`` inside a read-only transaction, then selects at
+    most ``LIMIT``+1 copied operation ids whose receipt references this
+    source (bounded; newest target first). No DML, no lock, no body parse,
+    no provider/mail/files, and no production data or original ids: the
+    values are the copy's own per-copy remapped identifiers. A refused or
+    failed copy query is a fixed safe refusal (``available=False``).
+    """
+    demo = getattr(request.state, "demo_admin", None)
+    if demo is None:
+        return _DemoReceiptChooser((), False, True)
+    try:
+        session_factory = get_sessionmaker_from_app(request)
+    except Exception:
+        return _DemoReceiptChooser((), False, False)
+    try:
+        async with session_factory() as session, session.begin():
+            current = await session.scalar(text("SELECT current_database()"))
+            read_only = await session.scalar(text("SHOW transaction_read_only"))
+            if current != demo.target_db or read_only != "on":
+                return _DemoReceiptChooser((), False, False)
+            result = await session.execute(
+                text(
+                    "SELECT metadata->'clone_receipt'->>'operation_uuid' AS op "
+                    "FROM gateway_keys "
+                    "WHERE metadata->'clone_receipt'->>'source_gateway_key_id' = :src "
+                    "ORDER BY created_at DESC, "
+                    "metadata->'clone_receipt'->>'operation_uuid' DESC "
+                    f"LIMIT {_DEMO_RECEIPT_CHOOSER_LIMIT + 1}"
+                ),
+                {"src": str(source_id)},
+            )
+            rows = result.all()
+    except Exception:
+        return _DemoReceiptChooser((), False, False)
+    # SQLAlchemy 2.0 Row objects support mapping access via _mapping only
+    # (string subscripting was removed in 2.0), so read the named column
+    # through the RowMapping.
+    operations = [row._mapping["op"] for row in rows if row._mapping["op"]]
+    capped = len(operations) > _DEMO_RECEIPT_CHOOSER_LIMIT
+    return _DemoReceiptChooser(
+        tuple(operations[:_DEMO_RECEIPT_CHOOSER_LIMIT]), capped, True
+    )
+
+
 @router.get("/keys/{gateway_key_id}/clone/receipts", response_class=HTMLResponse)
 async def clone_key_recovery(
     request: Request,
@@ -920,6 +1000,13 @@ async def clone_key_recovery(
         except KeyManagementError as exc:
             projection_error = exc.safe_message
 
+    # 224-r: demo-only, SELECT-only chooser of this source's historical
+    # copied operations (never the normal path; a fixed safe refusal when
+    # the copy query is unavailable).
+    demo_receipts: _DemoReceiptChooser | None = None
+    if getattr(request.state, "demo_admin", None) is not None:
+        demo_receipts = await _demo_source_receipt_chooser(request, source_id)
+
     response = templates.TemplateResponse(
         request,
         "keys/clone_recovery.html",
@@ -932,6 +1019,7 @@ async def clone_key_recovery(
             "operation_error": operation_error,
             "projection": projection,
             "projection_error": projection_error,
+            "demo_receipts": demo_receipts,
         },
     )
     return response
