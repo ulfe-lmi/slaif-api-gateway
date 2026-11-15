@@ -267,9 +267,11 @@ async def test_postgres_provider_failure_releases_reservation(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("kind,budget", [("image_url", 16896), ("video_url", 65536)])
+@pytest.mark.parametrize("kind,budget,geometry", [
+    ("image_url", 16896, False), ("video_url", 65536, False), ("image_url", 320, True),
+])
 async def test_media_reserves_configured_budget_then_finalizes_actual_usage(
-    async_test_session, kind, budget
+    async_test_session, kind, budget, geometry
 ):
     import base64
     from dataclasses import replace
@@ -278,7 +280,26 @@ async def test_media_reserves_configured_budget_then_finalizes_actual_usage(
     from slaif_gateway.services.media_input_estimation import apply_media_input_estimate
 
     mime = "image/png" if kind == "image_url" else "video/mp4"
-    url = "data:" + mime + ";base64," + base64.b64encode(b"a" * 474454).decode()
+    data = b"a" * 474454
+    media = {"version": 1, ("image_tokens" if kind == "image_url" else "video_tokens"): budget}
+    if geometry:
+        import json
+        import struct
+        import zlib
+        from importlib.resources import files
+
+        def chunk(name, value):
+            return struct.pack(">I", len(value)) + name + value + struct.pack(
+                ">I", zlib.crc32(name + value) & 0xFFFFFFFF
+            )
+
+        data = b"\x89PNG\r\n\x1a\n" + chunk(
+            b"IHDR", struct.pack(">IIBBBBB", 512, 512, 8, 2, 0, 0, 0)
+        ) + chunk(b"IDAT", data)
+        media = json.loads(files("slaif_gateway").joinpath(
+            "resources/media-input-estimation-presets.json"
+        ).read_text())["presets"]["qwen-patch16-merge2-images"]
+    url = "data:" + mime + ";base64," + base64.b64encode(data).decode()
     body = {
         "model": "classroom-cheap",
         "max_tokens": 100,
@@ -286,12 +307,12 @@ async def test_media_reserves_configured_budget_then_finalizes_actual_usage(
     }
     policy = ChatCompletionRequestPolicy(Settings()).apply(body, defer_media_limit=True)
     assert policy.estimated_input_tokens > 200000
-    modality = "image_tokens" if kind == "image_url" else "video_tokens"
     policy = apply_media_input_estimate(
         policy,
-        route_capabilities={"media_input_estimation": {"version": 1, modality: budget}},
+        route_capabilities={"media_input_estimation": media},
         input_ceiling=128000,
     )
+    assert policy.estimated_media_input_tokens == budget
     gateway_key = await _create_gateway_key(async_test_session, token_limit_total=100000)
     estimate = replace(_estimate(), estimated_input_tokens=policy.estimated_input_tokens)
     reservation = await QuotaService(

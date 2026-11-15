@@ -392,7 +392,9 @@ class Settings(BaseSettings):
     RESPONSES_MAX_CUSTOM_TOOL_FORMAT_DEFINITION_BYTES: int = 65536
     RESPONSES_MAX_TOTAL_CUSTOM_TOOL_FORMAT_BYTES: int = 262144
     RESPONSES_MAX_CUSTOM_TOOL_CALL_OUTPUT_BYTES: int = 262144
-    RESPONSES_MAX_IMAGE_PARTS_PER_REQUEST: int = 16
+    # Zero delegates image-count acceptance to the upstream model. Byte and
+    # token budgets remain independently enforced.
+    RESPONSES_MAX_IMAGE_PARTS_PER_REQUEST: int = 0
     RESPONSES_MAX_IMAGE_URL_BYTES: int = 4096
     RESPONSES_MAX_IMAGE_DATA_URL_BYTES: int = 20971520
     RESPONSES_MAX_TOTAL_IMAGE_DATA_URL_BYTES: int = 41943040
@@ -967,7 +969,6 @@ class Settings(BaseSettings):
             "RESPONSES_MAX_CUSTOM_TOOL_FORMAT_DEFINITION_BYTES",
             "RESPONSES_MAX_TOTAL_CUSTOM_TOOL_FORMAT_BYTES",
             "RESPONSES_MAX_CUSTOM_TOOL_CALL_OUTPUT_BYTES",
-            "RESPONSES_MAX_IMAGE_PARTS_PER_REQUEST",
             "RESPONSES_MAX_IMAGE_URL_BYTES",
             "RESPONSES_MAX_IMAGE_DATA_URL_BYTES",
             "RESPONSES_MAX_TOTAL_IMAGE_DATA_URL_BYTES",
@@ -983,6 +984,8 @@ class Settings(BaseSettings):
         ):
             if getattr(self, name) <= 0:
                 raise ValueError(f"{name} must be a positive integer")
+        if self.RESPONSES_MAX_IMAGE_PARTS_PER_REQUEST < 0:
+            raise ValueError("RESPONSES_MAX_IMAGE_PARTS_PER_REQUEST must be non-negative")
         if self.DEFAULT_MAX_OUTPUT_TOKENS > self.HARD_MAX_OUTPUT_TOKENS:
             raise ValueError("DEFAULT_MAX_OUTPUT_TOKENS must be <= HARD_MAX_OUTPUT_TOKENS")
         if (

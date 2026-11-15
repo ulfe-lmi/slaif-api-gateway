@@ -99,6 +99,105 @@ def _cli(*args: str) -> Any:
     return RUNNER.invoke(app, list(args))
 
 
+def test_geometry_policy_file_persists_and_partial_budget_edit_preserves_geometry(
+    cli_env, tmp_path
+):
+    from importlib.resources import files
+    from slaif_gateway.services.codex_profile_registry import QWEN38_240K_CODEX_PROFILE
+
+    media = json.loads(files("slaif_gateway").joinpath(
+        "resources/media-input-estimation-presets.json"
+    ).read_text())["presets"]["qwen-patch16-merge2-images"]
+    document = {"schema_version": 1, "capabilities": {
+        "chat_completions": {"chat_text": True, "chat_streaming": False},
+        "media_input_estimation": {"version": 1, "image_tokens": 16896},
+        "codex_profile": {
+            "version": 2,
+            "profile_id": QWEN38_240K_CODEX_PROFILE.profile_id,
+            "fixture_sha256": QWEN38_240K_CODEX_PROFILE.fixture_sha256,
+        },
+    }}
+    path = tmp_path / "geometry.json"
+    path.write_text(json.dumps(document))
+    result = _cli(
+        "providers", "add", "--provider", "geometry-test", "--kind", "openai_compatible",
+        "--api-key-env-var", "GEOMETRY_TEST_UPSTREAM_KEY",
+        "--base-url", "https://geometry.example.test/v1", "--disabled", "--json",
+    )
+    assert result.exit_code == 0, result.stderr
+    result = _cli(
+        "routes", "add", "--requested-model", "geometry-test", "--match-type", "exact",
+        "--provider", "geometry-test", "--upstream-model", "geometry-test",
+        "--capabilities-file", str(path), "--no-streaming", "--disabled", "--json",
+    )
+    assert result.exit_code == 0, result.stderr
+    route = json.loads(result.stdout)
+    assert "image_geometry" not in route["capabilities"]["media_input_estimation"]
+    media_path = tmp_path / "media-only.json"
+    media_path.write_text(json.dumps({"schema_version": 1, "capabilities": {
+        "media_input_estimation": media,
+    }}))
+    geometry_plan = tmp_path / "geometry-enable-plan.json"
+    result = _cli(
+        "routes", "update", route["id"], "--dry-run", str(geometry_plan),
+        "--media-policy-file", str(media_path), "--json",
+    )
+    assert result.exit_code == 0, result.stderr
+    result = _cli(
+        "routes", "update", route["id"], "--execute", str(geometry_plan),
+        "--reason", "reviewed geometry policy", "--json",
+    )
+    assert result.exit_code == 0, result.stderr
+    assert asyncio.run(_route(cli_env, route["id"]))["capabilities"]["media_input_estimation"] == media
+    plan_path = tmp_path / "geometry-plan.json"
+    result = _cli(
+        "routes", "update", route["id"], "--dry-run", str(plan_path),
+        "--media-image-tokens", "17000", "--json",
+    )
+    assert result.exit_code == 0, result.stderr
+    result = _cli(
+        "routes", "update", route["id"], "--execute", str(plan_path),
+        "--reason", "reviewed geometry fallback", "--json",
+    )
+    assert result.exit_code == 0, result.stderr
+    after = asyncio.run(_route(cli_env, route["id"]))
+    assert after["capabilities"]["media_input_estimation"] == {**media, "image_tokens": 17000}
+    assert after["capabilities"]["chat_completions"] == document["capabilities"]["chat_completions"]
+    assert after["enabled"] is False
+    assert after["capabilities"]["codex_profile"] == document["capabilities"]["codex_profile"]
+    clear_plan = tmp_path / "geometry-clear-plan.json"
+    result = _cli(
+        "routes", "update", route["id"], "--dry-run", str(clear_plan),
+        "--clear-media-image-geometry", "--json",
+    )
+    assert result.exit_code == 0, result.stderr
+    result = _cli(
+        "routes", "update", route["id"], "--execute", str(clear_plan),
+        "--reason", "restore fixed image policy", "--json",
+    )
+    assert result.exit_code == 0, result.stderr
+    final = asyncio.run(_route(cli_env, route["id"]))
+    assert final["capabilities"]["media_input_estimation"] == {"version": 1, "image_tokens": 17000}
+    assert final["capabilities"]["chat_completions"] == after["capabilities"]["chat_completions"]
+    assert final["capabilities"]["codex_profile"] == document["capabilities"]["codex_profile"]
+    # File mode may only touch media, and execution never accepts new edits.
+    for extra in (
+        ("--media-policy-file", str(path)),
+        ("--media-policy-file", str(media_path), "--media-image-tokens", "1234"),
+    ):
+        result = _cli(
+            "routes", "update", route["id"], "--dry-run", str(tmp_path / "invalid-plan.json"),
+            *extra, "--json",
+        )
+        assert result.exit_code != 0
+    result = _cli(
+        "routes", "update", route["id"], "--execute", str(clear_plan),
+        "--media-policy-file", str(media_path), "--reason", "mixed mode", "--json",
+    )
+    assert result.exit_code != 0
+    assert asyncio.run(_route(cli_env, route["id"])) == final
+
+
 # 199-b R5: renderer-stable terminal env (set in cli_env) +
 # ANSI/whitespace-independent assertion helper (project pattern).
 _ANSI_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")

@@ -84,6 +84,11 @@ allows the endpoint, model, and capability. PostgreSQL reserves quota before
 forwarding and finalizes usage afterward; provider credentials are
 substituted server-side and never reach the client.
 
+Image-capable routes can opt into [dimension-based admission estimates](docs/media-input-estimation.md)
+to avoid reserving the maximum image allowance for every small image. Processor
+geometry stays in route configuration; unknown image sources retain the fixed
+fallback, and provider-reported usage remains authoritative for final accounting.
+
 ## Why SLAIF
 
 | Benefit | What it means for you |

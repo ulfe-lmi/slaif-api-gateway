@@ -273,6 +273,10 @@ The opt-in correction for encoded image estimates and bounded native-vLLM
 Chat video input is described in [media input estimation](media-input-estimation.md).
 Existing generic/unknown provider video behavior remains fail-closed; this
 exception does not enable video generation or direct Codex video input.
+The same version-1 media policy optionally supports configurable image patch
+geometry from bounded inline PNG/JPEG/static-WebP headers. Other sources retain
+the fixed allowance. This changes admission/reservation estimates, preserves
+payloads and final provider usage, and grants no new capabilities or endpoints.
 
 The separately gated `vllm-chat-video-v1` module accepts inline MP4/WebM video
 on explicitly configured native Chat routes, with operator frame/token budgets.

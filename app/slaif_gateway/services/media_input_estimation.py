@@ -3,6 +3,7 @@
 from collections.abc import Mapping
 
 from slaif_gateway.services.policy_errors import RequestPolicyError
+from slaif_gateway.services.image_token_estimation import parse_image_geometry
 
 
 class MediaInputEstimateError(RequestPolicyError):
@@ -52,12 +53,18 @@ def validate_media_input_estimation_block(raw):
     engine ceilings); configuration surfaces reuse it instead of a second,
     drifting rule.
     """
+    budgets, _ = _parse_media_policy(raw)
+    return budgets
+
+
+def _parse_media_policy(raw):
     budgets = {}
+    geometry = None
     if raw is None:
-        return budgets
+        return budgets, geometry
     if (
         not isinstance(raw, Mapping)
-        or set(raw) - {"version", "image_tokens", "video_tokens", "video_frames"}
+        or set(raw) - {"version", "image_tokens", "video_tokens", "video_frames", "image_geometry"}
         or type(raw.get("version")) is not int
         or raw["version"] != 1
     ):
@@ -73,7 +80,14 @@ def validate_media_input_estimation_block(raw):
     frames = raw.get("video_frames")
     if frames is not None and (type(frames) is not int or not 1 <= frames <= 32):
         raise MediaInputEstimateError("Invalid route video frame budget.", param="model")
-    return budgets
+    if "image_geometry" in raw:
+        try:
+            geometry = parse_image_geometry(raw["image_geometry"], budgets.get("image"))
+        except ValueError:
+            raise MediaInputEstimateError(
+                "Invalid route image geometry policy.", param="model"
+            ) from None
+    return budgets, geometry
 
 
 def apply_media_input_estimate(policy_result, *, route_capabilities, input_ceiling):
@@ -83,7 +97,7 @@ def apply_media_input_estimate(policy_result, *, route_capabilities, input_ceili
     limits have already run, and authorization remains the caller's responsibility.
     Retain the unadjusted estimate so route revalidation is idempotent.
     """
-    budgets = validate_media_input_estimation_block(
+    budgets, geometry = _parse_media_policy(
         (route_capabilities or {}).get("media_input_estimation")
     )
     original = policy_result.unadjusted_input_tokens
@@ -93,7 +107,11 @@ def apply_media_input_estimate(policy_result, *, route_capabilities, input_ceili
     for kind, url in media_parts(policy_result.effective_body):
         if kind in budgets:
             encoded_bytes += len(url.encode("utf-8"))
-            media_tokens += budgets[kind]
+            media_tokens += (
+                geometry.estimate(url, budgets[kind])
+                if kind == "image" and geometry is not None
+                else budgets[kind]
+            )
     estimate = max(1, original - encoded_bytes // 3) + media_tokens
     if estimate > input_ceiling:
         error = MediaInputEstimateError(

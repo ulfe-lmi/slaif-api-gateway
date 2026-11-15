@@ -42,6 +42,13 @@ Core invariants:
 - Successful accounting finalizes from provider usage/cost where available.
 - Final provider usage/cost wins over admission estimates and provisional
   metadata.
+- An explicit route media policy can replace encoded image bytes with a fixed
+  allowance or a configurable patch-grid estimate from bounded inline image
+  headers. Unknown/remote/animated sources retain the fixed fallback. The same
+  estimate feeds context admission, TPM and PostgreSQL reservation, with
+  idempotent route revalidation; provider-reported final usage still wins.
+  No image content, URLs or decoded headers enter ledger/audit metadata. See
+  [media input estimation](media-input-estimation.md).
 - Missing streaming usage is not normal success. It must not be treated as
   zero-cost success or followed by a normal successful terminal marker.
 - A Local Coding public Responses request uses one ordinary

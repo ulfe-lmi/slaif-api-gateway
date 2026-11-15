@@ -23,6 +23,8 @@ from dataclasses import dataclass
 from decimal import Decimal
 from typing import Any
 
+from slaif_gateway.services.image_token_estimation import parse_image_geometry
+
 from slaif_gateway.modules.servers.completion_service.profiles import (
     PROFILE_KEY,
     load_profile,
@@ -106,6 +108,7 @@ KNOWN_CAPABILITY_GROUPS = frozenset(
         CODEX_ACCESS_KEY,
         CODEX_COMPACTION_COMPATIBLE_ROUTE_IDS_KEY,
         "media_input_estimation",
+        "codex_profile",
         PROFILE_KEY,
         "external_tools",
         "vllm_chat_video",
@@ -350,6 +353,17 @@ def validate_capabilities_document(
                 "media_input_estimation",
                 "Value must be a version-1 envelope within the engine ceilings."
             )
+    if "codex_profile" in capabilities:
+        from slaif_gateway.services.codex_profile_registry import validate_codex_profile_declaration
+
+        declaration = capabilities["codex_profile"]
+        state, _ = validate_codex_profile_declaration(declaration)
+        if (
+            state != "ready"
+            or not isinstance(declaration, dict)
+            or type(declaration.get("version")) is not int
+        ):
+            _fail("codex_profile", "Value must select an existing pinned qualification profile.")
     if PROFILE_KEY in capabilities:
         try:
             profile_id = profile_id_from_capabilities(
@@ -437,7 +451,7 @@ class CapabilityPatch:
     """Typed partial capability leaves (explicit leaves only)."""
 
     codex_limits: dict[str, int] | None = None
-    media_input_estimation: dict[str, int] | None = None
+    media_input_estimation: dict[str, object] | None = None
     chat_completions: dict[str, bool] | None = None
     responses: dict[str, bool] | None = None
     completion_service: dict[str, object] | None | object = _ABSENT  # None = clear
@@ -455,7 +469,9 @@ class CapabilityPatch:
 _CODEX_PATCH_FIELDS = frozenset(
     {"context_window_tokens", "default_max_output_tokens", "max_output_tokens"}
 )
-_MEDIA_PATCH_FIELDS = frozenset({"image_tokens", "video_tokens", "video_frames"})
+_MEDIA_PATCH_FIELDS = frozenset(
+    {"version", "image_tokens", "video_tokens", "video_frames", "image_geometry"}
+)
 
 
 def parse_capability_patch(
@@ -496,17 +512,28 @@ def parse_capability_patch(
                 _fail(f"{CODEX_LIMITS_KEY}.{name}", "Value must be a positive integer.")
         codex_limits = dict(raw)
 
-    media: dict[str, int] | None = None
+    media: dict[str, object] | None = None
     if "media_input_estimation" in document:
         raw = document["media_input_estimation"]
         if not isinstance(raw, dict) or not raw:
             _fail(
                 "media_input_estimation",
-                "Value must be a non-empty object of integer leaves."
+                "Value must be a non-empty media policy patch."
             )
         if set(raw) - _MEDIA_PATCH_FIELDS:
             _fail("media_input_estimation", "Object contains unsupported fields.")
         for name, value in raw.items():
+            if name == "image_geometry":
+                if value is not None:
+                    try:
+                        # Structural validation here; merged-route validation
+                        # checks the actual fallback budget during preview/apply.
+                        parse_image_geometry(value, 1_050_000)
+                    except ValueError:
+                        _fail("media_input_estimation.image_geometry", "Invalid image geometry.")
+                continue
+            if name == "version" and (type(value) is not int or value != 1):
+                _fail("media_input_estimation.version", "Value must be integer 1.")
             if type(value) is not int or value <= 0:
                 _fail(
                     f"media_input_estimation.{name}", "Value must be a positive integer."
@@ -571,7 +598,12 @@ def merge_capability_patch(
     if patch.media_input_estimation is not None:
         block = dict(merged.get("media_input_estimation") or {})
         block.update(patch.media_input_estimation)
-        merged["media_input_estimation"] = block
+        if block.get("image_geometry", _ABSENT) is None:
+            block.pop("image_geometry", None)
+        if block:
+            merged["media_input_estimation"] = block
+        else:
+            merged.pop("media_input_estimation", None)
     if patch.chat_completions is not None:
         block = dict(merged.get(CHAT_COMPLETIONS_CAPABILITIES_KEY) or {})
         block.update(patch.chat_completions)

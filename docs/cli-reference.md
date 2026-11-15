@@ -812,6 +812,19 @@ slaif-gateway routes update <route-uuid> --execute /tmp/route-plan.json \
   preserved. `--capabilities-file` is a clearly documented COMPLETE
   replacement and cannot be combined with partial capability flags
   (refused); file+flag ambiguity is always rejected.
+- `--media-policy-file PATH` accepts the usual strict capabilities-file
+  envelope containing **only** `media_input_estimation`. Its explicit media
+  leaves merge while unrelated route metadata (including legacy Codex profile
+  declarations) is preserved. This enables the optional dimension-based
+  `image_geometry` policy without replacing the entire capabilities document.
+  It cannot be combined with individual media edit flags or a complete
+  `--capabilities-file`. `--clear-media-image-geometry` restores the fixed image
+  allowance while preserving other media leaves. Both are dry-run-only edits;
+  execution applies the reviewed plan unchanged. See
+  [media input estimation](media-input-estimation.md).
+  Existing `codex_profile` declarations are checked against the immutable
+  registry's profile ID, metadata version and fixture digest. This does not
+  register aliases, grant Codex access, or establish live qualification.
 - `--execute PATH` applies the reviewed file exactly and requires a
   NONBLANK, secret-shape-guarded `--reason`; edit flags on execute (mixed
   mode) are refused. A successful dry-run always writes a plan whose built

@@ -478,8 +478,11 @@ Responses-specific rules for the current foundation:
   explicitly enables `capabilities.responses.image_input=true`. Supported
   sources are fully-qualified `http`/`https` URLs without embedded credentials
   or fragments and configured base64 image data URLs. SLAIF does not fetch,
-  decode, rewrite, store, or log image URLs/data URLs, and image bytes are used
-  only for conservative admission estimates;
+  decode image pixels, rewrite, store, or log image URLs/data URLs. An explicit
+  route image-geometry policy may inspect a bounded inline PNG/JPEG/static-WebP
+  header for admission estimates; unknown or remote sources retain the fixed
+  fallback. Header inspection never fetches URLs or mutates forwarded bytes.
+  See [media input estimation](media-input-estimation.md);
 - user-message `input_file` content parts are reconstructed only from
   `type`, HTTPS `file_url`, or safe `filename` plus configured base64
   `file_data` data URL when route/model metadata explicitly enables
