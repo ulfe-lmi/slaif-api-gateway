@@ -27,7 +27,7 @@
           aria-controls="admin-nav"
           data-nav-toggle
         >Menu</button>
-        <nav id="admin-nav" class="admin-nav" aria-label="Admin sections">
+        <nav id="admin-nav" class="admin-nav{% if demo_admin %} demo-admin-nav{% endif %}" aria-label="Admin sections">
           {%- set nav_path = request.url.path %}
           {#- 224-e: the demo host lists ONLY this stage's usable sections. -#}
           {%- set nav_items = demo_admin.nav if demo_admin else [

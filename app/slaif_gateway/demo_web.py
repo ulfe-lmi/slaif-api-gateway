@@ -20,11 +20,15 @@ no-op (the single exception being the demo sign-out POST
 ``/admin/logout``). That mounted read GUI is the current state; the
 224-c "no /admin routes" description above applies to history only.
 
-The demo app's ONLY database connection is a dedicated demo WEB
-control-role connection (the reviewed 224-a column grants), with an
-explicit no-TLS ``ssl=False`` stage boundary (the operator must keep
-the control endpoint on a trusted private loopback/Compose network;
-this stage does not support verified remote DB TLS). It never holds
+The demo app's database connections are (1) a dedicated demo WEB
+control-role connection (the reviewed 224-a column grants) for the
+control schema, and (2) per-request, request-local read-only copy
+reader connections (224-d) bound to the visitor's own verified copy
+and disposed after each response. Both use an explicit no-TLS
+``ssl=False`` stage boundary (the operator must keep the control and
+copy endpoints on a trusted private loopback/Compose network; this
+stage does not support verified remote DB TLS). The web process
+never holds
 the owner ``DATABASE_URL``, the 224-b worker control credentials,
 provider credentials, the Redis broker, the worker custody directory
 or the catalog seal key, and a web request NEVER spawns or imports

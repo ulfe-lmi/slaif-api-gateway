@@ -44,11 +44,14 @@ No provider HTTP, no email, no normal admin auth. Synthetic data only.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import os
 import re
 import shutil
 import socket
+import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -73,6 +76,7 @@ from tests.integration.test_demo_snapshot_sanitize_postgres import (
     _flow_delete_ids,
     _flow_table_ids,
 )
+from tests.integration.test_demo_web_control_postgres import _scalar_many
 from tests.integration.test_demo_web_postgres import (
     _parse_pending,
     _request_row,
@@ -3836,6 +3840,149 @@ def test_e2e_admin_gate_two_sessions_distinct_copies(
 # ---------------------------------------------------------------------------
 
 
+def _block_async(coro):
+    """Run a self-contained coroutine on a FRESH event loop in a
+    separate thread (225-a).
+
+    Inside the ``sync_playwright`` block the MAIN thread already runs
+    the Playwright event loop, so ``asyncio.run`` cannot be called
+    there directly. A fresh thread with its own loop is safe: the
+    coroutine creates only its OWN connections, and the Playwright
+    machinery keeps running while the main thread blocks on the join.
+    """
+    result: dict[str, Any] = {}
+
+    def _run() -> None:
+        try:
+            result["value"] = asyncio.run(coro)
+        except BaseException as exc:  # noqa: B902 - re-raised below
+            result["error"] = exc
+
+    thread = threading.Thread(target=_run, daemon=True)
+    thread.start()
+    thread.join()
+    if "error" in result:
+        raise result["error"]
+    return result["value"]
+
+
+def _run_worker_subprocess(args: list[str], env_vars: dict[str, str]) -> str:
+    """225-a: the SEPARATE snapshot worker as the REAL installed
+    console script (a different process than the demo web), exactly
+    how the operator schedule would run it.
+
+    The child environment is NOT the test-process environment: only
+    the fixture-provided worker settings plus a fixed, known-safe
+    PATH (repo venv + owned PG16 toolchain + system dirs) and a fresh
+    private HOME (a 0700 TemporaryDirectory, removed after the call).
+    Provider/host secrets never leak into the worker process. On
+    failure only a FIXED code and the numeric exit code are raised;
+    captured streams are held in memory for success parsing only and
+    are never written to disk or reported.
+    """
+    exe = Path(sys.executable).parent / "slaif-gateway"
+    safe_path = os.pathsep.join(
+        [
+            str(Path(sys.executable).parent),
+            "/tmp/pg16/bin",
+            "/usr/local/sbin",
+            "/usr/local/bin",
+            "/usr/sbin",
+            "/usr/bin",
+            "/sbin",
+            "/bin",
+        ]
+    )
+    with tempfile.TemporaryDirectory(prefix="slaif-225a-worker-home-") as child_home:
+        child_env = {
+            "PATH": safe_path,
+            "HOME": str(child_home),
+            "LANG": "C.UTF-8",
+            "TZ": "UTC",
+            **{str(k): str(v) for k, v in env_vars.items()},
+        }
+        res = subprocess.run(
+            [str(exe), "demo-snapshot-worker", *args],
+            env=child_env,
+            capture_output=True,
+            text=True,
+            timeout=900,
+        )
+    if res.returncode != 0:
+        raise AssertionError(f"225a_worker_failed: rc={res.returncode}")
+    return res.stdout
+
+
+_DIGEST_TABLES = (
+    "owners",
+    "institutions",
+    "cohorts",
+    "gateway_keys",
+    "provider_configs",
+    "model_routes",
+    "pricing_rules",
+    "key_templates",
+    "fx_rates",
+    "usage_ledger",
+    "audit_log",
+    "email_deliveries",
+    # 225-a: accounting/job side-effect tables measured, not inferred.
+    "quota_reservations",
+    "background_jobs",
+    "catalog_refresh_applications",
+    "request_diagnostics",
+    # 225-a: the NORMAL admin session table (the mutation battery must
+    # never create a real admin session through the demo gate).
+    "admin_sessions",
+)
+
+
+def _profile_file_digests(profile_dir: Path) -> dict[str, str]:
+    """225-a: bounded SHA-256 digests of the CONFIGURED source file
+    set (the owned completion-profile directory the worker reads).
+    Fixed allowlist: regular files under the directory, at most 64
+    files, at most 1 MiB each (exceeding a bound is a fixture
+    defect, not an inventory to adapt to)."""
+    out: dict[str, str] = {}
+    paths = sorted(p for p in profile_dir.rglob("*") if p.is_file())
+    assert len(paths) <= 64, "fixture profile dir exceeds the file bound"
+    for path in paths:
+        size = path.stat().st_size
+        assert size <= 1024 * 1024, "fixture profile file exceeds the byte bound"
+        out[path.relative_to(profile_dir).as_posix()] = hashlib.sha256(
+            path.read_bytes()
+        ).hexdigest()
+    return out
+
+
+async def _db_digest(
+    host: object, port: object, user: object, password: object,
+    database: object,
+    extra: tuple[tuple[str, str], ...] = (),
+) -> dict[str, str]:
+    """225-a: per-table row count + md5 over the full row text
+    (stable id order) for the business tables, plus optional extra
+    labeled queries. Proves the mutation battery changed NOTHING."""
+    s = await asyncpg.connect(
+        host=str(host), port=int(port), user=str(user),
+        password=str(password), database=str(database),
+    )
+    try:
+        out: dict[str, str] = {}
+        for table in _DIGEST_TABLES:
+            row = await s.fetchrow(
+                f"SELECT count(*)::text AS n, "
+                f"md5(coalesce(string_agg(t::text, ' ' ORDER BY t.id), '')) AS d "
+                f'FROM public."{table}" t'
+            )
+            out[table] = f"{row['n']}:{row['d']}"
+        for label, sql in extra:
+            out[label] = await s.fetchval(sql)
+        return out
+    finally:
+        await s.close()
+
+
 def _free_port() -> int:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
         sock.bind(("127.0.0.1", 0))
@@ -4148,7 +4295,6 @@ async def _inst_names(san: _Env, copy_db: str) -> list[str]:
 @pytest.mark.playwright
 def test_browser_smoke_demo_copy_pages(
     san_env: _Env, webenv: dict[str, Any], custody: Path,
-    monkeypatch: pytest.MonkeyPatch,
     request: pytest.FixtureRequest,
 ) -> None:
     pw = pytest.importorskip("playwright.sync_api")
@@ -4169,63 +4315,31 @@ def test_browser_smoke_demo_copy_pages(
     )
     flow.update(asyncio.run(_r_source_flow(san_env)))
 
-    # One login -> one real worker-processed copy -> one demo session.
-    rid, pending = asyncio.run(_login_phase(cfg, env))
+    # 225-a: the installed workflow is browser-driven. Session A's
+    # login is performed by the REAL browser (inside the Playwright
+    # block below) and the SEPARATE worker - the real installed
+    # console script in a subprocess - processes exactly the
+    # resulting request. Session B stays HTTP-driven (224-r copy
+    # isolation law).
     cli_env = _worker_cli_env(san_env, env, custody)
     # 224-t: copy A's worker captures a CUSTOM non-default
     # process-configuration projection (canaries, not secrets); copy
-    # B (built below WITHOUT them) must show the defaults.
+    # B (built WITHOUT them - subprocess-isolated) must show the
+    # defaults.
     _T_CANARY_BROWSER_ENV = {
         "CHAT_MAX_IMAGES_PER_REQUEST": "7",
         "DEFAULT_RATE_LIMIT_REQUESTS_PER_MINUTE": "99",
     }
     cli_env_a = {**cli_env, **_T_CANARY_BROWSER_ENV}
-    out = _run_worker_cli(
-        ["process-request", str(rid), "--json"], cli_env_a, monkeypatch
-    )
-    assert "verified_unpublished" in out
-    target = _request_row(env, rid)["worker_target_db"]
-    assert isinstance(target, str) and target.startswith("demo_snap_")
-    token = asyncio.run(_wait_phase(cfg, pending))
-    names = asyncio.run(_inst_names(san_env, target))
 
-    # 224-r: copy B - the flow rows leave the source NOW (copy A already
-    # includes them), so copy B's snapshot must not carry the flow keys
-    # or the receipt.
-    asyncio.run(_r_source_flow_cleanup(san_env, flow))
-    rid_b, pending_b = asyncio.run(_login_phase(cfg, env))
-    # 224-t: remove the canary env vars so copy B's worker captures
-    # the BUILT-IN defaults (copy isolation for the projection).
-    for _k in _T_CANARY_BROWSER_ENV:
-        monkeypatch.delenv(_k, raising=False)
-    out_b = _run_worker_cli(
-        ["process-request", str(rid_b), "--json"], cli_env, monkeypatch
-    )
-    assert "verified_unpublished" in out_b
-    target_b = _request_row(env, rid_b)["worker_target_db"]
-    assert isinstance(target_b, str) and target_b.startswith("demo_snap_")
-    assert target_b != target
-    token_b = asyncio.run(_wait_phase(cfg, pending_b))
-
-    # 224-r pre-computed copy facts: the async DB reads must stay OUT of
-    # the sync_playwright greenlet block (asyncio.run cannot run there).
-    a_info = asyncio.run(_r_copy_receipt_info(san_env, target))
-    b_key = asyncio.run(_r_copy_single_key(san_env, target_b))
-    b_key_count = asyncio.run(_count_table(san_env, target_b, "gateway_keys"))
-    # 224-w pre-computed copy facts (same greenlet constraint): the
-    # first copied route and key of copy A, and the key's COPIED
-    # public id (the download assertions compare against the copy).
-    _w_route = asyncio.run(_first_id(san_env, target, "model_routes"))
-    _w_key = asyncio.run(_first_id(san_env, target, "gateway_keys"))
-    _w_pub_key = asyncio.run(_first_public_key_id(san_env, target, _w_key))
-
-    # 224-x pre-computed copy facts (same greenlet constraint): ONE
-    # synthetic run's seven TEST-ONLY leaves inserted into copy A's
-    # worker-published demo_display.leaves. Only validation.json is an
-    # ACTUAL 223 sanitizer output (for a synthetic original document);
-    # the other six bodies are b"{}" placeholders and are NOT valid
-    # typed outputs for their kinds (transport/binding proof, not
-    # artifact content validation). Exact-name cleanup via finalizer.
+    # 224-x: ONE synthetic run's seven TEST-ONLY leaves inserted into
+    # copy A's worker-published demo_display.leaves (the insert runs
+    # in-block via the fresh-loop helper after copy A exists). Only
+    # validation.json is an ACTUAL 223 sanitizer output (for a
+    # synthetic original document); the other six bodies are b"{}"
+    # placeholders and are NOT valid typed outputs for their kinds
+    # (transport/binding proof, not artifact content validation).
+    # Exact-name cleanup via finalizer.
     import hashlib as _x_hashlib
 
     from slaif_gateway.services import (
@@ -4292,8 +4406,6 @@ def test_browser_smoke_demo_copy_pages(
         finally:
             await s.close()
 
-    asyncio.run(_x_browser_insert())
-
     async def _x_browser_cleanup() -> None:
         s = await asyncpg.connect(**_conn_kwargs(
             san_env.target["host"], san_env.target["port"],
@@ -4324,9 +4436,172 @@ def test_browser_smoke_demo_copy_pages(
         try:
             context = browser.new_context(base_url=base_url)
             page = context.new_page()
-            context.add_cookies([
-                {"name": "slaif_demo_session", "value": token, "url": f"{base_url}/"},
-            ])
+            # 225-a: NO injected prebuilt session: the real browser
+            # performs the login and holds every cookie itself.
+            # (a) the browser fills and submits /fakeadmin/login ...
+            login_ts = time.time()
+            r = page.goto("/fakeadmin/login")
+            assert r is not None and r.status == 200
+            _login_cookies = {c["name"]: c["value"] for c in context.cookies()}
+            assert "slaif_demo_csrf" in _login_cookies
+            page.fill('input[name="username"]', env["username"])
+            page.fill('input[name="password"]', env["password"])
+            assert (
+                page.locator('input[name="csrf"]').input_value()
+                == _login_cookies["slaif_demo_csrf"]
+            )
+            page.click('button[type="submit"]')
+            # (b) 303 to the wait surface; the browser itself now
+            # holds the signed pending cookie ...
+            page.wait_for_url("**/fakeadmin/wait")
+            _pending_cookies = {c["name"]: c["value"] for c in context.cookies()}
+            assert "slaif_demo_pending" in _pending_cookies
+            rid_a = _parse_pending(
+                cfg.cookie_secret, _pending_cookies["slaif_demo_pending"]
+            )
+            # (c) ...and OBSERVES the wait progress: not ready before
+            # the worker runs ...
+            r = page.goto("/fakeadmin/wait/status")
+            assert r is not None and r.status == 200
+            assert r.json() == {"state": "waiting"}
+            # (d) the SEPARATE installed worker (real console script,
+            # different process than the demo web) processes exactly
+            # the resulting request ...
+            out = _run_worker_subprocess(
+                ["process-request", str(rid_a), "--json"], cli_env_a
+            )
+            assert "verified_unpublished" in out
+
+            async def _target_of(request_id: uuid.UUID) -> str:
+                rows = await _scalar_many(
+                    str(env["source_url"]),
+                    "SELECT worker_target_db FROM "
+                    "demo_control.demo_snapshot_requests WHERE id = :id",
+                    {"id": str(request_id)},
+                )
+                return str(rows[0]._mapping["worker_target_db"])
+
+            target = _block_async(_target_of(rid_a))
+            assert isinstance(target, str) and target.startswith("demo_snap_")
+            # (e) ...and the SAME browser session now observes ready,
+            # reaches the ready page and takes the primary /admin
+            # link.
+            r = page.goto("/fakeadmin/wait/status")
+            assert r is not None and r.status == 200
+            assert r.json() == {"state": "ready"}
+            # the wait surface 303s the browser to the ready page
+            # (Playwright follows the redirect, so the final response
+            # is the 200 ready page; the exact 303 wire law is asserted
+            # by the HTTP-driven B session's _wait_phase in this same
+            # test).
+            r = page.goto("/fakeadmin/wait")
+            assert r is not None and r.status == 200
+            page.wait_for_url("**/fakeadmin/ready")
+            _ready_flat = " ".join(page.content().split())
+            assert (
+                '<a class="primary-link" href="/admin">Open the admin '
+                "dashboard (demo view)</a>" in _ready_flat
+            )
+            assert "frozen view of the source captured at sign-in" in _ready_flat
+            page.click('a.primary-link[href="/admin"]')
+            page.wait_for_url("**/admin")
+            assert page.locator("#admin-main").count() >= 1
+            # (f) two snapshot times, recorded SEPARATELY (the control
+            # request row vs the copy's file-leaf capture times), both
+            # at/after the login - NOT an instant-at-login claim.
+            async def _request_times(request_id: uuid.UUID):
+                rows = await _scalar_many(
+                    str(env["source_url"]),
+                    "SELECT created_at, verified_at FROM "
+                    "demo_control.demo_snapshot_requests WHERE id = :id",
+                    {"id": str(request_id)},
+                )
+                m = rows[0]._mapping
+                return m["created_at"], m["verified_at"]
+
+            async def _leaves_captured_range(copy_db: str) -> tuple[float, float]:
+                s = await asyncpg.connect(
+                    **_conn_kwargs(
+                        san_env.target["host"], san_env.target["port"],
+                        san_env.target["user"], san_env.target["password"],
+                        copy_db,
+                    )
+                )
+                try:
+                    row = await s.fetchrow(
+                        "SELECT min(captured_at) AS lo, "
+                        "max(captured_at) AS hi FROM demo_display.leaves"
+                    )
+                    return float(row["lo"]), float(row["hi"])
+                finally:
+                    await s.close()
+
+            _req_created, _req_verified = _block_async(_request_times(rid_a))
+            assert _req_created is not None
+            assert _req_verified is not None
+            assert _req_created.timestamp() >= login_ts - 1
+            assert _req_verified.timestamp() >= login_ts - 1
+            _cap_lo, _cap_hi = _block_async(_leaves_captured_range(target))
+            assert 0 < _cap_lo <= _cap_hi
+            assert _cap_lo >= login_ts - 1
+            # (g) 224-r copy B (HTTP-driven): the flow rows leave the
+            # source NOW (copy A already includes them), so copy B's
+            # snapshot must not carry the flow keys or the receipt.
+            _block_async(_r_source_flow_cleanup(san_env, flow))
+            rid_b, pending_b = _block_async(_login_phase(cfg, env))
+            out_b = _run_worker_subprocess(
+                ["process-request", str(rid_b), "--json"], cli_env
+            )
+            assert "verified_unpublished" in out_b
+            target_b = _block_async(_target_of(rid_b))
+            assert isinstance(target_b, str) and target_b.startswith("demo_snap_")
+            assert target_b != target
+            token_b = _block_async(_wait_phase(cfg, pending_b))
+            names = _block_async(_inst_names(san_env, target))
+            # 224-r/224-w pre-computed copy facts (in-block via the
+            # fresh-loop thread helper): the first copied route and
+            # key of copy A, and the key's COPIED public id (the
+            # download assertions compare against the copy).
+            a_info = _block_async(_r_copy_receipt_info(san_env, target))
+            b_key = _block_async(_r_copy_single_key(san_env, target_b))
+            b_key_count = _block_async(_count_table(san_env, target_b, "gateway_keys"))
+            _w_route = _block_async(_first_id(san_env, target, "model_routes"))
+            _w_key = _block_async(_first_id(san_env, target, "gateway_keys"))
+            _w_pub_key = _block_async(_first_public_key_id(san_env, target, _w_key))
+            # 224-x: insert the test-only run leaves into copy A (the
+            # definitions + exact-name cleanup finalizer are above).
+            _block_async(_x_browser_insert())
+            # (h) 225-a: PRE-MUTATION digest baseline: source business
+            # tables + control request/session counts, and copy A's
+            # business tables + display-leaf digest. Compared against
+            # the post-battery snapshot below (no vague no-op claim).
+            _dig_src_1 = _block_async(_db_digest(
+                san_env.source["host"], san_env.source["port"],
+                san_env.source["user"], san_env.source["password"],
+                san_env.source["database"],
+                extra=(
+                    ("demo_control.requests",
+                     "SELECT count(*)::text FROM "
+                     "demo_control.demo_snapshot_requests"),
+                    ("demo_control.sessions",
+                     "SELECT count(*)::text FROM demo_control.demo_web_sessions"),
+                ),
+            ))
+            _dig_copy_1 = _block_async(_db_digest(
+                san_env.target["host"], san_env.target["port"],
+                san_env.target["user"], san_env.target["password"],
+                target,
+                extra=(
+                    ("demo_display.leaves",
+                     "SELECT md5(coalesce(string_agg(logical_name || "
+                     "':' || sha256 || ':' || byte_count::text, ' ' ORDER "
+                     "BY logical_name), '')) FROM demo_display.leaves"),
+                ),
+            ))
+            # the configured source file set (owned completion-profile
+            # dir): bounded SHA-256 digests, compared after the battery
+            # (copy display files are covered by the leaves digest).
+            _files_1 = _profile_file_digests(Path(env["profile_dir"]))
 
             all_responses: list[tuple[str, int, str | None]] = []
 
@@ -4370,6 +4645,36 @@ def test_browser_smoke_demo_copy_pages(
                 "Providers", "Routes", "Pricing", "Templates", "FX", "Usage",
                 "Operations", "Audit", "Email", "OpenAI", "Accounts",
             ]
+            # 225-a: at the default 1280 px viewport the demo nav must
+            # NOT wrap with a single orphan link on the last row.
+            _nav_boxes = [
+                a.bounding_box() for a in page.locator("#admin-nav a").all()
+            ]
+            assert len(_nav_boxes) == len(nav_labels)
+            assert all(b is not None for b in _nav_boxes)
+            _nav_rows: dict[int, int] = {}
+            for _box in _nav_boxes:
+                _y = round(float(_box["y"]) / 10) * 10
+                _nav_rows[_y] = _nav_rows.get(_y, 0) + 1
+            assert sorted(_nav_rows.items())[-1][1] >= 2, (
+                "the last demo-nav row must not be a single orphan link "
+                f"(rows={sorted(_nav_rows.items())})"
+            )
+            # ...and the narrow 390 px mobile/keyboard path: the nav
+            # collapses behind the Menu toggle, which opens the full
+            # link list; restore the desktop viewport afterwards.
+            page.set_viewport_size({"width": 390, "height": 844})
+            page.wait_for_timeout(100)
+            assert page.locator("button.nav-toggle").is_visible()
+            page.click("button.nav-toggle")
+            page.wait_for_timeout(100)
+            assert page.locator(".admin-header.is-open").count() == 1
+            assert page.locator("#admin-nav a").count() == len(nav_labels)
+            assert all(
+                a.is_visible() for a in page.locator("#admin-nav a").all()
+            )
+            page.set_viewport_size({"width": 1280, "height": 720})
+            page.wait_for_timeout(100)
             # asset_url appends ?v=<digest>: judge by URL path, not suffix.
             static_by_path = {urlparse(u).path: st for u, st in _static()}
             assert any(pth.endswith(".css") and st == 200 for pth, st in static_by_path.items())
@@ -4379,7 +4684,7 @@ def test_browser_smoke_demo_copy_pages(
             assert target not in content
             assert str(env["reader_role"]) not in content
 
-            shot = Path(f"/tmp/slaif-224e-browser-{os.getpid()}-{uuid.uuid4().hex[:10]}.png")
+            shot = Path(f"/tmp/slaif-225a-nav-{os.getpid()}-{uuid.uuid4().hex[:10]}.png")
             page.screenshot(path=str(shot))
             print(f"DEMO_BROWSER_SCREENSHOT={shot}")
 
@@ -5145,6 +5450,87 @@ def test_browser_smoke_demo_copy_pages(
             page.goto("/admin/cohorts")
             rows_after = page.locator("table[data-sortable] tbody tr").count()
             assert rows_after == rows_before
+
+            # --- 225-a: mutation battery - one representative POST per
+            # operational action family (+ one malformed/oversized
+            # body) ---------------------------------------------
+            # Every operational form family in the demo host must be
+            # the PRE-BODY quiet 204 no-op: the gate refuses unsafe
+            # methods before reading the body, so no normal handler
+            # runs. The digest equality below proves no source or
+            # copy business DML, audit, quota/accounting or file
+            # change (no vague no-op claim).
+            _battery = (
+                "/admin/keys/create",
+                "/admin/keys/bulk-import",
+                "/admin/owners/new",
+                "/admin/institutions/new",
+                "/admin/providers/new",
+                "/admin/routes/new",
+                "/admin/pricing/new",
+                "/admin/fx/new",
+                "/admin/templates/new",
+                "/admin/accounts/create",
+                "/admin/key-batch",
+                "/admin/reports/export",
+                "/admin/operations/catalog/collect",
+                "/admin/operations/catalog/review",
+                "/admin/operations/catalog/export-baseline",
+                "/admin/openai-assisted/routes/propose",
+                "/admin/operations/diagnostics/lookup",
+                "/admin/operations/diagnostics/cleanup",
+                "/admin/operations/replay-maintenance/inspect",
+                "/admin/operations/replay-maintenance/preview",
+                "/admin/operations/replay-maintenance/apply",
+                "/admin/email-operations/smtp-test/review",
+                "/admin/cohorts/new",
+            )
+            for _bp in _battery:
+                _br = context.request.post(
+                    _bp,
+                    data=b"225a-battery-probe=" * 16,
+                    headers={
+                        "content-type": "application/x-www-form-urlencoded"
+                    },
+                )
+                assert _br.status == 204, _bp
+                assert _br.body() == b""
+            # one malformed + oversized body: refused pre-body too.
+            _br = context.request.post(
+                "/admin/keys/create",
+                data=b"\x00\x01garbage" * 10_000,
+                headers={"content-type": "text/garbage"},
+            )
+            assert _br.status == 204
+            assert _br.body() == b""
+            # ...and NOTHING changed: exact digest equality.
+            _dig_src_2 = _block_async(_db_digest(
+                san_env.source["host"], san_env.source["port"],
+                san_env.source["user"], san_env.source["password"],
+                san_env.source["database"],
+                extra=(
+                    ("demo_control.requests",
+                     "SELECT count(*)::text FROM "
+                     "demo_control.demo_snapshot_requests"),
+                    ("demo_control.sessions",
+                     "SELECT count(*)::text FROM demo_control.demo_web_sessions"),
+                ),
+            ))
+            _dig_copy_2 = _block_async(_db_digest(
+                san_env.target["host"], san_env.target["port"],
+                san_env.target["user"], san_env.target["password"],
+                target,
+                extra=(
+                    ("demo_display.leaves",
+                     "SELECT md5(coalesce(string_agg(logical_name || "
+                     "':' || sha256 || ':' || byte_count::text, ' ' ORDER "
+                     "BY logical_name), '')) FROM demo_display.leaves"),
+                ),
+            ))
+            _files_2 = _profile_file_digests(Path(env["profile_dir"]))
+            assert _dig_src_2 == _dig_src_1
+            assert _dig_copy_2 == _dig_copy_1
+            assert _files_2 == _files_1
 
             # --- 224-z: truthful ready entry + operations near miss in
             # the real browser ---------------------------------------------

@@ -1545,9 +1545,12 @@ standalone ASGI process serving `/fakeadmin` on a dedicated demo host
 (see [demo-admin.md](demo-admin.md), Demo web entry and Demo verified
 copy reader) — it is not a route of this gateway. 224-d adds the
 read-only copy preview to that process (bounded counts from the
-session's own verified copy under the SELECT-only reader role); the
-remaining demonstration features (full copy-backed GUI browsing,
-identity-masked reads, silent no-op actions) are later 224 suffixes.
+session's own verified copy under the SELECT-only reader role); from
+224-e through 224-v the demo host mounts the existing admin routers
+behind the central default-deny gate, so the CURRENT state is the full
+copy-backed read-only GUI with identity-masked reads and every
+operational submission a silent pre-body no-op (see
+[docs/demo-admin.md](demo-admin.md)).
 
 ```text
 slaif-gateway demo-admin create <username> --reason <1..512 chars>

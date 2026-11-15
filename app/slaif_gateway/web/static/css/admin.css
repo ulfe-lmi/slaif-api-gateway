@@ -203,6 +203,21 @@ a:hover {
   color: var(--heading);
 }
 
+/* 225-a demo-nav ergonomics: the demo host lists SIXTEEN sections,
+   and at 1280 px the normal spacing wrapped with a single orphan
+   link ("Accounts") on the second row. This DEMO-SCOPED selector
+   (the class is added only when demo_admin is set) tightens the
+   spacing so the wrap balances; the normal-admin nav keeps the
+   original sizing and byte-identical markup. */
+.admin-nav.demo-admin-nav {
+  gap: 0.2rem;
+}
+
+.admin-nav.demo-admin-nav a {
+  padding: 0.3rem 0.5rem;
+  font-size: 0.84rem;
+}
+
 .nav-toggle {
   display: none;
   margin-left: auto;

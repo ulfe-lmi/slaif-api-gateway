@@ -40,6 +40,11 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
+import os
+import subprocess
+import sys
+import tempfile
 import uuid
 from collections.abc import Iterator
 from pathlib import Path
@@ -512,3 +517,262 @@ def test_zero_active_404_and_reenable(
         _set_enabled(True)
     codes = asyncio.run(route_codes())
     assert codes["login"] == 200, codes
+
+
+# --- 225-a: installed CLI lifecycle (real console-script subprocess) -------------
+
+
+def _cli_demo_admin(
+    args: list[str], source_url: str, stdin_text: str | None = None,
+) -> subprocess.CompletedProcess[str]:
+    """225-a: run the REAL installed ``slaif-gateway demo-admin``
+    console script in a subprocess (the installed-CLI code path, not
+    an in-process runner). The child environment is minimal and
+    fixture-derived: the owned source DSN, a known-safe PATH and a
+    fresh private HOME - the test-process environment is never
+    copied in."""
+    exe = Path(sys.executable).parent / "slaif-gateway"
+    safe_path = os.pathsep.join(
+        [
+            str(Path(sys.executable).parent),
+            "/tmp/pg16/bin",
+            "/usr/local/sbin",
+            "/usr/local/bin",
+            "/usr/sbin",
+            "/usr/bin",
+            "/sbin",
+            "/bin",
+        ]
+    )
+    with tempfile.TemporaryDirectory(prefix="slaif-225a-cli-home-") as home:
+        return subprocess.run(
+            [str(exe), "demo-admin", *args],
+            env={
+                "PATH": safe_path,
+                "HOME": home,
+                "LANG": "C.UTF-8",
+                "TZ": "UTC",
+                "DATABASE_URL": source_url,
+            },
+            input=stdin_text,
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+
+
+def test_cli_fake_admin_lifecycle_installed(
+    san_env: _Env, _wenv_base: dict[str, Any],
+) -> None:
+    """225-a acceptance item 1 (installed): the fake-admin CLI
+    lifecycle (create/list/disable/enable/reset-password) runs through
+    the REAL installed console script against the owned source
+    database; no ``delete`` command exists. Zero active fake admins
+    makes the whole demo entry surface 404 (GET and POST - no
+    oracle); re-enabling restores 303 logins. Normal admin login is
+    never dispatched by the demo app (GET 303 to the entry on the
+    active surface, sessionless POST default-denied 404, no
+    ``admin_sessions`` row created). CLI output
+    never carries the password, an Argon2 hash or the DSN. Every
+    failure reports a FIXED safe code - never raw CLI output."""
+    source_url = str(_wenv_base["source_url"])
+    cfg = _web_config(_wenv_base, san_env)
+    username = f"slaif225a-cli-{uuid.uuid4().hex[:8]}"
+    password1 = f"cli-pw1-{uuid.uuid4().hex}"
+    password2 = f"cli-pw2-{uuid.uuid4().hex}"
+    created_id: str | None = None
+
+    async def _active_count() -> int:
+        return int(await _scalar(
+            source_url,
+            "SELECT count(*) FROM demo_control.fake_admin_accounts "
+            "WHERE is_enabled",
+        ))
+
+    async def _login_get() -> int:
+        facade = PgDemoWebFacade(cfg)
+        try:
+            app = create_demo_app(cfg, facade=facade)
+            async with AsyncClient(
+                transport=ASGITransport(app=app),
+                base_url="https://demo.test",
+            ) as client:
+                r = await client.get("/fakeadmin/login")
+                return r.status_code
+        finally:
+            await facade.close()
+
+    async def _login_post(u: str, pw: str) -> int:
+        # The zero-active law 404s the WHOLE entry surface (no CSRF
+        # cookie at all), so a 404 GET is returned as-is; only an
+        # active-surface 200 form yields the CSRF field.
+        facade = PgDemoWebFacade(cfg)
+        try:
+            app = create_demo_app(cfg, facade=facade)
+            async with AsyncClient(
+                transport=ASGITransport(app=app),
+                base_url="https://demo.test",
+            ) as client:
+                r = await client.get("/fakeadmin/login")
+                if r.status_code == 404:
+                    return 404
+                csrf = r.cookies["slaif_demo_csrf"]
+                r = await client.post(
+                    "/fakeadmin/login",
+                    data={"username": u, "password": pw, "csrf": csrf},
+                )
+                return r.status_code
+        finally:
+            await facade.close()
+
+    def _ok(res: subprocess.CompletedProcess[str], step: str) -> None:
+        if res.returncode != 0:
+            pytest.fail(f"225a_cli_{step}_failed: rc={res.returncode}")
+
+    def _no_secrets(res: subprocess.CompletedProcess[str], step: str) -> None:
+        out = res.stdout + res.stderr
+        if password1 in out:
+            pytest.fail(f"225a_cli_{step}_leak: password1 present")
+        if password2 in out:
+            pytest.fail(f"225a_cli_{step}_leak: password2 present")
+        if "$argon2id$" in out:
+            pytest.fail(f"225a_cli_{step}_leak: argon2 hash present")
+        if source_url in out:
+            pytest.fail(f"225a_cli_{step}_leak: dsn present")
+
+    try:
+        # 1. create: password via stdin only (never argv) ...
+        res = _cli_demo_admin(
+            ["create", username, "--reason", "225-a installed lifecycle",
+             "--password-stdin", "--json"],
+            source_url,
+            stdin_text=password1 + "\n",
+        )
+        _ok(res, "create")
+        _no_secrets(res, "create")
+        payload = json.loads(res.stdout)
+        assert payload["username"] == username
+        assert payload["is_enabled"] is True
+        assert payload["credential_generation"] == 0
+        created_id = payload["id"]
+        # ...and list --json carries it.
+        res = _cli_demo_admin(["list", "--json"], source_url)
+        _ok(res, "list")
+        _no_secrets(res, "list")
+        listed = json.loads(res.stdout)
+        assert listed["active_account_count"] == 1
+        assert any(a["username"] == username for a in listed["items"])
+        # ...and NO delete command exists (224-aa runbook law).
+        res = _cli_demo_admin(["delete", username], source_url)
+        if res.returncode == 0:
+            pytest.fail("225a_cli_delete_unexpected: delete accepted")
+        if "No such command" not in res.stdout + res.stderr:
+            pytest.fail("225a_cli_delete_shape: unexpected refusal")
+        # 2. disable: as the SOLE account, zero active fake admins
+        # makes the whole demo entry surface 404 (GET and POST - no
+        # oracle).
+        res = _cli_demo_admin(
+            ["disable", username, "--reason", "225-a disable"], source_url
+        )
+        _ok(res, "disable")
+        _no_secrets(res, "disable")
+        assert asyncio.run(_active_count()) == 0
+        assert asyncio.run(_login_post(username, password1)) == 404
+        assert asyncio.run(_login_get()) == 404
+        # 3. enable: the same credentials now succeed (303).
+        res = _cli_demo_admin(
+            ["enable", username, "--reason", "225-a enable"], source_url
+        )
+        _ok(res, "enable")
+        _no_secrets(res, "enable")
+        assert asyncio.run(_login_post(username, password1)) == 303
+        # 4. reset-password: the old password is uniformly refused
+        # (401 while the entry surface is active), the new one works.
+        res = _cli_demo_admin(
+            ["reset-password", username, "--reason", "225-a reset",
+             "--password-stdin", "--json"],
+            source_url,
+            stdin_text=password2 + "\n",
+        )
+        _ok(res, "reset")
+        _no_secrets(res, "reset")
+        assert asyncio.run(_login_post(username, password1)) == 401
+        assert asyncio.run(_login_post(username, password2)) == 303
+        # 5. normal admin login is NEVER dispatched by the demo app:
+        # GET /admin/login is the gate's fixed 303 to the demo entry
+        # (active surface); POST /admin/login WITHOUT a session is
+        # default-denied 404 (WITH a session it is the pre-body quiet
+        # 204 - proven by the browser-test mutation battery); and no
+        # normal admin session row is ever created.
+        async def _admin_session_count() -> int:
+            return int(await _scalar(
+                source_url,
+                "SELECT count(*) FROM public.admin_sessions",
+            ))
+
+        async def _admin_login_wire() -> tuple[int, str, int, bytes]:
+            facade = PgDemoWebFacade(cfg)
+            try:
+                app = create_demo_app(cfg, facade=facade)
+                async with AsyncClient(
+                    transport=ASGITransport(app=app),
+                    base_url="https://demo.test",
+                ) as client:
+                    r = await client.get("/admin/login")
+                    get_status = r.status_code
+                    get_location = r.headers.get("location", "")
+                    p = await client.post(
+                        "/admin/login",
+                        data={"username": "nobody", "password": "wrong"},
+                    )
+                    return get_status, get_location, p.status_code, p.content
+            finally:
+                await facade.close()
+
+        _sessions_before = asyncio.run(_admin_session_count())
+        _g_st, _g_loc, _p_st, _p_body = asyncio.run(_admin_login_wire())
+        _sessions_after = asyncio.run(_admin_session_count())
+        if _g_st != 303 or _g_loc != "/fakeadmin/login":
+            pytest.fail("225a_admin_login_get_wire: expected gate 303 to entry")
+        if _p_st != 404:
+            pytest.fail("225a_admin_login_post_wire: expected default-denied 404")
+        if _sessions_after != _sessions_before:
+            pytest.fail("225a_admin_session_created: session row changed")
+    finally:
+        # Exact run-owned cleanup in FK order: events -> sessions ->
+        # requests -> account (the CLI lifecycle rows + the pending
+        # requests created by the successful logins above).
+        async def _teardown() -> None:
+            if created_id is None:
+                return
+            await _exec(
+                source_url,
+                "DELETE FROM demo_control.fake_admin_account_events "
+                f"WHERE account_id = '{created_id}'",
+            )
+            await _exec(
+                source_url,
+                "DELETE FROM demo_control.demo_web_sessions "
+                f"WHERE account_id = '{created_id}'",
+            )
+            await _exec(
+                source_url,
+                "DELETE FROM demo_control.demo_snapshot_requests "
+                f"WHERE account_id = '{created_id}'",
+            )
+            await _exec(
+                source_url,
+                f"DELETE FROM demo_control.fake_admin_accounts "
+                f"WHERE id = '{created_id}'",
+            )
+            assert (
+                await _scalar(
+                    source_url,
+                    "SELECT EXISTS (SELECT 1 FROM "
+                    "demo_control.fake_admin_accounts WHERE id = :id)",
+                    {"id": created_id},
+                )
+                is False
+            ), "CLI-created account row remains after cleanup"
+
+        asyncio.run(_teardown())
