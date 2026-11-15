@@ -229,25 +229,6 @@ async def _first_id(san: _Env, copy_db: str, table: str) -> str:
         await s.close()
 
 
-async def _first_public_key_id(san: _Env, copy_db: str, key_id: str) -> str:
-    """224-w: the COPIED public_key_id of one exact copied key (the
-    browser download assertions compare against the copy, never a
-    source value)."""
-    s = await asyncpg.connect(**_conn_kwargs(
-        san.target["host"], san.target["port"],
-        san.target["user"], san.target["password"], copy_db,
-    ))
-    try:
-        row = await s.fetchrow(
-            "SELECT public_key_id FROM gateway_keys WHERE id = $1",
-            key_id,
-        )
-        assert row is not None
-        return row["public_key_id"]
-    finally:
-        await s.close()
-
-
 async def _login_phase(cfg, env: dict[str, Any]) -> tuple[uuid.UUID, str]:
     """HTTP login as the known account; return (request_id, pending cookie)."""
     facade = PgDemoWebFacade(cfg)
@@ -3855,7 +3836,7 @@ def _block_async(coro):
     def _run() -> None:
         try:
             result["value"] = asyncio.run(coro)
-        except BaseException as exc:  # noqa: B902 - re-raised below
+        except Exception as exc:
             result["error"] = exc
 
     thread = threading.Thread(target=_run, daemon=True)
@@ -4407,6 +4388,27 @@ def test_browser_smoke_demo_copy_pages(
             await s.close()
 
     async def _x_browser_cleanup() -> None:
+        # 225-b failure-safe + idempotent: if the bound copy database
+        # is already gone (the worker cleanup dropped it), there is
+        # nothing to clean and no error is raised, so this finalizer
+        # can never mask the primary test outcome.
+        names = [
+            f"catalog/runs/{_x_browser_run}/{_x_name}"
+            for _x_name, _x_kind, _x_data in _x_browser_files
+        ]
+        s = await asyncpg.connect(**_conn_kwargs(
+            san_env.target["host"], san_env.target["port"],
+            san_env.target["user"], san_env.target["password"],
+            san_env.target["database"],
+        ))
+        try:
+            bound_exists = bool(await s.fetchval(
+                "SELECT 1 FROM pg_database WHERE datname = $1", target
+            ))
+        finally:
+            await s.close()
+        if not bound_exists:
+            return
         s = await asyncpg.connect(**_conn_kwargs(
             san_env.target["host"], san_env.target["port"],
             san_env.target["user"], san_env.target["password"],
@@ -4416,10 +4418,7 @@ def test_browser_smoke_demo_copy_pages(
             await s.execute(
                 "DELETE FROM demo_display.leaves "
                 "WHERE logical_name = ANY($1::text[])",
-                [
-                    f"catalog/runs/{_x_browser_run}/{_x_name}"
-                    for _x_name, _x_kind, _x_data in _x_browser_files
-                ],
+                names,
             )
         finally:
             await s.close()
@@ -4560,14 +4559,12 @@ def test_browser_smoke_demo_copy_pages(
             names = _block_async(_inst_names(san_env, target))
             # 224-r/224-w pre-computed copy facts (in-block via the
             # fresh-loop thread helper): the first copied route and
-            # key of copy A, and the key's COPIED public id (the
-            # download assertions compare against the copy).
+            # key of copy A.
             a_info = _block_async(_r_copy_receipt_info(san_env, target))
             b_key = _block_async(_r_copy_single_key(san_env, target_b))
             b_key_count = _block_async(_count_table(san_env, target_b, "gateway_keys"))
             _w_route = _block_async(_first_id(san_env, target, "model_routes"))
             _w_key = _block_async(_first_id(san_env, target, "gateway_keys"))
-            _w_pub_key = _block_async(_first_public_key_id(san_env, target, _w_key))
             # 224-x: insert the test-only run leaves into copy A (the
             # definitions + exact-name cleanup finalizer are above).
             _block_async(_x_browser_insert())
@@ -5589,5 +5586,130 @@ def test_browser_smoke_demo_copy_pages(
             assert bounced, "no reauthorization response after sign-out"
             assert all(cc == "private, no-store" for _, _, cc in bounced)
             assert "Demo preview:" not in page.content()
+            # --- 225-b: post-logout PHYSICAL disposal of copy A by the
+            # SEPARATE installed worker (the 225-a evidence above is
+            # intact). A's CSRF sign-out released its session, so the
+            # bounded worker recovery/cleanup reaps A: it drops ONLY
+            # A's bound target database and removes ONLY its owned
+            # custody leaves, proves absence, then marks A cleaned.
+            # B's session is still live, so B must be retained.
+            from slaif_gateway.services import demo_snapshot as _b_ds
+
+            async def _b_row(request_id: uuid.UUID) -> dict[str, Any]:
+                rows = await _scalar_many(
+                    str(env["source_url"]),
+                    "SELECT state, worker_job_id, worker_target_db "
+                    "FROM demo_control.demo_snapshot_requests "
+                    "WHERE id = :id",
+                    {"id": str(request_id)},
+                )
+                return dict(rows[0]._mapping)
+
+            async def _b_db_exists(copy_db: str) -> bool:
+                s = await asyncpg.connect(**_conn_kwargs(
+                    san_env.target["host"], san_env.target["port"],
+                    san_env.target["user"], san_env.target["password"],
+                    san_env.target["database"],
+                ))
+                try:
+                    return bool(await s.fetchval(
+                        "SELECT 1 FROM pg_database WHERE datname = $1",
+                        copy_db,
+                    ))
+                finally:
+                    await s.close()
+
+            async def _b_copy_leaves(copy_db: str) -> int:
+                s = await asyncpg.connect(**_conn_kwargs(
+                    san_env.target["host"], san_env.target["port"],
+                    san_env.target["user"], san_env.target["password"],
+                    copy_db,
+                ))
+                try:
+                    return int(await s.fetchval(
+                        "SELECT count(*)::int FROM demo_display.leaves"
+                    ))
+                finally:
+                    await s.close()
+
+            async def _b_snap_dbs() -> set[str]:
+                s = await asyncpg.connect(**_conn_kwargs(
+                    san_env.target["host"], san_env.target["port"],
+                    san_env.target["user"], san_env.target["password"],
+                    san_env.target["database"],
+                ))
+                try:
+                    rows = await s.fetch(
+                        "SELECT datname FROM pg_database "
+                        "WHERE datname LIKE 'demo_snap_%'"
+                    )
+                    return {row["datname"] for row in rows}
+                finally:
+                    await s.close()
+
+            row_a_pre = _block_async(_b_row(rid_a))
+            assert row_a_pre["state"] == "verified_unpublished"
+            job_a = row_a_pre["worker_job_id"]
+            assert isinstance(job_a, str) and job_a, "A must be job-bound"
+            # A's run-owned display files are present BEFORE cleanup.
+            assert (custody / job_a / "files").exists()
+            pre_snap = _block_async(_b_snap_dbs())
+            assert target in pre_snap and target_b in pre_snap
+            # 225-b: exact-name cleanup of the seven TEST-ONLY leaves
+            # WHILE the bound copy still exists (before the worker
+            # drops its database); the finalizer is idempotent if the
+            # DB is already gone.
+            _block_async(_x_browser_cleanup())
+            # The SEPARATE installed worker (real console script,
+            # minimal worker env) runs the bounded cleanup.
+            out_c = _run_worker_subprocess(["cleanup", "--json"], cli_env)
+            # Safe fixed vocabulary on success: no target names, no
+            # worker/web credentials, in the reported output.
+            assert "demo_snap_" not in out_c
+            assert target not in out_c
+            assert target_b not in out_c
+            assert env["worker_pw"] not in out_c
+            assert env["web_pw"] not in out_c
+            # A reaches cleaned: the bound target DB and its run-owned
+            # display-file custody are physically gone (the CLEANED
+            # manifest is retained for operator inspection).
+            row_a_post = _block_async(_b_row(rid_a))
+            assert row_a_post["state"] == "cleaned"
+            assert not _block_async(_b_db_exists(target)), (
+                "A's bound target DB must be physically dropped"
+            )
+            assert not (custody / job_a / "files").exists(), (
+                "A's run-owned display files must be removed"
+            )
+            m_a = _b_ds.read_manifest(custody / job_a)
+            assert m_a is not None and m_a.state == _b_ds.STATE_CLEANED
+            # B (still-active session) is retained: verified, present,
+            # and readable.
+            row_b_post = _block_async(_b_row(rid_b))
+            assert row_b_post["state"] == "verified_unpublished"
+            assert _block_async(_b_db_exists(target_b)), (
+                "B's bound target DB must survive"
+            )
+            assert _block_async(_b_copy_leaves(target_b)) >= 1, (
+                "B's copy must remain readable"
+            )
+            # No unrelated source or target copy deletion: the ONLY
+            # demo_snap_ database removed is A's bound copy.
+            post_snap = _block_async(_b_snap_dbs())
+            assert post_snap == pre_snap - {target}
+            # The source business tables are unchanged by the cleanup.
+            _dig_src_3 = _block_async(_db_digest(
+                san_env.source["host"], san_env.source["port"],
+                san_env.source["user"], san_env.source["password"],
+                san_env.source["database"],
+                extra=(
+                    ("demo_control.requests",
+                     "SELECT count(*)::text FROM "
+                     "demo_control.demo_snapshot_requests"),
+                    ("demo_control.sessions",
+                     "SELECT count(*)::text FROM demo_control.demo_web_sessions"),
+                ),
+            ))
+            assert _dig_src_3 == _dig_src_2
         finally:
             browser.close()

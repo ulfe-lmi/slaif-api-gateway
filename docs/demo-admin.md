@@ -180,10 +180,25 @@ operator-managed process supervisor, on the dedicated demo host:
    process is a separate deployment and is never modified by the
    demo.
 
-**Not a release claim.** Objective 225 (installed acceptance) remains
-pending on a separate PR after objective 224 merges. Nothing on this
-page is live company evidence, certification, or a release; no
-packaged Compose/demo-host automation exists.
+**Not a release claim.** Objective 225 (installed acceptance) is
+supplied by this PR (#384): the owned synthetic installed acceptance
+has **passed** (subject to final CI and merge) — one complete
+installed workflow against final code using real Chromium, an owned
+PostgreSQL 16 pair, and the installed CLI and worker. It is NOT a
+company deployment, release, or certification; no packaged
+Compose/demo-host automation exists.
+
+> **Dated evidence note (2026-11-15, 225-b).** The immutable 225-a
+> report's item 5 describes the browser fixture's preservation (that
+> test leaves its run-owned leaves and copies in place); it does not
+> itself show the browser A journey disposing its own copy. The
+> separate `test_e2e_web_entry_full_cycle` in the same 6/6 owned run
+> already proved worker cleanup (request `cleaned`, target database
+> absent). This 225-b change additionally proves physical cleanup in
+> the real-browser A journey: after A's CSRF sign-out, the separate
+> installed worker `cleanup` marks A `cleaned`, physically drops A's
+> bound target database and its run-owned display-file custody, and
+> leaves the still-active copy B verified, present, and readable.
 
 ---
 
