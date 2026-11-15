@@ -2373,6 +2373,10 @@ def test_base_template_normal_render_unchanged_and_demo_variant():
         ):
             assert f'href="{href}"' in out_normal
         assert "Demo preview:" not in out_normal
+        # 225-a: the demo-nav ergonomics class is DEMO-ONLY; the
+        # normal render keeps the exact original nav class.
+        assert 'class="admin-nav demo-admin-nav"' not in out_normal
+        assert 'class="admin-nav"' in out_normal
 
         # Demo mode: persistent read-only banner + ONLY the sections
         # admitted through 224-z (fifteen: the 224-i set plus the
@@ -2380,6 +2384,9 @@ def test_base_template_normal_render_unchanged_and_demo_variant():
         demo_req = _fake_admin_request("/admin/keys", demo_admin=object())
         out_demo = await _render(demo_req)
         demo_norm = " ".join(out_demo.split())
+        # 225-a: demo render carries the nav-ergonomics hook class
+        # (base.html adds it only when demo_admin is set).
+        assert 'class="admin-nav demo-admin-nav"' in out_demo
         assert "Demo preview:" in demo_norm
         assert "Read-only" in demo_norm
         assert "frozen at capture time" in demo_norm

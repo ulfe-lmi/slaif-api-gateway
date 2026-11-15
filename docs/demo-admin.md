@@ -109,10 +109,96 @@ set and the near misses.
    key-configuration JSON export is **intentionally unavailable**
    because key policy metadata is stripped at sanitization time.
 
-**Not a release claim.** Objective 225 (installed acceptance) remains
-pending on a separate PR after objective 224 merges. Nothing on this
-page is live company evidence, certification, or a release; no
-packaged Compose/demo-host automation exists.
+### Installed start / restart / stop (objective 225 acceptance)
+
+There is NO packaged CLI serve command and NO Compose profile for the
+demo web process. The installed run is a standalone ASGI app under an
+operator-managed process supervisor, on the dedicated demo host:
+
+1. **Start.** Run the demo process in a CLEAN MINIMAL environment
+   loaded from an operator-owned 0600 file (a supervisor
+   `EnvironmentFile`); never inline the passwords or the cookie
+   secret into shell history or a process command line, and do not
+   inherit the operator's normal shell environment (Python startup
+   and its dependencies can read inherited variables, and any
+   inherited secret remains visible in the process environment).
+   For a systemd unit, for example:
+
+   ```ini
+   [Service]
+   EnvironmentFile=-/etc/slaif-demo/demo-web.env
+   Environment=PATH=/opt/slaif/.venv/bin
+   ExecStart=/opt/slaif/.venv/bin/uvicorn \
+     slaif_gateway.demo_web:create_demo_app --factory \
+     --host 127.0.0.1 --port 8443
+   ```
+
+   where `/etc/slaif-demo/demo-web.env` is the 0600 operator-owned
+   file holding every required `DEMO_WEB_*` variable (including
+   `DEMO_WEB_CONTROL_PASSWORD`, `DEMO_WEB_COPY_PASSWORD` and
+   `DEMO_WEB_COOKIE_SECRET`). The isolation boundary is the CODE,
+   not the shell: the demo app reads only the declared `DEMO_WEB_*`
+   names and never reads the gateway `Settings`, the owner
+   `DATABASE_URL`, or provider/mail credentials; the environment is
+   still process-visible, so keep it minimal and private. An
+   enabled demo missing any required value refuses to start with a
+   safe finite error.
+
+   The worker is a SEPARATE invocation:
+   `slaif-gateway demo-snapshot-worker process-request <request-id>`
+   and `... cleanup`, run by the operator schedule with the worker
+   role — the web process never triggers it.
+2. **Restart.** Stop the supervised process and start it again. The
+   control database holds the request/session state machine, so a
+   restart does not create new sessions and does not extend any TTL;
+   in-flight browser sessions revalidate on the next request and
+   bounce to the entry when revoked/expired. Configuration changes
+   require a restart of the demo process.
+3. **Stop.** Stop the web process, then run worker `cleanup` for any
+   pending/verified requests; the cleanup path drops exactly the
+   bound target database and its display files (bounded physical
+   cleanup, run-owned).
+4. **Roles.** Web role (224-a column grants; never business DML),
+   worker role (privileged snapshot side), target-only copy reader
+   role (224-d, SELECT-only on the visitor's own verified copy).
+   The demo web never holds the owner `DATABASE_URL`, worker
+   target-admin, provider or mail credentials.
+5. **TLS / reverse proxy.** The demo app performs no TLS
+   (`ssl=False` stage boundary on its DB connections too). If
+   exposed beyond a trusted network, terminate TLS at a reverse
+   proxy in front of the loopback bind; keep the control and copy
+   endpoints on the trusted private network.
+6. **Custody.** Private source and target databases/files; copy
+   names/DSNs/credentials never reach pages, responses or logs
+   under operator control. Test/acceptance custody uses 0700
+   directories and 0600 files with derived credentials in private
+   temp files.
+7. **Cleanup / rollback.** Disable the accounts (zero active ⇒ 404
+   everywhere), run worker cleanup, then drop the demo roles and
+   databases per the stage runbooks below. Rolling back the GUI is
+   a matter of stopping the demo process: the normal gateway
+   process is a separate deployment and is never modified by the
+   demo.
+
+**Not a release claim.** Objective 225 (installed acceptance) is
+supplied by this PR (#384): the owned synthetic installed acceptance
+has **passed** (subject to final CI and merge) — one complete
+installed workflow against final code using real Chromium, an owned
+PostgreSQL 16 pair, and the installed CLI and worker. It is NOT a
+company deployment, release, or certification; no packaged
+Compose/demo-host automation exists.
+
+> **Dated evidence note (2026-11-15, 225-b).** The immutable 225-a
+> report's item 5 describes the browser fixture's preservation (that
+> test leaves its run-owned leaves and copies in place); it does not
+> itself show the browser A journey disposing its own copy. The
+> separate `test_e2e_web_entry_full_cycle` in the same 6/6 owned run
+> already proved worker cleanup (request `cleaned`, target database
+> absent). This 225-b change additionally proves physical cleanup in
+> the real-browser A journey: after A's CSRF sign-out, the separate
+> installed worker `cleanup` marks A `cleaned`, physically drops A's
+> bound target database and its run-owned display-file custody, and
+> leaves the still-active copy B verified, present, and readable.
 
 ---
 

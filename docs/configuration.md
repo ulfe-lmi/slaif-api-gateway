@@ -1812,23 +1812,31 @@ logs or errors.
 ### Demo web entry (objective 224-c)
 
 The 224-c demo web entry is a purpose-built STANDALONE ASGI process
-(`create_demo_app`) that serves only the `/fakeadmin` entry surface
-(login / wait / ready / logout). It is DEFAULT OFF and is configured
+(`create_demo_app`) that serves the `/fakeadmin` entry surface
+(login / wait / ready / previews / logout); from 224-e onward it ALSO
+mounts the existing admin routers in this process, reachable
+exclusively through the central server-side default-deny demo gate
+(the complete current route/provenance state is documented at the top
+of `docs/demo-admin.md`). It is DEFAULT OFF and is configured
 entirely by its own environment prefix, deliberately separate from the
 gateway `Settings`: nothing here runs unless `DEMO_WEB_ENABLED` is
 true AND the complete control-connection set plus a strong cookie
 secret are present; a misconfigured enabled demo refuses to start with
 a safe finite error, and a malformed optional value (e.g. the port)
-never breaks a default-off startup. The process registers no `/v1` or
-`/admin` routes, holds no owner `DATABASE_URL`, no worker credential,
-no provider credential, no Redis and no catalog seal key, and a web
+never breaks a default-off startup. The process registers no `/v1`
+routes (its `/admin` routes are only the mounted read GUI behind the
+demo gate), holds no owner `DATABASE_URL`, no worker credential, no
+provider credential, no Redis and no catalog seal key, and a web
 request never imports or spawns the privileged snapshot worker (the
-224-b `process-request` CLI is the separate-process handoff). Its only
-database connection is the dedicated demo WEB control role (the
-reviewed 224-a column grants) with an explicit no-TLS `ssl=False`
-stage boundary: the operator must keep the control endpoint on a
-trusted private loopback/Compose network. See `docs/demo-admin.md`
-(Demo web entry) for the entry law, cookies and operator setup.
+224-b `process-request` CLI is the separate-process handoff). Its
+database connections are the dedicated demo WEB control role (the
+reviewed 224-a column grants) and, since 224-d, per-request
+request-local read-only copy-reader connections bound to the
+visitor's own verified copy (disposed after each response); both use
+an explicit no-TLS `ssl=False` stage boundary: the operator must keep
+the control and copy endpoints on a trusted private
+loopback/Compose network. See `docs/demo-admin.md` (Demo web entry)
+for the entry law, cookies and operator setup.
 
 | Setting | Default | Meaning |
 | --- | --- | --- |
@@ -1869,10 +1877,11 @@ canonical-UUID detail pages and the record-choices lookup) read-only
 from the session's verified copy under the same `DEMO_WEB_COPY_*`
 reader connection (request-local sessionmaker, database-side
 read-only, disposed after each response). Every other admin path
-stays default-denied, every unsafe method is a pre-handler no-op,
-and the demo remains an incomplete core preview rather than the
-full admin GUI (see `docs/demo-admin.md`, Demo admin core read
-gate). 224-f adds no settings either: it admits seven more
+stays default-denied, every unsafe method is a pre-handler no-op.
+(That 224-e stage was the first bounded page set; the CURRENT demo
+GUI state after objective 224 is the full read-only admin surface
+documented at the top of `docs/demo-admin.md`.) 224-f adds no
+settings either: it admits seven more
 database-backed list/detail sections under the same reader
 connection and makes every dynamic `/admin` response
 `Cache-Control: private, no-store` (revisioned `/admin/static`
