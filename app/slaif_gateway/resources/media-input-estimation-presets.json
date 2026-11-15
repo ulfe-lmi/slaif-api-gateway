@@ -1,6 +1,17 @@
 {
   "schema_version": 1,
   "presets": {
+    "qwen-patch16-merge2-images": {
+      "version": 1,
+      "image_tokens": 16896,
+      "image_geometry": {
+        "method": "patch_grid",
+        "patch_size": 16,
+        "spatial_merge_size": 2,
+        "min_tokens": 64,
+        "overhead_tokens": 64
+      }
+    },
     "qwen-native-images": {
       "version": 1,
       "image_tokens": 16896

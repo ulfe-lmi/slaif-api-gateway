@@ -754,6 +754,13 @@ default-off and policy-first:
 - Image input requires explicit Responses image-input route capability; it does
   not enable `/v1/files`, file IDs, image generation, audio input/output,
   hosted tools, or stateful Responses.
+- An explicit operator image-geometry policy may inspect at most 65,536 decoded
+  inline header bytes per image for admission estimation. It does not fetch
+  URLs, decompress pixels, resize images, rewrite payloads, persist/cache
+  headers or dimensions, or grant media capability. Unknown, remote and
+  animated sources retain the configured fixed fallback. Raw byte/count
+  limits and normal key/route gates remain in force; final usage accounting
+  is unchanged. See [media input estimation](media-input-estimation.md).
 - File input requires explicit Responses file-input route capability; it does
   not enable `/v1/files`, file IDs, provider-side uploads, file search,
   retrieval tools, Office/spreadsheet formats outside the configured allowlist,

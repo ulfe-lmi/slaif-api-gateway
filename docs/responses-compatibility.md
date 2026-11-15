@@ -340,8 +340,12 @@ detail values are `auto`, `low`, `high`, and SDK-supported `original`; omitted
 detail is omitted upstream so the provider default applies. SLAIF does not
 fetch remote URLs, decode image pixels, rewrite image data URLs, store/log image
 URLs or base64 payloads, or infer final billing from bytes. Image URL/data URL
-material is included in conservative admission estimates, while final
-accounting uses provider usage/cost once.
+material is included in conservative admission estimates unless an explicit
+route media policy replaces encoded image bytes with a fixed or dimension-based
+budget. The opt-in geometry policy reads bounded inline PNG/JPEG/static-WebP
+headers without decoding pixels, fetching URLs, or rewriting content; unknown
+sources keep the fixed fallback. See [media input estimation](media-input-estimation.md).
+Final accounting uses provider usage/cost once.
 User-message content arrays may include bounded `input_file` parts shaped as
 `{"type":"input_file","file_url":"https://..."}` when the resolved route sets
 `capabilities.responses.file_input=true`. File URL input must be a fully

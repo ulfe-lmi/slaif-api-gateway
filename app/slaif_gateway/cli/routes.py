@@ -502,6 +502,17 @@ def update(
     media_image_tokens: Annotated[str | None, typer.Option("--media-image-tokens")] = None,
     media_video_tokens: Annotated[str | None, typer.Option("--media-video-tokens")] = None,
     media_video_frames: Annotated[str | None, typer.Option("--media-video-frames")] = None,
+    media_policy_file: Annotated[
+        Path | None,
+        typer.Option(
+            "--media-policy-file",
+            help="Capabilities JSON containing only media_input_estimation; merge its explicit leaves",
+        ),
+    ] = None,
+    clear_media_image_geometry: Annotated[
+        bool,
+        typer.Option("--clear-media-image-geometry", help="Restore the fixed image allowance"),
+    ] = False,
     chat_capability: Annotated[
         list[str] | None,
         typer.Option("--chat-capability", help="NAME=true|false; repeatable"),
@@ -590,13 +601,15 @@ def update(
         codex_patch["default_max_output_tokens"] = codex_default_max_output_tokens
     if codex_max_output_tokens is not None:
         codex_patch["max_output_tokens"] = codex_max_output_tokens
-    media_patch: dict[str, int] = {}
+    media_patch: dict[str, object] = {}
     if media_image_tokens is not None:
         media_patch["image_tokens"] = media_image_tokens
     if media_video_tokens is not None:
         media_patch["video_tokens"] = media_video_tokens
     if media_video_frames is not None:
         media_patch["video_frames"] = media_video_frames
+    if clear_media_image_geometry:
+        media_patch["image_geometry"] = None
     chat_patch = _parse_bool_capability_flags(chat_capability, flag="--chat-capability")
     responses_patch = _parse_bool_capability_flags(
         responses_capability, flag="--responses-capability"
@@ -608,6 +621,7 @@ def update(
         or responses_patch
         or completion_service_profile is not None
         or clear_completion_service
+        or media_policy_file is not None
     )
 
     if execute is not None:
@@ -676,6 +690,21 @@ def update(
         raise typer.BadParameter(
             "Choose either --completion-service-profile or --clear-completion-service."
         )
+
+    if media_policy_file is not None:
+        if media_patch:
+            raise typer.BadParameter(
+                "Choose --media-policy-file or individual media edit flags, not both."
+            )
+        settings = get_settings()
+        media_document = read_capabilities_file(
+            media_policy_file,
+            external_tool_ceilings=settings.get_external_tool_operator_ceilings(),
+            profile_dir=settings.COMPLETION_SERVICE_PROFILE_DIR,
+        )
+        if set(media_document) != {"media_input_estimation"}:
+            raise typer.BadParameter("--media-policy-file must contain only media_input_estimation.")
+        media_patch = dict(media_document["media_input_estimation"])
 
     if completion_service_profile is not None:
         completion_service: object = {

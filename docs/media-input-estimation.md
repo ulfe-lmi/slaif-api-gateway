@@ -61,6 +61,90 @@ The engine retains the unadjusted count so lazy-wait route revalidation computes
 the current estimate once, including when a budget is removed or changed. No
 request bodies, media, raw identifiers or URLs enter safe diagnostics.
 
+## Dimension-based image estimates
+
+A flat maximum per image can itself reject valid image history. Live Codex
+0.167.1 checks on the original `qwen3.8-27b-V100` route reported input increases
+of 104, 296 and 1,066 tokens for 256×256, 512×512 and 1024×1024 PNGs, while
+the gateway added approximately 16,925 tokens for each. A compressed and a
+noisy 512×512 PNG had identical reservations despite very different file sizes.
+These are bounded observations of upstream-reported usage, not universal image
+token counts or complete provider qualification.
+
+Operators can opt into a data-only patch-grid policy in the existing version-1
+envelope. Existing fixed policies retain their behavior. This example ships as
+`qwen-patch16-merge2-images` in the preset file:
+
+```json
+"media_input_estimation": {
+  "version": 1,
+  "image_tokens": 16896,
+  "image_geometry": {
+    "method": "patch_grid",
+    "patch_size": 16,
+    "spatial_merge_size": 2,
+    "min_tokens": 64,
+    "overhead_tokens": 64
+  }
+}
+```
+
+The grid stride is `patch_size × spatial_merge_size` pixels. The estimator
+rounds both dimensions up to this stride, accounts conservatively for
+aspect-preserving minimum-size upscaling, adds the configured overhead, and
+caps the result at the existing `image_tokens` budget. For this example, known
+256×256, 512×512 and 1024×1024 images receive 128, 320 and 1,088 image tokens,
+respectively, plus ordinary request-material estimation. The overhead is an
+operator-chosen safety margin, not an exact provider billing constant.
+
+The patch/merge geometry and minimum are supported by the
+[Qwen processor configuration](https://huggingface.co/Qwen/Qwen3.5-27B/blob/main/preprocessor_config.json)
+and the deployed llama.cpp build's
+[aspect-preserving resize implementation](https://github.com/ggml-org/llama.cpp/blob/620d222/tools/mtmd/mtmd-image.cpp).
+Verify the selected model, projector, preprocessing limits and any backend
+overrides before using this preset. The fallback budget must cover that
+processor's maximum exposure; arbitrary models do not inherit Qwen geometry.
+
+Only inline base64 PNG, JPEG and static WebP headers are inspected, using at
+most 65,536 decoded header bytes per part. This is base64/header decoding,
+never pixel decompression, resizing, frame extraction, remote fetching or
+payload rewriting. Unreadable, overlong, animated, GIF and remote-image sources
+keep the full fixed budget. Unsupported or malformed policy fails closed;
+unrecognized media does not receive a zero-token discount. Existing byte,
+text, image-count, authentication and capability checks still run first.
+Plain text that resembles an image data URL remains text.
+
+All five geometry fields are required. Patch size is 1–256, merge size 1–16,
+minimum tokens 1–1,050,000, and overhead 0–65,536. Booleans are not integers;
+the minimum plus overhead must fit the explicit fixed fallback budget.
+
+For an existing route, put the media policy inside the standard file envelope
+`{"schema_version":1,"capabilities":{"media_input_estimation":{...}}}`
+and use the partial media-file edit, which preserves other route metadata:
+
+```text
+slaif-gateway routes update <route-uuid> --dry-run /tmp/image-plan.json \
+  --media-policy-file /tmp/image-policy.json
+slaif-gateway routes update <route-uuid> --execute /tmp/image-plan.json \
+  --reason "reviewed image geometry"
+```
+
+The file must contain only the media group. To restore the flat allowance,
+preview with `--clear-media-image-geometry` and execute the reviewed plan.
+The existing numeric `--media-*` flags preserve the geometry sibling and
+validate the merged result; they cannot be mixed with `--media-policy-file`.
+A full `--capabilities-file` replacement also supports the new group.
+The same policy covers user images, image tool
+results and extracted video frames represented as images. Direct video keeps
+its existing frame/token policy. No keys, client compatibility revisions or
+final provider accounting rules change.
+
+This corrects image exposure rather than increasing a client context window.
+The regression suite admits a history with 16 images in a 196,608-token route
+that the flat policy rejects even with a 400,000-token ceiling, and still
+rejects genuine text overflow. Production route ceilings and client compaction
+thresholds are operator configuration; this code does not silently migrate them.
+
 ## Direct video input
 
 The deployed native vLLM backend exposes video input through Chat Completions,

@@ -225,8 +225,11 @@ content, or `type: "message"` with `input_text` content parts. User-message
 content arrays may include `input_image` parts with an `image_url` string and
 optional `detail` (`auto`, `low`, `high`, or SDK-supported `original`) only
 when the route explicitly sets `capabilities.responses.image_input=true`.
-SLAIF forwards validated image URLs/data URLs without fetching, decoding,
-rewriting, storing, or logging them. User-message content arrays may include
+SLAIF forwards validated image URLs/data URLs without fetching, pixel decoding,
+rewriting, storing, or logging them. An explicit route image-geometry policy
+may inspect a bounded inline image header for admission estimation, retaining
+the fixed budget for unknown or remote sources; see
+[media input estimation](media-input-estimation.md). User-message content arrays may include
 `input_file` parts with an HTTPS `file_url` or inline `filename` plus
 `file_data` data URL only when the route explicitly sets
 `capabilities.responses.file_input=true`. SLAIF does not fetch file URLs,
