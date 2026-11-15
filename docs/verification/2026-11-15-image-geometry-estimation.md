@@ -84,6 +84,13 @@ and are not added to its count.
 
 These results are retained separately, not rewritten as passes:
 
+- The first GitHub CI run at `3147394a` passed runtime E2E, browser, Compose
+  and CodeQL checks but failed documentation hygiene and one unit assertion
+  because this report was missing a navigation link. The follow-up adds the
+  link from the media-policy guide; it changes no runtime code. The earlier
+  full local unit result covered the implementation before this report was
+  added and did not catch that report-only navigation omission.
+
 - The initial host Python 3.14.4 full run had 8,005 passes, 4 failures and
   1 skip. All four failures reproduced on an untouched checkout of the exact
   base commit: two deep-JSON expectations and two subprocess checks with

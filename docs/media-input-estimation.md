@@ -193,3 +193,5 @@ print(response.choices[0].message.content)
 This is video input for a text answer. It creates no Files/Uploads lifecycle,
 video-generation endpoint, streaming video output or general provider support.
 Verification is recorded in [the scoped report](verification/2026-10-20-media-input-estimation.md).
+Dimension-based image admission and its regression checks are recorded in the
+[image geometry verification report](verification/2026-11-15-image-geometry-estimation.md).

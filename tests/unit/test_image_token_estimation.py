@@ -16,7 +16,7 @@ from slaif_gateway.schemas.provider_route_configuration import (
     parse_capability_patch,
     merge_capability_patch,
 )
-from slaif_gateway.services.image_token_estimation import parse_image_geometry
+import slaif_gateway.services.image_token_estimation as image_estimation
 from slaif_gateway.services.media_input_estimation import (
     MediaInputEstimateError,
     apply_media_input_estimate,
@@ -85,19 +85,17 @@ def test_patch_grid_bounds_alignment_minimum_upscaling_and_route_cap(
 
 
 def test_compression_size_does_not_change_geometry_and_header_decode_is_bounded(media, monkeypatch):
-    import slaif_gateway.services.image_token_estimation as engine
-
     small = _url(_png(payload=b"small"))
     large = _url(_png(payload=b"a" * 1_500_000))
     first, second = _policy(small), _policy(large)
-    decode = engine.base64.b64decode
+    decode = image_estimation.base64.b64decode
     sizes = []
 
     def bounded_decode(data, **kwargs):
         sizes.append(len(data))
         return decode(data, **kwargs)
 
-    monkeypatch.setattr(engine.base64, "b64decode", bounded_decode)
+    monkeypatch.setattr(image_estimation.base64, "b64decode", bounded_decode)
     results = [apply_media_input_estimate(
         raw, route_capabilities={"media_input_estimation": media}, input_ceiling=196608
     ) for raw in (first, second)]
@@ -254,7 +252,7 @@ def test_image_padding_no_longer_requires_a_400k_window_for_100k_class_history(m
 
 
 def test_small_thin_images_include_minimum_resize_alignment(media):
-    policy = parse_image_geometry(media["image_geometry"], 16896)
+    policy = image_estimation.parse_image_geometry(media["image_geometry"], 16896)
     assert policy.estimate(_url(_png(2, 80)), 16896) == 166
     assert policy.estimate(_url(_png(80, 2)), 16896) == 166
 
