@@ -30,7 +30,7 @@ video requires an explicit budget and frame policy. Malformed policy fails close
 Each token budget must be a positive integer no larger than 1,050,000; frame
 limits must be integers from 1 to 32. Those are engine ceilings, not defaults.
 
-Raw request, image/video bytes, image/video count, text and schema limits still
+Raw request, image/video bytes, explicit media-count caps, text and schema limits still
 run before routing. Only the media portion of the preliminary token check is
 deferred; after current key/model/provider/route gates, the complete configured
 estimate is checked against the operator input cap and Codex route context.
@@ -111,8 +111,11 @@ never pixel decompression, resizing, frame extraction, remote fetching or
 payload rewriting. Unreadable, overlong, animated, GIF and remote-image sources
 keep the full fixed budget. Unsupported or malformed policy fails closed;
 unrecognized media does not receive a zero-token discount. Existing byte,
-text, image-count, authentication and capability checks still run first.
-Plain text that resembles an image data URL remains text.
+text, explicitly configured image-count, authentication and capability checks still run first.
+Plain text that resembles an image data URL remains text. Responses image
+count defaults to model-owned acceptance (`RESPONSES_MAX_IMAGE_PARTS_PER_REQUEST=0`);
+replayed images are metered without imposing a fixed gateway count cap.
+Only an explicitly configured positive value adds an operator count cap.
 
 All five geometry fields are required. Patch size is 1–256, merge size 1–16,
 minimum tokens 1–1,050,000, and overhead 0–65,536. Booleans are not integers;

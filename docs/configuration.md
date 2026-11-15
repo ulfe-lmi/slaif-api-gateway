@@ -860,7 +860,10 @@ provider usage finalization. Ordinary create reuses
 - `RESPONSES_MAX_CUSTOM_TOOL_FORMAT_DEFINITION_BYTES=65536`
 - `RESPONSES_MAX_TOTAL_CUSTOM_TOOL_FORMAT_BYTES=262144`
 - `RESPONSES_MAX_CUSTOM_TOOL_CALL_OUTPUT_BYTES=262144`
-- `RESPONSES_MAX_IMAGE_PARTS_PER_REQUEST=16`
+- `RESPONSES_MAX_IMAGE_PARTS_PER_REQUEST=0` (default: no gateway image-count cap;
+  the upstream model decides how many images it accepts. A positive value is
+  an explicit operator cap; negative values are invalid. Per-image/aggregate
+  byte limits and token/context accounting remain independent.)
 - `RESPONSES_MAX_IMAGE_URL_BYTES=4096`
 - `RESPONSES_MAX_IMAGE_DATA_URL_BYTES=20971520`
 - `RESPONSES_MAX_TOTAL_IMAGE_DATA_URL_BYTES=41943040`

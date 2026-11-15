@@ -105,6 +105,21 @@ These results are retained separately, not rewritten as passes:
 
 ## Scope and rollout
 
+The operator subsequently reported a separate rejection at 21:27:20 UTC:
+`responses_input_image_count_exceeded` after another image view. The preceding
+two real V100 requests succeeded with 99,565 and 99,981 input tokens. The
+operator explicitly directed image-count acceptance to the model. The
+follow-up sets `RESPONSES_MAX_IMAGE_PARTS_PER_REQUEST=0` by default, meaning no
+gateway image-count cap, and validates zero/non-negative configuration. An
+explicit positive operator cap remains opt-in. Byte bounds, image modality
+gates and token/context accounting are preserved. Regressions cover 17, 65 and
+129 image parts with exact per-image metering, retained opt-in count rejection,
+negative-setting rejection, and the existing individual/aggregate byte caps.
+Follow-up validation on native Python 3.12 passed 8,023 unit tests with the
+same existing skip (181.26 seconds), all six PostgreSQL accounting tests,
+Ruff and documentation checks. The deployment candidate independently accepts
+17, 65 and 129 images with no count cap and preserves per-image token metering.
+
 The implementation adds no dependencies, database migrations, endpoints,
 client dialect revisions, key grants or provider-body rewrites. Direct video
 keeps its current policy; extracted frames represented as images use geometry.

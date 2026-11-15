@@ -997,7 +997,8 @@ class ResponsesRequestPolicy:
                     "responses_input_item_too_large",
                     "The Responses input item text exceeds the gateway size limit.",
                 )
-            if total_image_parts > self._settings.RESPONSES_MAX_IMAGE_PARTS_PER_REQUEST:
+            image_count_limit = self._settings.RESPONSES_MAX_IMAGE_PARTS_PER_REQUEST
+            if image_count_limit > 0 and total_image_parts > image_count_limit:
                 _raise(
                     "input",
                     "responses_input_image_count_exceeded",

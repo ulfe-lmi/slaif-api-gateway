@@ -156,8 +156,10 @@ provider event bodies.
 Responses input item arrays follow the same boundary. They are accepted as
 stateless message input with supported roles and string or `input_text` content
 parts. User-message `input_image` URL/data URL parts require explicit
-route/model `capabilities.responses.image_input=true` metadata, are capped, and
-are counted for conservative admission estimates. SLAIF does not fetch image
+route/model `capabilities.responses.image_input=true` metadata, retain byte
+caps, and are counted for conservative admission estimates. Image-count
+acceptance defaults to the upstream model (`RESPONSES_MAX_IMAGE_PARTS_PER_REQUEST=0`);
+a positive value adds an explicit operator count cap. SLAIF does not fetch image
 URLs, decode image pixels, rewrite data URLs, store/log raw image URLs, image
 data URLs, or base64 payloads, or treat image bytes as invoice-grade billing
 truth. User-message `input_file` HTTPS `file_url` parts and safe `filename`

@@ -162,7 +162,7 @@ CONFIG_INSPECTION_MEANINGS: tuple[tuple[str, str, str], ...] = (
     ("RESPONSES_MAX_INSTRUCTIONS_BYTES", "bytes",
      "maximum instructions bytes per Responses request"),
     ("RESPONSES_MAX_IMAGE_PARTS_PER_REQUEST", "count",
-     "maximum image parts per Responses request"),
+     "optional maximum image parts per Responses request; 0 delegates count to the model"),
     ("RESPONSES_MAX_IMAGE_URL_BYTES", "bytes",
      "maximum length of one Responses image URL"),
     ("RESPONSES_MAX_IMAGE_DATA_URL_BYTES", "bytes",

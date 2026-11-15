@@ -674,6 +674,10 @@ Rules:
 - Image input requires explicit route/model
   `capabilities.responses.image_input=true` metadata. Chat Completions image
   capability does not enable Responses image input.
+- Image count is decided by the upstream model by default, including images
+  replayed in a Codex conversation. `RESPONSES_MAX_IMAGE_PARTS_PER_REQUEST=0`
+  disables the gateway count cap; an operator may opt into a positive cap.
+  Image byte bounds, modality gates, and token/context accounting still apply.
 - File input requires explicit route/model
   `capabilities.responses.file_input=true` metadata. Chat Completions file
   capability and Responses image-input capability do not enable Responses file

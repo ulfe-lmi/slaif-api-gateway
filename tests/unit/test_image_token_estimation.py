@@ -251,6 +251,35 @@ def test_image_padding_no_longer_requires_a_400k_window_for_100k_class_history(m
     assert error.value.error_code == "responses_codex_context_window_exceeded"
 
 
+@pytest.mark.parametrize("count", [17, 65, 129])
+def test_default_image_count_is_model_owned_and_each_image_is_metered(media, count):
+    settings = Settings()
+    assert settings.RESPONSES_MAX_IMAGE_PARTS_PER_REQUEST == 0
+    body = {"model": "synthetic", "input": [{"role": "user", "content": [
+        {"type": "input_text", "text": "Describe these images."},
+        *[{"type": "input_image", "image_url": _url(_png())} for _ in range(count)],
+    ]}]}
+    raw = ResponsesRequestPolicy(settings).apply(
+        body, allow_codex_extended_limits=True, defer_media_limit=True
+    )
+    result = apply_media_input_estimate(
+        raw, route_capabilities={"media_input_estimation": media}, input_ceiling=196608
+    )
+    assert result.estimated_media_input_tokens == count * 320
+    assert result.effective_body["input"] == body["input"]
+    # An explicitly requested operator count cap remains opt-in.
+    with pytest.raises(ResponsesRequestPolicyError) as error:
+        ResponsesRequestPolicy(settings.model_copy(update={
+            "RESPONSES_MAX_IMAGE_PARTS_PER_REQUEST": 16,
+        })).apply(body, allow_codex_extended_limits=True, defer_media_limit=True)
+    assert error.value.error_code == "responses_input_image_count_exceeded"
+
+
+def test_negative_image_count_limit_is_invalid():
+    with pytest.raises(ValueError, match="RESPONSES_MAX_IMAGE_PARTS_PER_REQUEST"):
+        Settings(RESPONSES_MAX_IMAGE_PARTS_PER_REQUEST=-1)
+
+
 def test_small_thin_images_include_minimum_resize_alignment(media):
     policy = image_estimation.parse_image_geometry(media["image_geometry"], 16896)
     assert policy.estimate(_url(_png(2, 80)), 16896) == 166
