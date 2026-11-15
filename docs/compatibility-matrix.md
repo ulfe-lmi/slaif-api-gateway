@@ -1,5 +1,11 @@
 # Compatibility Matrix
 
+The route editor's **Enable Codex** control configures explicit access through
+the existing generic upstream adapter; it does not confer model qualification
+or key permissions. It reuses imported pricing, preserves advanced accounting,
+and can restore its managed settings. The generic function-tool preset and
+credential separation are described in the [dashboard workflow](upstream-llm-adapter.md#enable-codex-from-the-dashboard).
+
 > **Authority:** Current endpoint-family support and evidence summary
 > **Detail:** Field behavior lives in the OpenAI and Responses contracts
 

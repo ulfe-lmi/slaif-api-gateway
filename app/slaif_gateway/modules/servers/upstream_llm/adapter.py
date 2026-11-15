@@ -36,13 +36,26 @@ def normalize_instructions(body: dict, placement: str) -> dict:
 class ConfiguredUpstreamLLMAdapter(LocalCodingAdapter):
     """Profiles configure existing transport operations; they grant no authority."""
 
+    def _forbidden_service_secret_values(self) -> tuple[str | None, ...]:
+        # This transport deliberately uses the selected provider credential.
+        # Gateway authentication/encryption and identity secrets stay separate.
+        return (
+            self._settings.TOKEN_HMAC_SECRET_V1,
+            self._settings.TOKEN_HMAC_SECRET,
+            self._settings.ADMIN_SESSION_SECRET,
+            self._settings.ONE_TIME_SECRET_ENCRYPTION_KEY,
+        )
+
     def __init__(self, settings, *, route_capabilities=None, **kwargs):
         self.profile = validate_route(route_capabilities)
         super().__init__(settings, route_capabilities=route_capabilities, **kwargs)
 
     def _prepare(self, request):
         body = normalize_instructions(dict(request.body), self.profile.instruction_placement)
-        codec = VLLMToolCodec(body) if self.profile.tool_encoding == "native_vllm" else None
+        codec = (
+            VLLMToolCodec(body, portable_names=self.profile.tool_encoding == "function_tools")
+            if self.profile.tool_encoding in {"native_vllm", "function_tools"} else None
+        )
         return replace(request, body=codec.body if codec is not None else body), codec
 
     async def forward_response(self, request):

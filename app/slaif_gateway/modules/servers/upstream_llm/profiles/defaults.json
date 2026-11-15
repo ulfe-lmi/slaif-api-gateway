@@ -2,6 +2,12 @@
   "schema_version": 1,
   "profiles": [
     {
+      "profile_id": "responses-functions-v1",
+      "revision": 1,
+      "instruction_placement": "preserve",
+      "tool_encoding": "function_tools"
+    },
+    {
       "profile_id": "responses-passthrough-v1",
       "revision": 1,
       "instruction_placement": "preserve",

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 import re
 from dataclasses import dataclass, field as dataclass_field
@@ -95,7 +96,8 @@ class _Call:
 
 
 class VLLMToolCodec:
-    def __init__(self, body):
+    def __init__(self, body, *, portable_names=False):
+        self.portable_names = portable_names
         self.body = copy.deepcopy(dict(body))
         self.original_tools = copy.deepcopy(self.body.get("tools", []))
         self.tools: dict[str, tuple[str | None, str, str]] = {}
@@ -119,7 +121,7 @@ class VLLMToolCodec:
                     or kind not in {"function", "custom"}
                 ):
                     raise ProviderRequestError(provider="local-coding-vLLM")
-                wire_name = f"{namespace}.{name}" if namespace else name
+                wire_name = self._wire_name(namespace, name)
                 if wire_name in self.tools or len(self.tools) >= 256:
                     raise ProviderRequestError(provider="local-coding-vLLM")
                 self.tools[wire_name] = (namespace, name, kind)
@@ -142,6 +144,9 @@ class VLLMToolCodec:
                     }
                 else:
                     converted = dict(tool, name=wire_name)
+                if portable_names:
+                    canonical_name = f"{namespace}.{name}" if namespace else name
+                    converted["description"] = f"Tool {canonical_name}. " + converted.get("description", "")
                 flat.append(converted)
         if "tools" in self.body:
             self.body["tools"] = flat
@@ -163,7 +168,7 @@ class VLLMToolCodec:
                 item["type"] = "function_call_output"
             elif kind in {"custom_tool_call", "function_call"}:
                 namespace = item.pop("namespace", None)
-                wire_name = f"{namespace}.{item.get('name')}" if namespace else item.get("name")
+                wire_name = self._wire_name(namespace, item.get("name"))
                 declaration = self.tools.get(wire_name)
                 expected = "custom" if kind == "custom_tool_call" else "function"
                 if declaration is None or declaration[2] != expected:
@@ -174,6 +179,17 @@ class VLLMToolCodec:
                     item["arguments"] = json.dumps({"input": item.pop("input")}, ensure_ascii=True)
                 else:
                     _function_arguments(item.get("arguments"), replay=True)
+
+    def _wire_name(self, namespace, name):
+        canonical = f"{namespace}.{name}" if namespace else name
+        if not self.portable_names:
+            return canonical
+        if not isinstance(name, str) or (namespace is not None and not isinstance(namespace, str)):
+            raise ProviderRequestError(provider="local-coding-vLLM")
+        identity = json.dumps([namespace, name], ensure_ascii=True, separators=(",", ":"))
+        suffix = hashlib.sha256(identity.encode("ascii")).hexdigest()[:24]
+        label = re.sub(r"[^A-Za-z0-9_]", "_", canonical)[:32]
+        return f"tool_{label}_{suffix}"
 
     def item(self, raw, *, added=False):
         if not isinstance(raw, dict) or raw.get("type") != "function_call":

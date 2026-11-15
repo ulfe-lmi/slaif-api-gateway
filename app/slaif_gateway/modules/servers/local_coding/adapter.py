@@ -146,15 +146,7 @@ class LocalCodingAdapter(ProviderAdapter):
                 error_code="local_coding_secret_roles_not_separate",
             )
 
-        for value in (
-            self._settings.TOKEN_HMAC_SECRET_V1,
-            self._settings.TOKEN_HMAC_SECRET,
-            self._settings.ADMIN_SESSION_SECRET,
-            self._settings.ONE_TIME_SECRET_ENCRYPTION_KEY,
-            self._settings.OPENAI_UPSTREAM_API_KEY,
-            self._settings.OPENROUTER_API_KEY,
-            self._settings.OPENAI_ADMIN_DISCOVERY_API_KEY,
-        ):
+        for value in self._forbidden_service_secret_values():
             if (
                 isinstance(value, str)
                 and value
@@ -165,6 +157,17 @@ class LocalCodingAdapter(ProviderAdapter):
                     provider=self.provider_name,
                     error_code="local_coding_secret_roles_not_separate",
                 )
+
+    def _forbidden_service_secret_values(self) -> tuple[str | None, ...]:
+        return (
+            self._settings.TOKEN_HMAC_SECRET_V1,
+            self._settings.TOKEN_HMAC_SECRET,
+            self._settings.ADMIN_SESSION_SECRET,
+            self._settings.ONE_TIME_SECRET_ENCRYPTION_KEY,
+            self._settings.OPENAI_UPSTREAM_API_KEY,
+            self._settings.OPENROUTER_API_KEY,
+            self._settings.OPENAI_ADMIN_DISCOVERY_API_KEY,
+        )
 
     def _configured_api_key(self) -> str | None:
         """Use only the provider row's Local Coding service credential."""
