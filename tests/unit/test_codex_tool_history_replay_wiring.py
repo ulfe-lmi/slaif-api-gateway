@@ -809,10 +809,74 @@ def test_preflight_estimate_refuses_before_admission():
             route_capabilities=capabilities(),
             input_ceiling=1050000,
         )
-    assert exc.value.error_code == "responses_codex_tool_wire_invalid"
+    # Precise fixed representability code passes the policy wrapper; the
+    # generic wire refusal is reserved for other preparation failures.
+    assert exc.value.error_code == "upstream_llm_bindings_placement_conflict"
+    assert exc.value.status_code == 400
+    assert exc.value.param == "input"
+    assert "reorders developer/system messages" in exc.value.safe_message
     assert "late ordinary instruction" not in str(exc.value)
 
 
+def test_preflight_wrapper_preserves_known_wire_codes_and_generic_fallback(monkeypatch):
+    from slaif_gateway.services import responses_request_policy as policy_module
+
+    body = base_model()
+    body["input"] = [
+        decl(ns("functions", fn("alpha")), item_id="d1"),
+        call("alpha", "call-1", id_="fc-1"),
+        out("call-1"),
+    ]
+    result, _ = apply_body(body)
+
+    def refuse(error_code, safe_message):
+        def fake(upstream_body, route_capabilities, tool_call_bindings):
+            raise ProviderRequestError(
+                safe_message,
+                provider="local-coding-vLLM",
+                status_code=400,
+                error_type="invalid_request_error",
+                error_code=error_code,
+            )
+
+        return fake
+
+    monkeypatch.setattr(
+        policy_module,
+        "_codex_positional_prepared_body",
+        refuse(
+            "vllm_native_wire_identity_collision",
+            "Two distinct historical tool identities share one native "
+            "wire name and cannot be represented.",
+        ),
+    )
+    with pytest.raises(ResponsesRequestPolicyError) as collision:
+        apply_codex_positional_prepared_estimate(
+            result,
+            upstream_body=dict(result.effective_body),
+            route_capabilities=CAPS,
+            input_ceiling=1050000,
+        )
+    assert collision.value.error_code == "vllm_native_wire_identity_collision"
+    assert collision.value.status_code == 400
+    assert collision.value.param == "tools"
+    assert "wire name" in collision.value.safe_message
+
+    monkeypatch.setattr(
+        policy_module,
+        "_codex_positional_prepared_body",
+        refuse("unknown_transport_failure", "fixed safe transport text"),
+    )
+    with pytest.raises(ResponsesRequestPolicyError) as generic:
+        apply_codex_positional_prepared_estimate(
+            result,
+            upstream_body=dict(result.effective_body),
+            route_capabilities=CAPS,
+            input_ceiling=1050000,
+        )
+    assert generic.value.error_code == "responses_codex_tool_wire_invalid"
+    assert generic.value.param == "tools"
+    assert "unknown_transport_failure" not in str(generic.value)
 def load_profiles_snapshot():
     from slaif_gateway.modules.servers.upstream_llm.profiles import load_profiles
 

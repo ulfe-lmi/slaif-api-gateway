@@ -5416,6 +5416,14 @@ def _codex_positional_prepared_estimate_bytes(
     return total, non_message, tuple(non_message_fields)
 
 
+_PREPARED_WIRE_CODE_PASS_THROUGH = frozenset(
+    {
+        "upstream_llm_bindings_placement_conflict",
+        "vllm_native_wire_identity_collision",
+    }
+)
+
+
 def apply_codex_positional_prepared_estimate(
     policy_result,
     *,
@@ -5449,13 +5457,28 @@ def apply_codex_positional_prepared_estimate(
         prepared_body = _codex_positional_prepared_body(
             upstream_body, route_capabilities, facts.call_bindings
         )
-    except (
-        ProviderConfigurationError,
-        ProviderRequestError,
-        TypeError,
-        ValueError,
-        AttributeError,
-    ) as exc:
+    except ProviderRequestError as exc:
+        if exc.error_code in _PREPARED_WIRE_CODE_PASS_THROUGH:
+            # Known fixed representability law: surface the precise safe
+            # compatibility code (its fixed safe message only) so callers
+            # can distinguish the refusal cause; no raw provider message
+            # or request content crosses this wrapper.
+            param = (
+                "input"
+                if exc.error_code == "upstream_llm_bindings_placement_conflict"
+                else "tools"
+            )
+            raise ResponsesRequestPolicyError(
+                exc.safe_message,
+                param=param,
+                error_code=exc.error_code,
+            ) from exc
+        raise ResponsesRequestPolicyError(
+            "The prepared Codex tool history body cannot be represented by the selected route transport.",
+            param="tools",
+            error_code="responses_codex_tool_wire_invalid",
+        ) from exc
+    except (ProviderConfigurationError, TypeError, ValueError, AttributeError) as exc:
         raise ResponsesRequestPolicyError(
             "The prepared Codex tool history body cannot be represented by the selected route transport.",
             param="tools",
