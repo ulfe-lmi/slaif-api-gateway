@@ -414,6 +414,51 @@ def codex_0162_lower_initial_additional_tools(
     lowered["input"] = [copy.deepcopy(item) for item in input_value[1:]]
     return lowered
 
+def _materialize_bound_call_namespace(
+    item: dict[str, object],
+    bindings: Mapping[str, tuple[str | None, str, str]],
+) -> dict[str, object]:
+    """Restore the immutable per-call namespace on namespace-less calls.
+
+    A validated function/custom call that omits ``namespace`` resolved
+    against the catalog active at its own position; once the validated
+    declarations are compiled out of the forwarded body, that historical
+    identity must still be forwarded.  The bound namespace comes ONLY
+    from the immutable ``facts.call_bindings`` entry keyed by the
+    original ``call_id`` (with name/kind checked against the item) —
+    never the current catalog union.  Only the standard protocol
+    ``namespace`` field is materialized; no new metadata, authority, or
+    permissions are added.  Calls with an explicit namespace are
+    unchanged; an unbound or identity-mismatched call fails closed.
+    """
+    item_type = item.get("type")
+    if item_type not in {"function_call", "custom_tool_call"}:
+        return item
+    if item.get("namespace") is not None:
+        return item
+    call_id = item.get("call_id")
+    if not isinstance(call_id, str):
+        return item
+    bound = bindings.get(call_id)
+    if bound is None:
+        raise _error(
+            "The Codex 0.162 positional tool history binding is unavailable for a validated call",
+            "codex_0162_tool_declaration",
+        )
+    bound_namespace, bound_name, bound_kind = bound
+    if (
+        bound_name != item.get("name")
+        or bound_kind != ("custom" if item_type == "custom_tool_call" else "function")
+    ):
+        raise _error(
+            "The Codex 0.162 positional tool history call identity does not match its binding",
+            "codex_0162_tool_declaration",
+        )
+    if bound_namespace is not None:
+        item["namespace"] = bound_namespace
+    return item
+
+
 def codex_0162_lower_positional_tool_history(
     effective_body: Mapping[str, object],
     facts: object,
@@ -430,6 +475,13 @@ def codex_0162_lower_positional_tool_history(
     notice, and the exact pinned incremental hint immediately preceding a
     declaration — while every other input item (ordinary history, tool
     calls, outputs, IDs) is preserved in order.
+    Historical function/custom calls that omit ``namespace`` are
+    forwarded with their bound namespace materialized from the immutable
+    ``facts.call_bindings`` (see
+    ``_materialize_bound_call_namespace``), so distinct histories that
+    later converge on the same final catalog still produce distinct
+    provider bodies.  The canonical incoming body and facts are never
+    mutated; args, results, IDs, and relative order are preserved.
     Empty namespace groups (every member removed) are omitted.  A body
     without declaration items is returned unchanged; an existing
     non-empty top-level ``tools`` field or missing/foreign facts fail
@@ -507,11 +559,19 @@ def codex_0162_lower_positional_tool_history(
     # incremental hint immediately preceding a declaration.  Every other
     # item (ordinary history, calls, outputs, IDs) is preserved in order.
     compiled_out = codex_positional_compiled_out_positions(input_value, facts)
-    lowered["input"] = [
-        copy.deepcopy(item)
-        for index, item in enumerate(input_value)
-        if index not in compiled_out
-    ]
+    bindings = getattr(facts, "call_bindings", None)
+    if bindings is None:
+        bindings = {}
+    lowered_input: list[object] = []
+    for index, item in enumerate(input_value):
+        if index in compiled_out:
+            continue
+        copied = copy.deepcopy(item)
+        if isinstance(copied, Mapping):
+            lowered_input.append(_materialize_bound_call_namespace(dict(copied), bindings))
+        else:
+            lowered_input.append(copied)
+    lowered["input"] = lowered_input
     if lowered_tools:
         lowered["tools"] = lowered_tools
     return lowered

@@ -37,6 +37,7 @@ from slaif_gateway.schemas.providers import (
 )
 from slaif_gateway.services import responses_gateway as gateway
 from slaif_gateway.services.responses_request_policy import (
+    _codex_positional_prepared_body,
     ResponsesRequestPolicy,
     ResponsesRequestPolicyError,
     _codex_positional_prepared_estimate_bytes,
@@ -688,6 +689,9 @@ def test_lowering_preserves_entire_ordinary_history_and_mutates_nothing():
         "name": "alpha",
         "id": "fc-1",
         "arguments": "{}",
+        # Bound namespace materialized in the provider copy (the
+        # canonical incoming item omits it).
+        "namespace": "functions",
     }
     assert remaining[3] == {
         "type": "function_call_output",
@@ -1149,3 +1153,134 @@ def test_core_marker_check_refuses_fixed_502():
     )
     assert unmarked.safe_rejection_code is None
     gateway._reject_settled_codec_rejection(unmarked)
+
+
+# --- E. bound-namespace materialization in the provider copy -------------
+
+
+def test_lowering_materializes_bound_namespace_across_distinct_histories():
+    # Two valid histories differing ONLY in the historical namespace
+    # (later removed, identical final catalog, call omits namespace)
+    # must produce DIFFERENT provider bodies: the bound namespace is
+    # materialized from the immutable per-call facts, never the current
+    # catalog union.
+    def history(first_ns):
+        body = base_model()
+        body["input"] = [
+            decl(ns("functions", fn("kept")), ns(first_ns, fn("read")), item_id="d1"),
+            call("read", "call-1", id_="fc-1"),
+            out("call-1"),
+            notice(tools={(first_ns, "read")}),
+            decl(ns("functions", fn("kept")), item_id="d2"),
+            user("close"),
+        ]
+        return apply_body(body)
+
+    result_a, _ = history("mcp__codex_apps__space")
+    result_b, _ = history("mcp__codex_apps__github")
+    facts_a = result_a.codex_tool_history
+    facts_b = result_b.codex_tool_history
+    # Policy facts correctly differ per history.
+    assert facts_a.call_bindings["call-1"][0] == "mcp__codex_apps__space"
+    assert facts_b.call_bindings["call-1"][0] == "mcp__codex_apps__github"
+
+    lowered_a = codex_0162_lower_positional_tool_history(result_a.effective_body, facts_a)
+    lowered_b = codex_0162_lower_positional_tool_history(result_b.effective_body, facts_b)
+    call_a = next(i for i in lowered_a["input"] if i.get("type") == "function_call")
+    call_b = next(i for i in lowered_b["input"] if i.get("type") == "function_call")
+    assert call_a["namespace"] == "mcp__codex_apps__space"
+    assert call_b["namespace"] == "mcp__codex_apps__github"
+    assert lowered_a != lowered_b
+    # Final catalog identical in both (functions.kept only).
+    assert [g["name"] for g in lowered_a["tools"]] == ["functions"]
+    assert [g["name"] for g in lowered_b["tools"]] == ["functions"]
+    assert {t["name"] for t in lowered_a["tools"][0]["tools"]} == {"kept"}
+
+
+def test_lowering_bound_namespace_codec_preserve_parity_and_invariants():
+    from slaif_gateway.modules.servers.upstream_llm.profiles import (
+        bootstrap_upstream_llm_profiles,
+    )
+
+    bootstrap_upstream_llm_profiles()
+    body = base_model()
+    body["input"] = [
+        decl(ns("functions", fn("alpha")), item_id="d1"),
+        call("alpha", "call-1", id_="fc-1"),
+        out("call-1"),
+    ]
+    result, _ = apply_body(body)
+    facts = result.codex_tool_history
+    original_body = copy.deepcopy(result.effective_body)
+    lowered = codex_0162_lower_positional_tool_history(result.effective_body, facts)
+    # Canonical incoming body and facts are never mutated.
+    assert result.effective_body == original_body
+    assert "namespace" not in original_body["input"][1]
+
+    call_item = next(i for i in lowered["input"] if i.get("type") == "function_call")
+    assert call_item["namespace"] == "functions"
+
+    # Codec parity: the resolved namespace keeps the SAME native and
+    # portable wire identities as the binding-driven translation.
+    local_body, local_codec = prepare_vllm_body(
+        lowered, tool_call_bindings=facts.call_bindings
+    )
+    assert {t["name"] for t in local_body["tools"]} == {"functions.alpha"}
+    wire_call = next(i for i in local_body["input"] if i.get("type") == "function_call")
+    assert wire_call["name"] == "functions.alpha"
+    profile = load_profiles_snapshot()["responses-functions-v1"]
+    portable_body, portable_codec = prepare_upstream_llm_body(
+        lowered, profile, tool_call_bindings=facts.call_bindings
+    )
+    portable_name = next(iter({t["name"] for t in portable_body["tools"]}))
+    assert portable_name.startswith("tool_functions_alpha_")
+    assert local_codec is not None and portable_codec is not None
+
+    # Preserve encoding forwards the materialized namespace bytes.
+    preserve_profile = load_profiles_snapshot()["responses-passthrough-v1"]
+    preserve_body, preserve_codec = prepare_upstream_llm_body(
+        dict(lowered), preserve_profile, tool_call_bindings=facts.call_bindings
+    )
+    preserve_call = next(
+        i for i in preserve_body["input"] if i.get("type") == "function_call"
+    )
+    assert preserve_call["namespace"] == "functions"
+    assert preserve_codec is None
+
+    # Estimation input (prepared body) carries the materialized field.
+    prepared = _codex_positional_prepared_body(
+        dict(lowered), capabilities("responses-passthrough-v1"), facts.call_bindings
+    )
+    prepared_call = next(
+        i for i in prepared["input"] if i.get("type") == "function_call"
+    )
+    assert prepared_call["namespace"] == "functions"
+
+
+def test_lowering_bound_namespace_fail_closed_on_tampered_facts_body():
+    from slaif_gateway.modules.contracts import ModuleSelectionError
+
+    body = base_model()
+    body["input"] = [
+        decl(ns("functions", fn("alpha")), item_id="d1"),
+        call("alpha", "call-1", id_="fc-1"),
+        out("call-1"),
+    ]
+    result, _ = apply_body(body)
+    facts = result.codex_tool_history
+
+    mismatched = copy.deepcopy(result.effective_body)
+    for item in mismatched["input"]:
+        if item.get("type") == "function_call":
+            item["name"] = "other"
+    with pytest.raises(ModuleSelectionError) as name_exc:
+        codex_0162_lower_positional_tool_history(mismatched, facts)
+    assert name_exc.value.error_code == "codex_0162_tool_declaration"
+
+    unbound = copy.deepcopy(result.effective_body)
+    for item in unbound["input"]:
+        if item.get("type") == "function_call":
+            item["call_id"] = "call-unbound"
+    with pytest.raises(ModuleSelectionError) as unbound_exc:
+        codex_0162_lower_positional_tool_history(unbound, facts)
+    assert unbound_exc.value.error_code == "codex_0162_tool_declaration"
