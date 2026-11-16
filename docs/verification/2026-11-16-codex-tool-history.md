@@ -217,8 +217,14 @@ inert ID, every validated removal notice, and the EXACT pinned upstream
 incremental hint when it is a standalone developer text immediately
 preceding a validated declaration are compiled out; EVERY other input
 item (ordinary messages, tool calls, outputs, IDs, non-adjacent hints)
-is preserved in order, and the policy representation/facts are never
-mutated.  A non-empty top-level ``tools`` field, missing/foreign facts,
+is preserved in order.  A historical function/custom call that omits
+``namespace`` is forwarded with its bound namespace MATERIALIZED from
+the immutable ``facts.call_bindings`` entry keyed by the original call
+ID (name/kind checked, never the current catalog union), so distinct
+histories that later converge on the same final catalog still produce
+distinct provider bodies; explicit namespaces, args, results, IDs, and
+relative order are unchanged, and the policy representation/facts are
+never mutated.  A non-empty top-level ``tools`` field, missing/foreign facts,
 or non-list input fail closed.  The canonical incoming body remains the
 validation/HMAC/resource/diagnostics representation.
 

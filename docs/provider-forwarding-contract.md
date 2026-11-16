@@ -203,11 +203,17 @@ validated declaration. Every other input item — ordinary messages, tool
 calls, outputs, IDs, and non-adjacent developer text — is preserved in
 order. A non-empty top-level `tools` field, missing or foreign facts, or
 a non-list input fails closed; definitions are deep-copied into the new
-body and the policy representation is never mutated. Historical calls
-are translated per validated binding by the selected transport: native
-vLLM wire names (`namespace.name`) or portable
-`tool_<label>_<sha256-24>` names; `preserve` encodings forward the
-canonical body with no codec.
+body and the policy representation is never mutated. A historical call that omits
+`namespace` is forwarded with its bound namespace materialized in the
+provider copy from the immutable per-call facts (keyed by the original
+call ID, name/kind checked, never the current catalog union), so
+distinct histories that converge on the same final catalog still
+produce distinct provider bodies. The selected transport then
+translates calls per validated binding: native vLLM wire names
+(`namespace.name`) or portable `tool_<label>_<sha256-24>` names — the
+resolved namespace keeps the same wire identity as the implicit
+binding translation — while `preserve` encodings forward the
+materialized namespace with no codec.
 
 Instruction placement is part of the SAME shared pure preparation (run
 by the production adapter and the pre-admission estimate preview): a

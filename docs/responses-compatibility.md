@@ -533,10 +533,14 @@ gateway compiles the validated declaration metadata out of the FORWARDED
 body only — every declaration item and inert ID, every validated removal
 notice, and the exact pinned incremental hint only when it is a
 standalone developer text immediately preceding a validated declaration
-— while preserving every other input item (roles, contents, IDs,
-relative order) and forwarding the FINAL active catalog as top-level
-`tools`; the canonical incoming history remains the validation/HMAC/
-resource representation. A new-mode request with no declarations
+— while
+preserving every other input item (roles, contents, IDs, relative
+order); a historical call that omits `namespace` is forwarded with its
+bound namespace materialized from the immutable per-call facts, so
+distinct histories that converge on the same final catalog still
+produce distinct provider bodies. The FINAL active catalog is
+forwarded as top-level `tools`; the canonical incoming history remains
+the validation/HMAC/resource representation. A new-mode request with no declarations
 materializes an empty active catalog, so any generated tool call is
 denied in non-streaming output and SSE. Replay ownership: every
 validated actual call must yield exactly one candidate (a fixed safe
