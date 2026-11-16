@@ -1459,7 +1459,13 @@ async def test_group_b_owned_history_success_settles_through_real_workflow(
     ]
     assert len(hist_calls) == 1
     assert hist_calls[0]["name"] == removed_name
-    assert hist_calls[0].get("namespace") in (None, "functions")
+    if kind == "llama-preserve":
+        # The preserve identity fix materializes the validated namespace
+        # on the provider copy for namespace-less historical calls.
+        assert hist_calls[0].get("namespace") == "functions"
+    else:
+        # Codec transports carry the identity in the wire name itself.
+        assert hist_calls[0].get("namespace") is None
     hist_outputs = [
         item
         for item in input_items
@@ -1643,3 +1649,132 @@ async def test_profile_migration_15_to_16_preserves_key_replay_and_usage(
     assert await _key_column_snapshot(session, key.id) == before_columns
     assert await _ledger_facts(session, key.id) == before_ledger
     assert await _ref_fingerprints(session, key.id) == before_refs
+
+@pytest.mark.asyncio
+async def test_preserve_wire_bodies_distinct_for_distinct_validated_namespaces(
+    async_test_session: AsyncSession,
+    rev16_client_module: object,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Two namespace-less histories with distinct validated namespaces differ.
+
+    Regression for the preserve identity loss: a client item that omits the
+    namespace must be materialized on the provider copy from the VALIDATED
+    binding, so two histories bound to different namespaces can no longer
+    produce identical preserve wire bodies.
+    """
+    session = async_test_session
+    settings = _group_b_settings()
+    provider = "synthetic-llama"
+    capabilities = {
+        **upstream_route_capabilities("llama-cpp-qwen-v1"),
+        "responses": _RESPONSES_CAPS,
+    }
+
+    captured_bodies: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured_bodies.append(json.loads(request.content))
+        return httpx.Response(
+            200,
+            json={"id": "resp-226b", "output": _SUCCESS_OUTPUT, "usage": _SUCCESS_USAGE},
+            headers={"content-type": "application/json"},
+        )
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    adapter = ConfiguredUpstreamLLMAdapter(
+        settings,
+        route_capabilities=upstream_route_capabilities("llama-cpp-qwen-v1"),
+        api_key=_GROUP_B_SERVICE_TOKEN,
+        http_client=client,
+    )
+
+    async def _db_session(request: object | None = None):
+        yield session
+
+    monkeypatch.setattr(
+        responses_gateway, "_get_db_session_after_auth_header_check", _db_session
+    )
+    monkeypatch.setattr(
+        responses_gateway, "get_provider_adapter", lambda route, cfg: adapter
+    )
+
+    for namespace in ("functions", "clock"):
+        now = datetime.now(UTC)
+        owner, cohort, key = await _seed_key(
+            session,
+            pin=_pin(_REV16_VERSION, _REV16_DIGEST),
+            allowed_providers=(provider,),
+        )
+        ledger = await _seed_ledger(session, key=key, owner=owner, cohort=cohort, now=now)
+        route = await ModelRoutesRepository(session).create_model_route(
+            requested_model=f"codex-226b-{uuid.uuid4().hex}",
+            provider=provider,
+            upstream_model="synthetic-upstream",
+            endpoint="/v1/responses",
+        )
+        await PricingRulesRepository(session).create_pricing_rule(
+            provider=provider,
+            upstream_model="synthetic-upstream",
+            valid_from=now - timedelta(minutes=1),
+            endpoint="/v1/responses",
+            currency="EUR",
+            input_price_per_1m=_GROUP_B_INPUT_PRICE,
+            output_price_per_1m=_GROUP_B_OUTPUT_PRICE,
+        )
+        candidate = (
+            CodexReplayRequestCandidate(
+                item_kind="function_call",
+                item_id="fc-1",
+                call_id="call-1",
+                tool_namespace=namespace,
+                tool_name="read",
+            ),
+        )
+        persisted = await _seed_replay_refs(
+            session, settings=settings, key=key, ledger=ledger, candidates=candidate, route=route, now=now
+        )
+        assert persisted == 1
+
+        async def _resolve_owned_route(_route_id=route.id, **_kwargs: object):
+            return _route_probe(_route_id, provider, capabilities)
+
+        monkeypatch.setattr(
+            responses_gateway, "_resolve_responses_route", _resolve_owned_route
+        )
+
+        body = base_model()
+        body["model"] = "synthetic-codex-model"
+        body["store"] = False
+        body["input"] = [
+            decl(ns(namespace, fn("read")), item_id="d1"),
+            call("read", "call-1", id_="fc-1"),  # namespace omitted by the client
+            out("call-1"),
+            user("bounded"),
+        ]
+
+        response = await handle_response_create(
+            payload=ResponsesCreateRequest.model_validate(body),
+            authenticated_key=_auth_key(key),
+            settings=settings,
+        )
+        assert response.status_code == 200
+
+    assert len(captured_bodies) == 2
+
+    def _hist_call(wire_body: dict) -> dict:
+        matches = [
+            item
+            for item in wire_body["input"]
+            if isinstance(item, dict)
+            and item.get("type") == "function_call"
+            and item.get("call_id") == "call-1"
+        ]
+        assert len(matches) == 1
+        return matches[0]
+
+    assert _hist_call(captured_bodies[0])["namespace"] == "functions"
+    assert _hist_call(captured_bodies[1])["namespace"] == "clock"
+    # Distinct validated identities must give distinct preserve wire bodies.
+    assert captured_bodies[0] != captured_bodies[1]
+    await client.aclose()
