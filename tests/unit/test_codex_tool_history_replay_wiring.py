@@ -26,7 +26,10 @@ from slaif_gateway.modules.codex_tool_history import (
 )
 from slaif_gateway.modules.servers.local_coding_vllm.adapter import prepare_vllm_body
 from slaif_gateway.modules.servers.upstream_llm.adapter import prepare_upstream_llm_body
-from slaif_gateway.providers.errors import ProviderResponseParseError
+from slaif_gateway.providers.errors import (
+    ProviderRequestError,
+    ProviderResponseParseError,
+)
 from slaif_gateway.schemas.providers import (
     ProviderRequest,
     ProviderResponse,
@@ -723,6 +726,91 @@ def test_prepared_bodies_for_both_backends():
     assert portable_name.startswith("tool_functions_alpha_")
     assert portable_name != "functions.alpha"
     assert local_codec is not None and portable_codec is not None
+
+
+def test_pure_preview_and_transport_share_placement_refusal():
+    # Late ordinary developer text after history: an order-changing
+    # profile must refuse identically in the pure pre-admission preview
+    # and in the production transport (same fixed safe code).
+    body = base_model()
+    body["input"] = [
+        decl(ns("functions", fn("alpha")), item_id="d1"),
+        call("alpha", "call-1", id_="fc-1"),
+        out("call-1"),
+        user("close"),
+        {"role": "developer", "content": "late ordinary instruction"},
+    ]
+    result, _ = apply_body(body)
+    lowered = codex_0162_lower_positional_tool_history(
+        result.effective_body, result.codex_tool_history
+    )
+    profile = load_profiles_snapshot()["llama-cpp-qwen-v1"]
+    assert profile.instruction_placement == "leading_system_developer"
+    with pytest.raises(ProviderRequestError) as exc:
+        prepare_upstream_llm_body(
+            dict(lowered), profile, tool_call_bindings=result.codex_tool_history.call_bindings
+        )
+    assert exc.value.error_code == "upstream_llm_bindings_placement_conflict"
+    assert exc.value.status_code == 400
+    assert "late ordinary instruction" not in str(exc.value)
+
+    # Prefix-only instructions remain representable on the same profile.
+    prefix_body = base_model()
+    prefix_body["input"] = [
+        {"role": "developer", "content": "leading instruction"},
+        decl(ns("functions", fn("alpha")), item_id="d1"),
+        call("alpha", "call-1", id_="fc-1"),
+        out("call-1"),
+        user("close"),
+    ]
+    prefix_result, _ = apply_body(prefix_body)
+    prefix_lowered = codex_0162_lower_positional_tool_history(
+        prefix_result.effective_body, prefix_result.codex_tool_history
+    )
+    prepared, _ = prepare_upstream_llm_body(
+        dict(prefix_lowered),
+        profile,
+        tool_call_bindings=prefix_result.codex_tool_history.call_bindings,
+    )
+    assert prepared["input"][0] == {"role": "developer", "content": "leading instruction"}
+
+    # Legacy bindings=None keeps the existing reordering behavior.
+    legacy_prepared, _ = prepare_upstream_llm_body(
+        dict(lowered), profile, tool_call_bindings=None
+    )
+    assert legacy_prepared["input"][0] == {
+        "role": "developer",
+        "content": "late ordinary instruction",
+    }
+
+
+def test_preflight_estimate_refuses_before_admission():
+    from slaif_gateway.modules.servers.upstream_llm.profiles import (
+        bootstrap_upstream_llm_profiles,
+    )
+
+    body = base_model()
+    body["input"] = [
+        decl(ns("functions", fn("alpha")), item_id="d1"),
+        call("alpha", "call-1", id_="fc-1"),
+        out("call-1"),
+        user("close"),
+        {"role": "developer", "content": "late ordinary instruction"},
+    ]
+    result, _ = apply_body(body)
+    lowered = codex_0162_lower_positional_tool_history(
+        result.effective_body, result.codex_tool_history
+    )
+    bootstrap_upstream_llm_profiles()
+    with pytest.raises(ResponsesRequestPolicyError) as exc:
+        apply_codex_positional_prepared_estimate(
+            result,
+            upstream_body=lowered,
+            route_capabilities=capabilities(),
+            input_ceiling=1050000,
+        )
+    assert exc.value.error_code == "responses_codex_tool_wire_invalid"
+    assert "late ordinary instruction" not in str(exc.value)
 
 
 def load_profiles_snapshot():

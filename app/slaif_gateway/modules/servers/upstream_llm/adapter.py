@@ -63,6 +63,7 @@ def prepare_upstream_llm_body(
     profile,
     *,
     tool_call_bindings=None,
+    provider_name: str = "local-coding",
 ) -> tuple[dict, object]:
     """Pure request-body preparation for one validated upstream LLM profile.
 
@@ -70,7 +71,30 @@ def prepare_upstream_llm_body(
     both run the exact deterministic transformation (instruction placement
     plus codec translation) with no provider, credential, HTTP, or
     route-lookup machinery.  Returns ``(prepared body, codec or None)``.
+    A lifecycle request (non-``None`` bindings) on a profile that
+    reorders developer/system messages is refused here, before any
+    normalization, with the same fixed safe code the transport raises;
+    an input whose instructions already form the leading prefix is
+    untouched by the placement and remains representable.  Legacy
+    ``bindings=None`` requests are untouched.
     """
+    if (
+        tool_call_bindings is not None
+        and profile.instruction_placement == "leading_system_developer"
+        and not instructions_already_leading(body.get("input"))
+    ):
+        # Lifecycle bindings name historical calls in temporal order.
+        # Reordering developer/system text would move removal notices
+        # ahead of the tool history they describe, so an actual
+        # order-changing transition is refused exactly.
+        raise ProviderRequestError(
+            "Codex tool-call bindings require an order-preserving instruction "
+            "placement; this profile reorders developer/system messages.",
+            provider=provider_name,
+            status_code=400,
+            error_type="invalid_request_error",
+            error_code="upstream_llm_bindings_placement_conflict",
+        )
     prepared = normalize_instructions(dict(body), profile.instruction_placement)
     if profile.tool_encoding in {"native_vllm", "function_tools"}:
         codec = VLLMToolCodec(
@@ -100,29 +124,11 @@ class ConfiguredUpstreamLLMAdapter(LocalCodingAdapter):
         super().__init__(settings, route_capabilities=route_capabilities, **kwargs)
 
     def _prepare(self, request):
-        if (
-            request.codex_tool_call_bindings is not None
-            and self.profile.instruction_placement == "leading_system_developer"
-            and not instructions_already_leading(request.body.get("input"))
-        ):
-            # Lifecycle bindings name historical calls in temporal order.
-            # Reordering developer/system text would move removal notices
-            # ahead of the tool history they describe, so an actual
-            # order-changing transition is refused exactly; an input whose
-            # instructions already form the leading prefix is untouched by
-            # the placement and remains representable.
-            raise ProviderRequestError(
-                "Codex tool-call bindings require an order-preserving instruction "
-                "placement; this profile reorders developer/system messages.",
-                provider=self.provider_name,
-                status_code=400,
-                error_type="invalid_request_error",
-                error_code="upstream_llm_bindings_placement_conflict",
-            )
         body, codec = prepare_upstream_llm_body(
             request.body,
             self.profile,
             tool_call_bindings=request.codex_tool_call_bindings,
+            provider_name=self.provider_name,
         )
         return replace(request, body=body), codec
 
