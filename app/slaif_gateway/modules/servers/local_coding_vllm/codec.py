@@ -83,6 +83,80 @@ def _json_input(arguments: str) -> str:
     return value["input"]
 
 
+def vllm_wire_name(namespace, name, *, portable_names: bool = False) -> str:
+    """Deterministic wire identity for one declared (namespace, name)."""
+    canonical = f"{namespace}.{name}" if namespace else name
+    if not portable_names:
+        return canonical
+    if not isinstance(name, str) or (namespace is not None and not isinstance(namespace, str)):
+        raise ProviderRequestError(provider="local-coding-vLLM")
+    identity = json.dumps([namespace, name], ensure_ascii=True, separators=(",", ":"))
+    suffix = hashlib.sha256(identity.encode("ascii")).hexdigest()[:24]
+    label = re.sub(r"[^A-Za-z0-9_]", "_", canonical)[:32]
+    return f"tool_{label}_{suffix}"
+
+
+def prepare_vllm_wire_tools(
+    original_tools,
+    *,
+    portable_names: bool = False,
+) -> tuple[list, dict]:
+    """Shared pure translation of validated Responses tools to the wire form.
+
+    Returns ``(flat wire tools, wire identity map)``.  The codec and the
+    pre-admission prepared-body estimate both run this exact
+    transformation, so the estimate cannot drift from the representation
+    the transport actually forwards.  Structural failures raise the same
+    content-free ``ProviderRequestError`` the codec raises.
+    """
+    tools: dict[str, tuple[str | None, str, str]] = {}
+    flat: list[dict] = []
+    for group in original_tools:
+        namespace = group.get("name") if group.get("type") == "namespace" else None
+        entries = group.get("tools", []) if namespace is not None else [group]
+        if namespace is not None and (
+            not isinstance(namespace, str) or not _NAME.fullmatch(namespace)
+        ):
+            raise ProviderRequestError(provider="local-coding-vLLM")
+        for tool in entries:
+            name = tool.get("name")
+            kind = tool.get("type")
+            if (
+                not isinstance(name, str)
+                or not _NAME.fullmatch(name)
+                or kind not in {"function", "custom"}
+            ):
+                raise ProviderRequestError(provider="local-coding-vLLM")
+            wire_name = vllm_wire_name(namespace, name, portable_names=portable_names)
+            if wire_name in tools or len(tools) >= 256:
+                raise ProviderRequestError(provider="local-coding-vLLM")
+            tools[wire_name] = (namespace, name, kind)
+            if kind == "custom":
+                # Core client/policy validation approves custom declarations.
+                # Transport preserves each declared raw string via one bounded
+                # JSON input wrapper; it never executes or interprets that text.
+                converted = {
+                    "type": "function",
+                    "name": wire_name,
+                    "description": tool.get("description", "")
+                    + " Pass the raw custom-tool text as input.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"input": {"type": "string"}},
+                        "required": ["input"],
+                        "additionalProperties": False,
+                    },
+                    "strict": False,
+                }
+            else:
+                converted = dict(tool, name=wire_name)
+            if portable_names:
+                canonical_name = f"{namespace}.{name}" if namespace else name
+                converted["description"] = f"Tool {canonical_name}. " + converted.get("description", "")
+            flat.append(converted)
+    return flat, tools
+
+
 @dataclass
 class _Call:
     name: str
@@ -111,50 +185,9 @@ class VLLMToolCodec:
             else None
         )
         self._bound_wire_identities: dict[str, tuple[str | None, str]] = {}
-        flat = []
-        for group in self.original_tools:
-            namespace = group.get("name") if group.get("type") == "namespace" else None
-            entries = group.get("tools", []) if namespace is not None else [group]
-            if namespace is not None and (
-                not isinstance(namespace, str) or not _NAME.fullmatch(namespace)
-            ):
-                raise ProviderRequestError(provider="local-coding-vLLM")
-            for tool in entries:
-                name = tool.get("name")
-                kind = tool.get("type")
-                if (
-                    not isinstance(name, str)
-                    or not _NAME.fullmatch(name)
-                    or kind not in {"function", "custom"}
-                ):
-                    raise ProviderRequestError(provider="local-coding-vLLM")
-                wire_name = self._wire_name(namespace, name)
-                if wire_name in self.tools or len(self.tools) >= 256:
-                    raise ProviderRequestError(provider="local-coding-vLLM")
-                self.tools[wire_name] = (namespace, name, kind)
-                if kind == "custom":
-                    # Core client/policy validation approves custom declarations.
-                    # Transport preserves each declared raw string via one bounded
-                    # JSON input wrapper; it never executes or interprets that text.
-                    converted = {
-                        "type": "function",
-                        "name": wire_name,
-                        "description": tool.get("description", "")
-                        + " Pass the raw custom-tool text as input.",
-                        "parameters": {
-                            "type": "object",
-                            "properties": {"input": {"type": "string"}},
-                            "required": ["input"],
-                            "additionalProperties": False,
-                        },
-                        "strict": False,
-                    }
-                else:
-                    converted = dict(tool, name=wire_name)
-                if portable_names:
-                    canonical_name = f"{namespace}.{name}" if namespace else name
-                    converted["description"] = f"Tool {canonical_name}. " + converted.get("description", "")
-                flat.append(converted)
+        flat, self.tools = prepare_vllm_wire_tools(
+            self.original_tools, portable_names=self.portable_names
+        )
         if "tools" in self.body:
             self.body["tools"] = flat
         for item in self.body.get("input", []):
@@ -178,7 +211,9 @@ class VLLMToolCodec:
                 namespace = item.pop("namespace", None)
                 expected = "custom" if kind == "custom_tool_call" else "function"
                 if self.tool_call_bindings is None:
-                    wire_name = self._wire_name(namespace, item.get("name"))
+                    wire_name = vllm_wire_name(
+                        namespace, item.get("name"), portable_names=self.portable_names
+                    )
                     declaration = self.tools.get(wire_name)
                     if declaration is None or declaration[2] != expected:
                         raise ProviderRequestError(provider="local-coding-vLLM")
@@ -264,7 +299,9 @@ class VLLMToolCodec:
         if bound_name != item.get("name") or bound_kind != expected:
             # The item identity contradicts the core-verified per-call fact.
             raise ProviderRequestError(provider="local-coding-vLLM")
-        wire_name = self._wire_name(bound_namespace, bound_name)
+        wire_name = vllm_wire_name(
+            bound_namespace, bound_name, portable_names=self.portable_names
+        )
         identity = (bound_namespace, bound_name)
         if not self.portable_names:
             previous = self._bound_wire_identities.get(wire_name)
@@ -290,17 +327,6 @@ class VLLMToolCodec:
                     error_code="vllm_native_wire_identity_collision",
                 )
         return wire_name
-
-    def _wire_name(self, namespace, name):
-        canonical = f"{namespace}.{name}" if namespace else name
-        if not self.portable_names:
-            return canonical
-        if not isinstance(name, str) or (namespace is not None and not isinstance(namespace, str)):
-            raise ProviderRequestError(provider="local-coding-vLLM")
-        identity = json.dumps([namespace, name], ensure_ascii=True, separators=(",", ":"))
-        suffix = hashlib.sha256(identity.encode("ascii")).hexdigest()[:24]
-        label = re.sub(r"[^A-Za-z0-9_]", "_", canonical)[:32]
-        return f"tool_{label}_{suffix}"
 
     def item(self, raw, *, added=False):
         if not isinstance(raw, dict) or raw.get("type") != "function_call":

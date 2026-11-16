@@ -9,6 +9,17 @@ from slaif_gateway.modules.servers.local_coding_vllm.contract import parse_vllm_
 from slaif_gateway.providers.errors import ProviderConfigurationError
 
 
+def prepare_vllm_body(body, *, tool_call_bindings=None) -> tuple[dict, VLLMToolCodec]:
+    """Pure native-vLLM request-body preparation shared by adapter and preview.
+
+    The codec constructor is itself the deterministic transformation (no
+    provider, credential, or HTTP machinery); this named seam lets the
+    pre-admission prepared-body estimate run the exact same preparation.
+    """
+    codec = VLLMToolCodec(body, tool_call_bindings=tool_call_bindings)
+    return codec.body, codec
+
+
 class LocalCodingVLLMAdapter(LocalCodingAdapter):
     def __init__(self, settings, *, route_capabilities=None, **kwargs):
         try:
@@ -24,14 +35,14 @@ class LocalCodingVLLMAdapter(LocalCodingAdapter):
         self._local_coding_contract = contract
 
     async def forward_response(self, request):
-        codec = VLLMToolCodec(
+        body, codec = prepare_vllm_body(
             request.body, tool_call_bindings=request.codex_tool_call_bindings
         )
-        result = await super().forward_response(replace(request, body=codec.body))
+        result = await super().forward_response(replace(request, body=body))
         return replace(result, json_body=codec.response(result.json_body))
 
     async def stream_response(self, request):
-        codec = VLLMToolCodec(
+        _, codec = prepare_vllm_body(
             request.body, tool_call_bindings=request.codex_tool_call_bindings
         )
         async for chunk in super().stream_response(replace(request, body=codec.body)):

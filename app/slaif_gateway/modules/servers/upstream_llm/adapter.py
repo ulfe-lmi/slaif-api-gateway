@@ -12,6 +12,32 @@ from slaif_gateway.modules.servers.upstream_llm.profiles import validate_route
 from slaif_gateway.providers.errors import ProviderRequestError
 
 
+def _is_instruction_item(item: object) -> bool:
+    return (
+        isinstance(item, dict)
+        and item.get("type", "message") == "message"
+        and isinstance(item.get("role"), str)
+        and item.get("role") in {"system", "developer"}
+    )
+
+
+def instructions_already_leading(input_items: object) -> bool:
+    """True when no instruction item follows a non-instruction item.
+
+    That is exactly the case in which ``normalize_instructions`` with
+    ``leading_system_developer`` is a no-op on relative order, so a
+    lifecycle-bearing request remains representable on such a profile.
+    """
+    seen_non_instruction = False
+    for item in input_items or []:
+        if _is_instruction_item(item):
+            if seen_non_instruction:
+                return False
+        else:
+            seen_non_instruction = True
+    return True
+
+
 def normalize_instructions(body: dict, placement: str) -> dict:
     """Stable partition of canonical messages; no role/content changes or deletion.
 
@@ -23,15 +49,34 @@ def normalize_instructions(body: dict, placement: str) -> dict:
     if placement == "leading_system_developer" and isinstance(result.get("input"), list):
         instructions, history = [], []
         for item in result["input"]:
-            is_instruction = (
-                isinstance(item, dict)
-                and item.get("type", "message") == "message"
-                and isinstance(item.get("role"), str)
-                and item.get("role") in {"system", "developer"}
-            )
+            is_instruction = _is_instruction_item(item)
             (instructions if is_instruction else history).append(item)
         result["input"] = instructions + history
     return result
+
+
+def prepare_upstream_llm_body(
+    body: dict,
+    profile,
+    *,
+    tool_call_bindings=None,
+) -> tuple[dict, object]:
+    """Pure request-body preparation for one validated upstream LLM profile.
+
+    Shared by the production adapter and the pre-admission core preview so
+    both run the exact deterministic transformation (instruction placement
+    plus codec translation) with no provider, credential, HTTP, or
+    route-lookup machinery.  Returns ``(prepared body, codec or None)``.
+    """
+    prepared = normalize_instructions(dict(body), profile.instruction_placement)
+    if profile.tool_encoding in {"native_vllm", "function_tools"}:
+        codec = VLLMToolCodec(
+            prepared,
+            portable_names=profile.tool_encoding == "function_tools",
+            tool_call_bindings=tool_call_bindings,
+        )
+        return codec.body, codec
+    return prepared, None
 
 
 class ConfiguredUpstreamLLMAdapter(LocalCodingAdapter):
@@ -55,11 +100,14 @@ class ConfiguredUpstreamLLMAdapter(LocalCodingAdapter):
         if (
             request.codex_tool_call_bindings is not None
             and self.profile.instruction_placement == "leading_system_developer"
+            and not instructions_already_leading(request.body.get("input"))
         ):
             # Lifecycle bindings name historical calls in temporal order.
             # Reordering developer/system text would move removal notices
-            # ahead of the tool history they describe, so this combination
-            # is refused exactly instead of reordered silently.
+            # ahead of the tool history they describe, so an actual
+            # order-changing transition is refused exactly; an input whose
+            # instructions already form the leading prefix is untouched by
+            # the placement and remains representable.
             raise ProviderRequestError(
                 "Codex tool-call bindings require an order-preserving instruction "
                 "placement; this profile reorders developer/system messages.",
@@ -68,16 +116,12 @@ class ConfiguredUpstreamLLMAdapter(LocalCodingAdapter):
                 error_type="invalid_request_error",
                 error_code="upstream_llm_bindings_placement_conflict",
             )
-        body = normalize_instructions(dict(request.body), self.profile.instruction_placement)
-        codec = (
-            VLLMToolCodec(
-                body,
-                portable_names=self.profile.tool_encoding == "function_tools",
-                tool_call_bindings=request.codex_tool_call_bindings,
-            )
-            if self.profile.tool_encoding in {"native_vllm", "function_tools"} else None
+        body, codec = prepare_upstream_llm_body(
+            request.body,
+            self.profile,
+            tool_call_bindings=request.codex_tool_call_bindings,
         )
-        return replace(request, body=codec.body if codec is not None else body), codec
+        return replace(request, body=body), codec
 
     async def forward_response(self, request):
         prepared, codec = self._prepare(request)

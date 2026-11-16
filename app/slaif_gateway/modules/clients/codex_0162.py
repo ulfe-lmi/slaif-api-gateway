@@ -66,6 +66,10 @@ from slaif_gateway.modules.contracts import (
     ModuleSelectionError,
     ResponsesClientPolicySpec,
 )
+from slaif_gateway.services.codex_tool_history import (
+    MODE_POSITIONAL_UPDATES,
+    codex_positional_compiled_out_positions,
+)
 
 CODEX_0162_CLIENT_MODULE_ID = "codex-0.162-responses-v1"
 CODEX_0162_CLI_VERSION = "0.162.1"
@@ -303,6 +307,11 @@ def _build_policy_spec(profile: CodexProfileData) -> ResponsesClientPolicySpec:
         allow_empty_visible_reasoning="empty_visible_reasoning" in profile.dialect.features,
         allow_sparse_function_events="sparse_function_events" in profile.dialect.features,
         allow_tool_output_images="tool_output_images" in profile.dialect.features,
+        codex_tool_history_mode=(
+            MODE_POSITIONAL_UPDATES
+            if "codex_tool_history_positional_updates" in profile.dialect.features
+            else None
+        ),
         dialect_rules=profile.dialect,
         custom_client_tools=profile.dialect.custom_tools,
         **dict(profile.replay_limits),
@@ -403,6 +412,108 @@ def codex_0162_lower_initial_additional_tools(
         lowered[key] = copy.deepcopy(value)
     lowered["tools"] = lowered_tools
     lowered["input"] = [copy.deepcopy(item) for item in input_value[1:]]
+    return lowered
+
+def codex_0162_lower_positional_tool_history(
+    effective_body: Mapping[str, object],
+    facts: object,
+) -> Mapping[str, object]:
+    """Lower the FULL validated declaration history to the final active tools.
+
+    Exact bounded provider-declaration translation for the
+    ``codex-0.162-responses-v1`` x local pair under the profile-selected
+    positional-update mode.  The core-validated final active catalog
+    (``facts.active_definitions``) becomes the top-level ``tools``
+    namespace entries in first-seen declaration order; the validated
+    declaration metadata is compiled out of the provider body — every
+    ``additional_tools`` item and its inert ID, every validated removal
+    notice, and the exact pinned incremental hint immediately preceding a
+    declaration — while every other input item (ordinary history, tool
+    calls, outputs, IDs) is preserved in order.
+    Empty namespace groups (every member removed) are omitted.  A body
+    without declaration items is returned unchanged; an existing
+    non-empty top-level ``tools`` field or missing/foreign facts fail
+    closed.  Definitions are deep-copied into the new body; the policy
+    representation and its facts are never mutated.
+    """
+    input_value = effective_body.get("input")
+    if not isinstance(input_value, list):
+        return effective_body
+    if not any(
+        isinstance(item, Mapping) and item.get("type") == "additional_tools"
+        for item in input_value
+    ):
+        return effective_body
+    existing_tools = effective_body.get("tools")
+    if existing_tools not in (None, []):
+        raise _error(
+            "The Codex 0.162 positional tool history cannot be combined with top-level tools",
+            "codex_0162_tool_declaration",
+        )
+    if (
+        facts is None
+        or getattr(facts, "mode", None) != MODE_POSITIONAL_UPDATES
+        or not isinstance(getattr(facts, "active_definitions", None), Mapping)
+    ):
+        raise _error(
+            "The Codex 0.162 positional tool history facts are unavailable",
+            "codex_0162_tool_declaration",
+        )
+    # Last-declared namespace descriptions remain provider-visible
+    # provenance: the latest declaration that named the namespace wins.
+    namespace_descriptions: dict[str, str | None] = {}
+    for item in input_value:
+        if not (isinstance(item, Mapping) and item.get("type") == "additional_tools"):
+            continue
+        for group in item.get("tools") or []:
+            if not isinstance(group, Mapping) or group.get("type") != "namespace":
+                continue
+            name = group.get("name")
+            if not isinstance(name, str):
+                continue
+            # Latest namespace header wins, like the latest tool
+            # definition: omitting the optional description clears it
+            # instead of reviving an older header (including after a
+            # removal/reintroduction).
+            description = group.get("description")
+            namespace_descriptions[name] = (
+                description if isinstance(description, str) else None
+            )
+    namespace_order: list[str] = []
+    tools_by_namespace: dict[str, list[object]] = {}
+    for (namespace, _tool), definition in facts.active_definitions.items():
+        if namespace not in tools_by_namespace:
+            tools_by_namespace[namespace] = []
+            namespace_order.append(str(namespace))
+        tools_by_namespace[str(namespace)].append(copy.deepcopy(definition))
+    lowered_tools: list[dict[str, object]] = []
+    for namespace in namespace_order:
+        tools = tools_by_namespace[namespace]
+        if not tools:
+            continue
+        entry: dict[str, object] = {"type": "namespace", "name": namespace}
+        description = namespace_descriptions.get(namespace)
+        if description is not None:
+            entry["description"] = description
+        entry["tools"] = tools
+        lowered_tools.append(entry)
+    lowered: dict[str, object] = {}
+    for key, value in effective_body.items():
+        if key in ("input", "tools"):
+            continue
+        lowered[key] = copy.deepcopy(value)
+    # Declaration metadata compiled out of the provider body: every
+    # declaration, every validated removal notice, and the exact pinned
+    # incremental hint immediately preceding a declaration.  Every other
+    # item (ordinary history, calls, outputs, IDs) is preserved in order.
+    compiled_out = codex_positional_compiled_out_positions(input_value, facts)
+    lowered["input"] = [
+        copy.deepcopy(item)
+        for index, item in enumerate(input_value)
+        if index not in compiled_out
+    ]
+    if lowered_tools:
+        lowered["tools"] = lowered_tools
     return lowered
 
 
@@ -601,5 +712,6 @@ __all__ = [
     "build_codex_0162_client_module",
     "codex_0162_additional_tools_taxonomy_for",
     "codex_0162_lower_initial_additional_tools",
+    "codex_0162_lower_positional_tool_history",
     "install_codex_0162_client_module",
 ]

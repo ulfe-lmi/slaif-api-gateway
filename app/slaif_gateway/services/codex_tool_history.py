@@ -115,6 +115,15 @@ DEFAULT_REMOVED_NAMESPACES_HEADER = (
 DEFAULT_REMOVED_TOOLS_HEADER = (
     "The following tools are no longer available. Do not call them:"
 )
+# Pinned bundled default tool-update hint (prompts/src/model_messages/
+# incremental_tools.rs, rust-v0.167.1).  Only this EXACT standalone
+# developer text immediately preceding a validated declaration is
+# declaration metadata; any other prose is ordinary history.
+DEFAULT_INCREMENTAL_TOOLS_HINT = (
+    "This is an incremental tools update. Previously declared tools remain "
+    "available for direct calls unless explicitly marked unavailable. If a "
+    "tool is redefined here, its latest definition replaces the earlier one."
+)
 
 # --- stable, content-free rejection reason codes ---------------------------
 
@@ -555,6 +564,58 @@ def parse_codex_removal_notice(
 
 
 # --- bounded chronological analysis -----------------------------------------
+
+
+def codex_positional_compiled_out_positions(
+    canonical_items: Sequence[Mapping[str, Any]],
+    facts: CodexToolHistoryFacts,
+) -> frozenset[int]:
+    """Input positions of declaration metadata compiled out of provider bodies.
+
+    Exactly: (a) every ``additional_tools`` declaration; (b) every validated
+    removal notice (positions recorded in ``facts.steps``); and (c) the EXACT
+    pinned incremental tool-update hint, only when it is a standalone
+    developer text item immediately preceding a declaration.  Nothing else is
+    ever compiled out: ordinary messages (including arbitrary developer
+    prose), tool calls, outputs, IDs, and relative order are preserved.
+    """
+    positions = set(
+        index
+        for index, item in enumerate(canonical_items)
+        if isinstance(item, Mapping) and item.get("type") == "additional_tools"
+    )
+    positions.update(step.position for step in facts.steps if step.kind == "removal")
+    positions.update(codex_positional_hint_positions(canonical_items))
+    return frozenset(positions)
+
+
+def codex_positional_hint_positions(
+    canonical_items: Sequence[Mapping[str, Any]],
+) -> frozenset[int]:
+    """Positions of the EXACT pinned incremental hint, immediately before a declaration.
+
+    The hint is a standalone developer text item whose content is exactly
+    the pinned bundled default literal; it is declaration metadata only in
+    that position.  Any other text is ordinary history and is never
+    compiled out or dropped.
+    """
+    positions: set[int] = set()
+    for index, item in enumerate(canonical_items):
+        if (
+            not isinstance(item, Mapping)
+            or item.get("type") != "additional_tools"
+            or index == 0
+        ):
+            continue
+        previous = canonical_items[index - 1]
+        if (
+            isinstance(previous, Mapping)
+            and previous.get("role") == "developer"
+            and previous.get("type") in (None, "message")
+            and previous.get("content") == DEFAULT_INCREMENTAL_TOOLS_HINT
+        ):
+            positions.add(index - 1)
+    return frozenset(positions)
 
 
 def _canonical_taxonomy(

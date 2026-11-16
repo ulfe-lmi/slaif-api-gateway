@@ -25,7 +25,7 @@ FEATURE_NAMES = frozenset({
     "schema_property_names", "sparse_visible_reasoning", "empty_visible_reasoning",
     "sparse_function_events",
 })
-OPTIONAL_FEATURE_NAMES = frozenset({"tool_output_images"})
+OPTIONAL_FEATURE_NAMES = frozenset({"tool_output_images", "codex_tool_history_positional_updates"})
 SCOPES = frozenset({
     "request", "message.assistant", "message.user", "message.developer", "message.system",
     "part.output_text", "part.input_text", "part.input_image", "part.input_file", "part.input_audio",

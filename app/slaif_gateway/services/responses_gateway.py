@@ -68,6 +68,7 @@ from slaif_gateway.modules.clients.codex_0149 import (
 from slaif_gateway.modules.clients.codex_0162 import (
     CODEX_0162_CLIENT_MODULE_ID,
     codex_0162_lower_initial_additional_tools,
+    codex_0162_lower_positional_tool_history,
 )
 from slaif_gateway.modules.contracts import DEFAULT_CLIENT_MODULE_ID, ModuleSelectionError
 from slaif_gateway.modules.servers.local_coding_vllm.contract import (
@@ -195,6 +196,7 @@ from slaif_gateway.services.responses_request_policy import (
     CodexCompactionReplayCandidate,
     CodexReplayRequestCandidate,
     ResponsesRequestPolicy,
+    apply_codex_positional_prepared_estimate,
     apply_codex_route_limits,
     codex_client_tool_declarations,
     codex_client_tool_taxonomy_id,
@@ -335,10 +337,20 @@ def _build_safe_responses_upstream_body(
     upstream_model: str,
     omit_prompt_cache_key: bool = False,
     lower_codex_0162_initial_declaration: bool = False,
+    lower_codex_0162_positional_history: bool = False,
 ) -> dict[str, object]:
     try:
         effective_body = policy_result.effective_body
-        if lower_codex_0162_initial_declaration:
+        if lower_codex_0162_positional_history:
+            # Positional-update mode: the policy result carries the
+            # core-validated lifecycle facts; only the FINAL active
+            # catalog is forwarded, historical declarations and their
+            # inert IDs are dropped, and removal notices remain
+            # ordinary developer history.
+            effective_body = codex_0162_lower_positional_tool_history(
+                effective_body, policy_result.codex_tool_history
+            )
+        elif lower_codex_0162_initial_declaration:
             # Approved 0.162 x Local pair only: the request-policy gates
             # (key, route, tool, field, schema, description, depth, count,
             # byte) already canonicalized the declaration in the policy
@@ -483,6 +495,89 @@ def _codex_local_pair_omits_prompt_cache_key(
     )
 
 
+def _codex_positional_tool_bindings(policy_result: ResponsesPolicyResult):
+    """Ephemeral per-call translation facts for local transports (or None)."""
+    facts = policy_result.codex_tool_history
+    return facts.call_bindings if facts is not None else None
+
+
+def _codex_positional_active_tool_identities(policy_result: ResponsesPolicyResult):
+    """The FINAL active (namespace, name, kind) set for response validation."""
+    facts = policy_result.codex_tool_history
+    if facts is None:
+        return None
+    return frozenset(
+        (namespace, name, kind)
+        for namespace, tools in facts.active_taxonomy
+        for name, kind in tools
+    )
+
+
+def _enforce_codex_positional_output_policy(
+    *,
+    provider_response: ProviderResponse,
+    policy_result: ResponsesPolicyResult,
+) -> None:
+    """Refuse a non-stream response that calls outside the FINAL active set.
+
+    Runs AFTER successful accounting finalization: the actual provider
+    usage is already settled and stays settled.  This guard raises no
+    release and no second finalization; it only withholds the response
+    body.  The final active catalog is the sole model-visible current
+    tool set; historical sets never re-authorize an output item.
+    """
+    active = _codex_positional_active_tool_identities(policy_result)
+    if active is None:
+        return
+    body = provider_response.json_body
+    if not isinstance(body, Mapping):
+        return
+    output = body.get("output")
+    if not isinstance(output, list):
+        return
+    name_kind_counts: dict[tuple[str, str], int] = {}
+    for _namespace, name, kind in active:
+        name_kind_counts[(name, kind)] = name_kind_counts.get((name, kind), 0) + 1
+    for item in output:
+        if not isinstance(item, Mapping):
+            continue
+        item_type = item.get("type")
+        if item_type not in {"function_call", "custom_tool_call"}:
+            continue
+        kind = "custom" if item_type == "custom_tool_call" else "function"
+        name = item.get("name")
+        if not isinstance(name, str) or not name:
+            # A recognized tool call with a malformed identity must not
+            # bypass the current-set enforcement.
+            raise OpenAICompatibleError(
+                "The upstream provider response contains an invalid tool call identity.",
+                status_code=502,
+                error_type="invalid_response_error",
+                code="responses_codex_tool_history_obsolete_call",
+            )
+        namespace = item.get("namespace")
+        if namespace is not None and not isinstance(namespace, str):
+            raise OpenAICompatibleError(
+                "The upstream provider response contains an invalid tool call identity.",
+                status_code=502,
+                error_type="invalid_response_error",
+                code="responses_codex_tool_history_obsolete_call",
+            )
+        if isinstance(namespace, str):
+            ok = (namespace, name, kind) in active
+        else:
+            # The existing strict validator only accepts a namespace-less
+            # call when ONE active identity matches name+kind.
+            ok = name_kind_counts.get((name, kind), 0) == 1
+        if not ok:
+            raise OpenAICompatibleError(
+                "The upstream provider referenced a tool outside the current Codex declaration set.",
+                status_code=502,
+                error_type="invalid_response_error",
+                code="responses_codex_tool_history_obsolete_call",
+            )
+
+
 def _codex_0162_local_pair_lowers_declaration(
     *,
     client_module_id: str,
@@ -491,6 +586,26 @@ def _codex_0162_local_pair_lowers_declaration(
     """Only the approved 0.162 x Local pair lowers the initial prefix."""
     return (
         client_module_id == CODEX_0162_CLIENT_MODULE_ID and local_coding_server_context is not None
+    )
+
+
+def _codex_0162_local_pair_lowers_positional_history(
+    *,
+    client_module_id: str,
+    local_coding_server_context: Mapping[str, object] | None,
+    policy_result: ResponsesPolicyResult,
+) -> bool:
+    """Positional-update mode lowers the FINAL active catalog on approved local pairs.
+
+    Historical declarations, validated removal notices, and the pinned
+    incremental hint are compiled out of the provider body only where the
+    current top-level tools replace them; other transports forward the
+    native additional_tools items unchanged.
+    """
+    return (
+        client_module_id == CODEX_0162_CLIENT_MODULE_ID
+        and local_coding_server_context is not None
+        and policy_result.codex_tool_history is not None
     )
 
 
@@ -1364,6 +1479,43 @@ async def handle_response_create(
             code="openai_compatible_remote_image_not_allowed",
             param=exc.param,
         ) from exc
+    # New lifecycle mode only: preview the COMPLETE body the resolved
+    # transport will actually forward (pure preparation - no provider,
+    # secret, or HTTP) and re-anchor the input estimate on it before the
+    # existing media/context-limit decision, which then applies to the
+    # prepared value.  Legacy profiles keep the exact existing order and
+    # provisional estimate.
+    if policy_result.codex_tool_history is not None:
+        try:
+            preview_body = _build_safe_responses_upstream_body(
+                policy_result=policy_result,
+                upstream_model=route.resolved_model,
+                omit_prompt_cache_key=_codex_local_pair_omits_prompt_cache_key(
+                    client_module_id=client_module.module_id,
+                    local_coding_server_context=local_coding_server_context,
+                ),
+                lower_codex_0162_positional_history=_codex_0162_local_pair_lowers_positional_history(
+                    client_module_id=client_module.module_id,
+                    local_coding_server_context=local_coding_server_context,
+                    policy_result=policy_result,
+                ),
+                lower_codex_0162_initial_declaration=_codex_0162_local_pair_lowers_declaration(
+                    client_module_id=client_module.module_id,
+                    local_coding_server_context=local_coding_server_context,
+                ),
+            )
+            policy_result = apply_codex_positional_prepared_estimate(
+                policy_result,
+                upstream_body=preview_body,
+                route_capabilities=route.capabilities,
+                input_ceiling=(
+                    settings.CODEX_ABSOLUTE_MAX_INPUT_TOKENS
+                    if codex_extended_limits_requested
+                    else settings.HARD_MAX_INPUT_TOKENS
+                ),
+            )
+        except RequestPolicyError as exc:
+            raise openai_error_from_request_policy_error(exc) from exc
     if codex_extended_limits_requested:
         try:
             policy_result = apply_codex_route_limits(
@@ -1422,6 +1574,11 @@ async def handle_response_create(
         omit_prompt_cache_key=_codex_local_pair_omits_prompt_cache_key(
             client_module_id=client_module.module_id,
             local_coding_server_context=local_coding_server_context,
+        ),
+        lower_codex_0162_positional_history=_codex_0162_local_pair_lowers_positional_history(
+            client_module_id=client_module.module_id,
+            local_coding_server_context=local_coding_server_context,
+            policy_result=policy_result,
         ),
         lower_codex_0162_initial_declaration=_codex_0162_local_pair_lowers_declaration(
             client_module_id=client_module.module_id,
@@ -1499,6 +1656,40 @@ async def handle_response_create(
                 code="openai_compatible_remote_image_not_allowed",
                 param=exc.param,
             ) from exc
+        # Equivalent conditional order on revalidation: new lifecycle mode
+        # re-anchors on the CURRENT route's prepared body before the
+        # existing media/context-limit decision (legacy order untouched).
+        if current_policy_result.codex_tool_history is not None:
+            try:
+                probe_body = _build_safe_responses_upstream_body(
+                    policy_result=current_policy_result,
+                    upstream_model=new_route.resolved_model,
+                    omit_prompt_cache_key=_codex_local_pair_omits_prompt_cache_key(
+                        client_module_id=client_module.module_id,
+                        local_coding_server_context=local_coding_server_context,
+                    ),
+                    lower_codex_0162_positional_history=_codex_0162_local_pair_lowers_positional_history(
+                        client_module_id=client_module.module_id,
+                        local_coding_server_context=local_coding_server_context,
+                        policy_result=current_policy_result,
+                    ),
+                    lower_codex_0162_initial_declaration=_codex_0162_local_pair_lowers_declaration(
+                        client_module_id=client_module.module_id,
+                        local_coding_server_context=local_coding_server_context,
+                    ),
+                )
+                current_policy_result = apply_codex_positional_prepared_estimate(
+                    current_policy_result,
+                    upstream_body=probe_body,
+                    route_capabilities=new_route.capabilities,
+                    input_ceiling=(
+                        settings.CODEX_ABSOLUTE_MAX_INPUT_TOKENS
+                        if codex_extended_limits_requested
+                        else settings.HARD_MAX_INPUT_TOKENS
+                    ),
+                )
+            except RequestPolicyError as exc:
+                raise openai_error_from_request_policy_error(exc) from exc
         if codex_extended_limits_requested:
             try:
                 current_policy_result = apply_codex_route_limits(
@@ -1573,6 +1764,11 @@ async def handle_response_create(
             omit_prompt_cache_key=_codex_local_pair_omits_prompt_cache_key(
                 client_module_id=client_module.module_id,
                 local_coding_server_context=local_coding_server_context,
+            ),
+            lower_codex_0162_positional_history=_codex_0162_local_pair_lowers_positional_history(
+                client_module_id=client_module.module_id,
+                local_coding_server_context=local_coding_server_context,
+                policy_result=policy_result,
             ),
             lower_codex_0162_initial_declaration=_codex_0162_local_pair_lowers_declaration(
                 client_module_id=client_module.module_id,
@@ -1691,7 +1887,14 @@ async def handle_response_create(
                         declared_client_tools=(
                             pair_local_codex_top_level_tools
                             if pair_local_codex_streaming_tools
-                            else codex_client_tool_declarations(policy_result.effective_body)
+                            else (
+                                # Positional mode: the final active catalog is
+                                # the sole model-visible current set; the
+                                # historical union never re-authorizes.
+                                _codex_positional_active_tool_identities(policy_result)
+                                if policy_result.codex_tool_history is not None
+                                else codex_client_tool_declarations(policy_result.effective_body)
+                            )
                         ),
                         web_search=external_web_search_admission is not None,
                         web_search_max_tool_calls=(
@@ -1756,6 +1959,7 @@ async def handle_response_create(
             body=upstream_body,
             request_id=request_id,
             server_context=local_coding_server_context,
+            codex_tool_call_bindings=_codex_positional_tool_bindings(policy_result),
         )
         provider_started = False
         try:
@@ -1863,6 +2067,13 @@ async def handle_response_create(
                 route=route,
                 provider_response=provider_response,
                 accounting_result=accounting_result,
+            )
+            # Positional mode: usage is now settled; refuse a nonstream
+            # response calling outside the FINAL active set before anything
+            # else observes it (no release, no second finalization).
+            _enforce_codex_positional_output_policy(
+                provider_response=provider_response,
+                policy_result=policy_result,
             )
             if policy_result.effective_body.get("store") is True:
                 await _persist_stored_response_reference(
@@ -2942,6 +3153,7 @@ def _streaming_responses_response(
         body=upstream_body,
         request_id=request_id,
         server_context=server_context,
+        codex_tool_call_bindings=_codex_positional_tool_bindings(policy_result),
     )
 
     async def _events():
