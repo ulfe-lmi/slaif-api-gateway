@@ -66,7 +66,7 @@ makes no claim about that request.
 
 ## Implemented shared foundation
 
-New module ``app/slaif_gateway/services/codex_tool_history.py`` (pure,
+New module ``app/slaif_gateway/modules/codex_tool_history.py`` (pure,
 stdlib-only, no app imports):
 
 - **Explicit modes.** ``full_snapshot`` (every declaration replaces the
@@ -159,7 +159,7 @@ byte oracle need not rerun (no template/CSS change).
 ## Documentation-impact statement
 
 This round changes: one new pure module
-(``services/codex_tool_history.py``), one new focused unit test file,
+(``modules/codex_tool_history.py``), one new focused unit test file,
 this verification record, and ONE link from
 ``responses-compatibility.md``.  All existing contracts — request
 policy, the single-item law, the 0.162 lowering, response validation,

@@ -1129,7 +1129,7 @@ see the [Qwen runbook](runbooks/codex-qwen38.md),
 ## Codex declaration-history foundation (objective 226)
 
 The shared pure lifecycle helper
-(``services/codex_tool_history.py``) and its source-derived wire
+(``modules/codex_tool_history.py``) and its source-derived wire
 contract for pinned Codex ``rust-v0.167.1`` are recorded in the
 [2026-11-16 verification record](verification/2026-11-16-codex-tool-history.md).
 This round changes no HTTP acceptance, frozen profile, or accounting

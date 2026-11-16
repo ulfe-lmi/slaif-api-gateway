@@ -9,7 +9,10 @@ from dataclasses import replace
 from slaif_gateway.modules.servers.local_coding.adapter import LocalCodingAdapter
 from slaif_gateway.modules.servers.local_coding_vllm.codec import VLLMToolCodec
 from slaif_gateway.modules.servers.upstream_llm.profiles import validate_route
-from slaif_gateway.providers.errors import ProviderRequestError
+from slaif_gateway.providers.errors import (
+    ProviderRequestError,
+    ProviderResponseParseError,
+)
 
 
 def _is_instruction_item(item: object) -> bool:
@@ -126,9 +129,25 @@ class ConfiguredUpstreamLLMAdapter(LocalCodingAdapter):
     async def forward_response(self, request):
         prepared, codec = self._prepare(request)
         response = await super().forward_response(prepared)
-        if codec is not None:
-            return replace(response, json_body=codec.response(response.json_body))
-        return response
+        if codec is None:
+            return response
+        try:
+            json_body = codec.response(response.json_body)
+        except ProviderResponseParseError as exc:
+            if request.codex_tool_call_bindings is None:
+                raise
+            # Explicit lifecycle request: same bounded seam as the local
+            # vLLM codec transport - the parsed usage/cost stays the
+            # settlement evidence, the rejected output is cleared, and
+            # the core refuses after settlement.
+            return replace(
+                response,
+                json_body={},
+                text_body=None,
+                binary_body=None,
+                safe_rejection_code=exc.error_code,
+            )
+        return replace(response, json_body=json_body)
 
     async def stream_response(self, request):
         prepared, codec = self._prepare(request)

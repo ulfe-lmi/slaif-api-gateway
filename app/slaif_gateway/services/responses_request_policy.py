@@ -58,7 +58,7 @@ from slaif_gateway.modules.clients.responses_support import (
 from slaif_gateway.modules.contracts import ResponsesClientPolicySpec
 from slaif_gateway.config import Settings
 from slaif_gateway.schemas.policy import ResponsesPolicyResult
-from slaif_gateway.services.codex_tool_history import (
+from slaif_gateway.modules.codex_tool_history import (
     DEFAULT_REMOVED_NAMESPACES_HEADER,
     DEFAULT_REMOVED_TOOLS_HEADER,
     MODE_POSITIONAL_UPDATES,
@@ -349,13 +349,32 @@ class ResponsesRequestPolicy:
                 "responses_conversation_previous_response_not_supported",
                 "Responses conversation and previous_response_id cannot be combined in this gateway.",
             )
-        if codex_replay_request_candidates(
-            effective_body,
-            allow_idless_tool_call_replay=(
-                self._codex_spec is not None and self._codex_spec.allow_idless_tool_call_replay
-            ),
-            top_level_tool_taxonomy=continuation_taxonomy,
-        ) and ("conversation" in effective_body or "previous_response_id" in effective_body):
+        try:
+            replay_candidates_present = bool(
+                codex_replay_request_candidates(
+                    effective_body,
+                    allow_idless_tool_call_replay=(
+                        self._codex_spec is not None
+                        and self._codex_spec.allow_idless_tool_call_replay
+                    ),
+                    top_level_tool_taxonomy=continuation_taxonomy,
+                    codex_tool_call_bindings=(
+                        self._codex_tool_history_facts.call_bindings
+                        if self._codex_tool_history_facts is not None
+                        else None
+                    ),
+                    require_call_completeness=True,
+                )
+            )
+        except ValueError:
+            _raise(
+                "input",
+                "responses_codex_replay_reference_invalid",
+                "The Codex client-managed replay references in this request cannot be verified.",
+            )
+        if replay_candidates_present and (
+            "conversation" in effective_body or "previous_response_id" in effective_body
+        ):
             _raise(
                 "input",
                 "responses_codex_replay_provider_state_not_supported",
@@ -726,6 +745,15 @@ class ResponsesRequestPolicy:
                 param="input",
                 max_bytes=self._settings.RESPONSES_MAX_INPUT_TEXT_BYTES,
             )
+            if codex_tool_history_mode == MODE_POSITIONAL_UPDATES:
+                # A new-mode request with no declaration items still has
+                # an explicit (empty) current catalog: any generated tool
+                # call is outside the final active set and must be denied.
+                self._codex_tool_history_facts = analyze_codex_tool_history(
+                    [],
+                    mode=MODE_POSITIONAL_UPDATES,
+                    max_items=1,
+                )
             return value, len(value.encode("utf-8"))
 
         if isinstance(value, list):
@@ -4767,17 +4795,136 @@ def responses_codex_encrypted_reasoning_replay_allowed(policy: object) -> bool:
     )
 
 
+def _codex_positional_replay_candidates(
+    input_value: list[Any],
+    codex_tool_call_bindings: Mapping[str, tuple[str | None, str, str]],
+    *,
+    allow_idless_tool_call_replay: bool,
+) -> tuple[CodexReplayRequestCandidate | CodexCompactionReplayCandidate, ...]:
+    """New lifecycle mode: emit every actual call from its positional identity.
+
+    The core-verified ``codex_tool_call_bindings`` map each ``call_id`` to
+    the exact ``(namespace, name, kind)`` active at the call's OWN
+    position.  Those facts name the identity; they grant NO ownership
+    authority - every emitted candidate still passes the existing
+    same-key/route/provider HMAC verification.  Any call that cannot be
+    extracted (unbound, inconsistent, or with an unreferencable ID form)
+    fails closed with a fixed safe error: an ownership check is never
+    silently dropped.  The completeness check at the end guarantees that
+    every core-bound call yielded exactly one candidate.
+    """
+    candidates: list[CodexReplayRequestCandidate | CodexCompactionReplayCandidate] = []
+    seen_call_ids: set[str] = set()
+    for item in input_value:
+        if not isinstance(item, Mapping):
+            continue
+        item_type = item.get("type")
+        if item_type == "compaction":
+            item_id = item.get("id")
+            encrypted_content = item.get("encrypted_content")
+            if isinstance(item_id, str) and isinstance(encrypted_content, str):
+                candidates.append(
+                    CodexCompactionReplayCandidate(
+                        item_kind="compaction",
+                        item_id=item_id,
+                        call_id=None,
+                        tool_namespace=None,
+                        tool_name=None,
+                        encrypted_content=encrypted_content,
+                    )
+                )
+            continue
+        if item_type == "reasoning":
+            # Empty ciphertext is visible context, never an opaque replay reference.
+            if item.get("encrypted_content") == "":
+                continue
+            item_id = item.get("id")
+            if isinstance(item_id, str):
+                candidates.append(
+                    CodexReplayRequestCandidate(
+                        item_kind="reasoning",
+                        item_id=item_id,
+                        call_id=None,
+                        tool_namespace=None,
+                        tool_name=None,
+                    )
+                )
+            continue
+        if item_type not in {"function_call", "custom_tool_call"}:
+            continue
+        call_id = item.get("call_id")
+        item_id = item.get("id")
+        item_namespace = item.get("namespace")
+        if (
+            not isinstance(call_id, str)
+            or call_id in seen_call_ids
+            or not isinstance(item_namespace, (str, type(None)))
+        ):
+            raise ValueError("codex_replay_candidate_extraction_failed")
+        binding = codex_tool_call_bindings.get(call_id)
+        if binding is None:
+            raise ValueError("codex_replay_candidate_extraction_failed")
+        namespace, name, kind = binding
+        tool_type = "custom" if item_type == "custom_tool_call" else "function"
+        if (
+            not isinstance(name, str)
+            or item.get("name") != name
+            or kind != tool_type
+            or (item_namespace is not None and item_namespace != namespace)
+        ):
+            # An omitted namespace uses the immutable bound namespace (the
+            # codec applies the same rule); only an EXPLICIT namespace
+            # contradicting the trusted binding denies.
+            raise ValueError("codex_replay_candidate_extraction_failed")
+        if not (
+            isinstance(item_id, str)
+            or (item_id is None and allow_idless_tool_call_replay)
+        ):
+            raise ValueError("codex_replay_reference_form_unavailable")
+        seen_call_ids.add(call_id)
+        candidates.append(
+            CodexReplayRequestCandidate(
+                item_kind=str(item_type),
+                item_id=item_id,
+                call_id=call_id,
+                tool_namespace=namespace if isinstance(namespace, str) else None,
+                tool_name=name,
+            )
+        )
+    if seen_call_ids != set(codex_tool_call_bindings):
+        # Completeness: every core-bound call yields exactly one candidate.
+        raise ValueError("codex_replay_candidate_extraction_failed")
+    return tuple(candidates)
+
+
 def codex_replay_request_candidates(
     body: Mapping[str, Any],
     *,
     top_level_tool_taxonomy: frozenset[tuple[str, str, str]] | None = None,
     allow_idless_tool_call_replay: bool = False,
+    codex_tool_call_bindings: Mapping[str, tuple[str | None, str, str]] | None = None,
+    require_call_completeness: bool = False,
 ) -> tuple[CodexReplayRequestCandidate | CodexCompactionReplayCandidate, ...]:
-    """Extract only validated IDs and approved identities from canonical input."""
+    """Extract only validated IDs and approved identities from canonical input.
+
+    When the core-verified ``codex_tool_call_bindings`` (explicit new
+    lifecycle mode) are supplied, every actual call is emitted from its
+    immutable positional identity and any call that cannot be extracted
+    fails closed.  Otherwise the legacy union-of-declarations behavior
+    applies; with ``require_call_completeness`` a validated legacy call
+    whose reference form cannot be owned is denied safely instead of
+    being silently omitted from the ownership check.
+    """
 
     input_value = body.get("input")
     if not isinstance(input_value, list):
         return ()
+    if codex_tool_call_bindings is not None:
+        return _codex_positional_replay_candidates(
+            input_value,
+            codex_tool_call_bindings,
+            allow_idless_tool_call_replay=allow_idless_tool_call_replay,
+        )
     input_declarations = _codex_declarations_from_input_items(
         [dict(item) for item in input_value if isinstance(item, Mapping)]
     )
@@ -4839,21 +4986,34 @@ def codex_replay_request_candidates(
             and declaration[2] == tool_type
             and (namespace is None or declaration[0] == namespace)
         ]
-        if (
-            (isinstance(item_id, str) or (item_id is None and allow_idless_tool_call_replay))
-            and isinstance(call_id, str)
-            and isinstance(name, str)
-            and len(matches) == 1
-        ):
-            candidates.append(
-                CodexReplayRequestCandidate(
-                    item_kind=str(item_type),
-                    item_id=item_id,
-                    call_id=call_id,
-                    tool_namespace=matches[0][0],
-                    tool_name=name,
+        id_ok = isinstance(item_id, str) or (
+            item_id is None and allow_idless_tool_call_replay
+        )
+        shape_ok = isinstance(call_id, str) and isinstance(name, str)
+        if shape_ok and len(matches) == 1:
+            if id_ok:
+                candidates.append(
+                    CodexReplayRequestCandidate(
+                        item_kind=str(item_type),
+                        item_id=item_id,
+                        call_id=call_id,
+                        tool_namespace=matches[0][0],
+                        tool_name=name,
+                    )
                 )
-            )
+            elif require_call_completeness:
+                # A validated legacy call whose reference form cannot be
+                # owned (for example a missing item ID where ID-less
+                # replay is not qualified) must not be silently omitted
+                # from the ownership check; deny it safely.
+                raise ValueError("codex_replay_reference_form_unavailable")
+        elif require_call_completeness:
+            # Zero or ambiguous declaration matches (or a non-referencable
+            # call shape) cannot be mapped to an owned reference; the
+            # policy roundtrip normally refuses such calls first, but the
+            # extractor fails closed on its own so no actual call can
+            # ever be silently omitted from the ownership check.
+            raise ValueError("codex_replay_candidate_extraction_failed")
     return tuple(candidates)
 
 

@@ -66,7 +66,7 @@ from slaif_gateway.modules.contracts import (
     ModuleSelectionError,
     ResponsesClientPolicySpec,
 )
-from slaif_gateway.services.codex_tool_history import (
+from slaif_gateway.modules.codex_tool_history import (
     MODE_POSITIONAL_UPDATES,
     codex_positional_compiled_out_positions,
 )

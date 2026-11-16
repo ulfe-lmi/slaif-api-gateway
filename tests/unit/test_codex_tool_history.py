@@ -4,7 +4,7 @@ import copy
 
 import pytest
 
-from slaif_gateway.services.codex_tool_history import (
+from slaif_gateway.modules.codex_tool_history import (
     DEFAULT_REMOVED_NAMESPACES_HEADER,
     DEFAULT_REMOVED_TOOLS_HEADER,
     CodexToolCallEvent,

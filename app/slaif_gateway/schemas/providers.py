@@ -74,6 +74,16 @@ class ProviderResponse:
     usage: ProviderUsage | None = None
     raw_cost_native: Decimal | None = None
     native_currency: str | None = None
+    # Ephemeral, content-free codec refusal marker, set ONLY by codec
+    # transports on explicit lifecycle requests when the provider output
+    # violates the current tool contract AFTER usage was parsed.  It
+    # carries one fixed safe error code; the adapter clears the rejected
+    # body (json_body to {}, text/binary bodies to None) on the same
+    # object and the parsed usage/cost/provider metadata remain the
+    # settlement evidence.  The core checks the marker immediately after
+    # settlement and before references/storage/return.  Never
+    # serialized, logged, or persisted.
+    safe_rejection_code: str | None = field(default=None, repr=False)
 
 
 @dataclass(frozen=True, slots=True)

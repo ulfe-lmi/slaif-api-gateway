@@ -609,6 +609,28 @@ def _codex_0162_local_pair_lowers_positional_history(
     )
 
 
+def _reject_settled_codec_rejection(provider_response: ProviderResponse) -> None:
+    """Refuse a codec rejection whose usage is already settled.
+
+    Codec transports on explicit lifecycle requests clear the rejected
+    output and keep only the parsed usage/cost/provider metadata plus
+    one fixed content-free rejection code.  Settlement has already run
+    on that evidence when this is reached, so the refusal releases
+    nothing and finalizes nothing again; it only withholds the response
+    body.  No raw or partly decoded provider output crosses this
+    boundary (a wire/canonical collision could fool later guards).
+    """
+    code = provider_response.safe_rejection_code
+    if code is None:
+        return
+    raise OpenAICompatibleError(
+        "Native vLLM tool response does not match the declared tool contract.",
+        status_code=502,
+        error_type="server_error",
+        code=code,
+    )
+
+
 def _build_safe_responses_compact_upstream_body(
     *,
     policy_result: ResponsesPolicyResult,
@@ -1338,16 +1360,40 @@ async def handle_response_create(
     except RequestPolicyError as exc:
         raise openai_error_from_request_policy_error(exc) from exc
 
+    positional_facts = policy_result.codex_tool_history
+    # ID-less replay is qualified for the existing 0149 path OR the
+    # explicit new lifecycle mode, AND only when the selected spec
+    # declares it; frozen legacy presets never gain it by inheritance.
+    # Owned ID-less calls still use the existing deferred same-key
+    # CALL-ID HMAC lookup after local route/pair validation; unowned or
+    # wrong-route references always deny.
     allow_idless_tool_call_replay = bool(
-        client_module.module_id == CODEX_0149_CLIENT_MODULE_ID
-        and client_module.policy_spec is not None
+        client_module.policy_spec is not None
         and client_module.policy_spec.allow_idless_tool_call_replay
+        and (
+            client_module.module_id == CODEX_0149_CLIENT_MODULE_ID
+            or positional_facts is not None
+        )
     )
-    replay_candidates = codex_replay_request_candidates(
-        policy_result.effective_body,
-        allow_idless_tool_call_replay=allow_idless_tool_call_replay,
-        top_level_tool_taxonomy=codex_0149_continuation_taxonomy,
-    )
+    try:
+        replay_candidates = codex_replay_request_candidates(
+            policy_result.effective_body,
+            allow_idless_tool_call_replay=allow_idless_tool_call_replay,
+            top_level_tool_taxonomy=codex_0149_continuation_taxonomy,
+            codex_tool_call_bindings=(
+                positional_facts.call_bindings if positional_facts is not None else None
+            ),
+            require_call_completeness=True,
+        )
+    except ValueError:
+        # Extraction/completeness mismatch: refuse safely instead of
+        # omitting a validated call from the ownership verification.
+        raise OpenAICompatibleError(
+            "The Codex client-managed replay references in this request cannot be verified.",
+            status_code=400,
+            error_type="invalid_request_error",
+            code="responses_codex_replay_reference_invalid",
+        )
     defer_idless_replay = any(candidate.item_id is None for candidate in replay_candidates)
     replay_authorization = (
         CodexReplayAuthorization(references=())
@@ -2068,6 +2114,11 @@ async def handle_response_create(
                 provider_response=provider_response,
                 accounting_result=accounting_result,
             )
+            # Codec transports on explicit lifecycle requests mark a
+            # cleared output with a fixed safe code; usage is now settled,
+            # so refuse before any reference/storage/return observes it
+            # (no release, no second finalization).
+            _reject_settled_codec_rejection(provider_response)
             # Positional mode: usage is now settled; refuse a nonstream
             # response calling outside the FINAL active set before anything
             # else observes it (no release, no second finalization).
