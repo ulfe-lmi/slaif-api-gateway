@@ -24,6 +24,7 @@ from sqlalchemy import func, inspect as sa_inspect, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from slaif_gateway.api.errors import OpenAICompatibleError
+from slaif_gateway.api.policy_errors import openai_error_from_request_policy_error
 from slaif_gateway.config import Settings
 from slaif_gateway.db.models import (
     AuditLog,
@@ -47,6 +48,7 @@ from slaif_gateway.modules.clients.codex_0162 import (
 from slaif_gateway.modules.codex_profile_data import load_codex_profile_file
 from slaif_gateway.modules.servers.local_coding_vllm.adapter import LocalCodingVLLMAdapter
 from slaif_gateway.modules.servers.local_coding_vllm.codec import vllm_wire_name
+from slaif_gateway.modules.servers.local_coding.adapter import LocalCodingAdapter
 from slaif_gateway.modules.servers.upstream_llm.adapter import ConfiguredUpstreamLLMAdapter
 from slaif_gateway.schemas.auth import AuthenticatedGatewayKey
 from slaif_gateway.schemas.openai import ResponsesCreateRequest
@@ -56,8 +58,16 @@ from slaif_gateway.services.codex_module_upgrade import (
     CodexModuleUpgradeError,
     migrate_codex_0162_key_profile,
 )
+from slaif_gateway.services.policy_errors import RequestPolicyError
 from slaif_gateway.services.codex_replay_service import CodexReplayService
-from slaif_gateway.services.responses_request_policy import CodexReplayRequestCandidate
+from slaif_gateway.services.responses_request_policy import (
+    TEXT_FORMAT_JSON_OBJECT,
+    TEXT_FORMAT_JSON_SCHEMA,
+    CodexReplayRequestCandidate,
+)
+from slaif_gateway.services.responses_route_capabilities import (
+    enforce_responses_route_capabilities,
+)
 from tests.unit.test_codex_tool_history_replay_wiring import (
     base_model,
     call,
@@ -147,20 +157,31 @@ def _pin(version: str, digest: str) -> dict[str, object]:
     }
 
 
-def _responses_policy(pin: dict[str, object]) -> dict[str, object]:
+def _responses_policy(
+    pin: dict[str, object],
+    allowed_capabilities: tuple[str, ...] = (
+        "codex_request_envelope",
+        "codex_client_tools",
+        "codex_streaming_tool_events",
+    ),
+) -> dict[str, object]:
     return {
         "version": 1,
-        "allowed_capabilities": [
-            "codex_request_envelope",
-            "codex_client_tools",
-            "codex_streaming_tool_events",
-        ],
+        "allowed_capabilities": list(allowed_capabilities),
         "client_module": pin,
     }
 
 
 async def _seed_key(
-    session: AsyncSession, *, pin: dict[str, object], allowed_providers: tuple[str, ...]
+    session: AsyncSession,
+    *,
+    pin: dict[str, object],
+    allowed_providers: tuple[str, ...],
+    allowed_capabilities: tuple[str, ...] = (
+        "codex_request_envelope",
+        "codex_client_tools",
+        "codex_streaming_tool_events",
+    ),
 ) -> tuple[object, object, object]:
     """Create owner/cohort/key with non-default restrictions, limits, and usage."""
     unique = uuid.uuid4().hex
@@ -192,7 +213,7 @@ async def _seed_key(
         allow_all_endpoints=False,
         allowed_endpoints=["/v1/responses"],
         metadata_json={
-            "responses_policy": _responses_policy(pin),
+            "responses_policy": _responses_policy(pin, allowed_capabilities),
             "allowed_providers": list(allowed_providers),
         },
     )
@@ -538,6 +559,36 @@ async def test_group_a_ambiguity_candidate_denied_before_route_without_reference
     assert after_ledger == before_ledger
 
 
+# Static-identity Local Coding route contract (no real deployment).
+_LOCAL_CODING_STATIC_CAPS = {
+    "local_coding": {
+        "contract_version": "local-coding-v1",
+        "route_name": "vision",
+        "tool_policy_version": "responses-tool-policy-v1",
+        "identity_mode": "static",
+        "replay_mode": "process_local_inclusive_horizon_fail_closed",
+        "deployment_mode": "single_worker",
+        "clock_skew_seconds": 60,
+        "replay_ttl_seconds": 60,
+    }
+}
+
+# Valid positive Responses capability metadata: the Codex grants that the
+# selected rev-16 request shape actually requests are explicit.
+_CODEX_RESPONSES_CAPS = {
+    "text": True,
+    "stateless": True,
+    "streaming": True,
+    "codex_request_envelope": True,
+    "codex_client_tools": True,
+    "codex_streaming_tool_events": True,
+}
+
+# The public model requested by the positive/negative bodies below; the
+# seeded key allows exactly it and the probe routes resolve it.
+_GATE_PUBLIC_MODEL = "synthetic-codex-model"
+
+
 def _local_coding_route(route_id: uuid.UUID, resolved_model: str = "synthetic-upstream"):
     """Static-identity Local Coding route row compatible with the rev-16 pair."""
     return SimpleNamespace(
@@ -549,25 +600,56 @@ def _local_coding_route(route_id: uuid.UUID, resolved_model: str = "synthetic-up
         provider_max_retries=0,
         route_id=route_id,
         resolved_model=resolved_model,
-        requested_model=resolved_model,
+        requested_model=_GATE_PUBLIC_MODEL,
         route_match_type="exact",
-        route_pattern=resolved_model,
+        route_pattern=_GATE_PUBLIC_MODEL,
         priority=1,
         supports_streaming=True,
         capabilities={
-            "responses": {"text": True, "stateless": True, "streaming": True},
-            "local_coding": {
-                "contract_version": "local-coding-v1",
-                "route_name": "vision",
-                "tool_policy_version": "responses-tool-policy-v1",
-                "identity_mode": "static",
-                "replay_mode": "process_local_inclusive_horizon_fail_closed",
-                "deployment_mode": "single_worker",
-                "clock_skew_seconds": 60,
-                "replay_ttl_seconds": 60,
-            },
+            "responses": dict(_CODEX_RESPONSES_CAPS),
+            **_LOCAL_CODING_STATIC_CAPS,
         },
     )
+
+
+def _gate_route_resolver(probe):
+    """Resolver stub that mocks ONLY route selection.
+
+    It returns the pre-selected probe but runs the EXISTING
+    ``enforce_responses_route_capabilities`` gate with the actual requested
+    flags the gateway passed, using the existing policy-error conversion, so
+    a fixture with missing grants fails exactly as the real resolver would.
+    """
+
+    async def _resolve(**kwargs: object):
+        try:
+            enforce_responses_route_capabilities(
+                route_capabilities=probe.capabilities,
+                streaming_requested=bool(kwargs.get("streaming_requested", False)),
+                route_supports_streaming=probe.supports_streaming,
+                json_mode_requested=kwargs.get("text_format_type") == TEXT_FORMAT_JSON_OBJECT,
+                structured_output_requested=kwargs.get("text_format_type") == TEXT_FORMAT_JSON_SCHEMA,
+                function_tools_requested=bool(kwargs.get("function_tools_requested", False)),
+                custom_tools_requested=bool(kwargs.get("custom_tools_requested", False)),
+                image_input_requested=bool(kwargs.get("image_input_requested", False)),
+                file_input_requested=bool(kwargs.get("file_input_requested", False)),
+                input_token_count_requested=bool(kwargs.get("input_token_count_requested", False)),
+                stored_responses_requested=bool(kwargs.get("stored_responses_requested", False)),
+                previous_response_id_requested=bool(kwargs.get("previous_response_id_requested", False)),
+                compact_requested=bool(kwargs.get("compact_requested", False)),
+                conversations_requested=bool(kwargs.get("conversations_requested", False)),
+                codex_request_envelope_requested=bool(kwargs.get("codex_request_envelope_requested", False)),
+                codex_client_tools_requested=bool(kwargs.get("codex_client_tools_requested", False)),
+                codex_streaming_tool_events_requested=bool(kwargs.get("codex_streaming_tool_events_requested", False)),
+                codex_encrypted_reasoning_replay_requested=bool(kwargs.get("codex_encrypted_reasoning_replay_requested", False)),
+                codex_extended_limits_requested=bool(kwargs.get("codex_extended_limits_requested", False)),
+                codex_compaction_requested=bool(kwargs.get("codex_compaction_requested", False)),
+            )
+        except RequestPolicyError as exc:
+            raise openai_error_from_request_policy_error(exc) from exc
+        return probe
+
+    return _resolve
 
 
 async def _seed_owned_reference(
@@ -735,16 +817,17 @@ async def test_group_a_wrong_route_denied_before_redis_quota_and_provider(
 
     timeline: list[str] = []
 
-    async def _resolve_wrong_route(**_kwargs: object):
-        return _local_coding_route(uuid.uuid4())  # not the owned route
-
     async def _db_session(request: object | None = None):
         yield session
 
     monkeypatch.setattr(
         responses_gateway, "_get_db_session_after_auth_header_check", _db_session
     )
-    monkeypatch.setattr(responses_gateway, "_resolve_responses_route", _resolve_wrong_route)
+    monkeypatch.setattr(
+        responses_gateway,
+        "_resolve_responses_route",
+        _gate_route_resolver(_local_coding_route(uuid.uuid4())),  # not the owned route
+    )
     for name in ("_reserve_redis_rate_limit", "_reserve_responses_quota"):
         monkeypatch.setattr(
             responses_gateway, name, _deny_before_ownership_sentinel(timeline, name)
@@ -804,16 +887,17 @@ async def test_group_a_idless_owned_candidate_passes_deferred_verification(
 
     timeline: list[str] = []
 
-    async def _resolve_owned_route(**_kwargs: object):
-        return _local_coding_route(owned_route.id)
-
     async def _db_session(request: object | None = None):
         yield session
 
     monkeypatch.setattr(
         responses_gateway, "_get_db_session_after_auth_header_check", _db_session
     )
-    monkeypatch.setattr(responses_gateway, "_resolve_responses_route", _resolve_owned_route)
+    monkeypatch.setattr(
+        responses_gateway,
+        "_resolve_responses_route",
+        _gate_route_resolver(_local_coding_route(owned_route.id)),
+    )
     monkeypatch.setattr(
         responses_gateway,
         "_reserve_responses_quota",
@@ -918,16 +1002,17 @@ async def test_group_a_idless_negatives_denied_before_quota_and_provider(
 
     timeline: list[str] = []
 
-    async def _resolve_probe(**_kwargs: object):
-        return _local_coding_route(probe_route_id)
-
     async def _db_session(request: object | None = None):
         yield session
 
     monkeypatch.setattr(
         responses_gateway, "_get_db_session_after_auth_header_check", _db_session
     )
-    monkeypatch.setattr(responses_gateway, "_resolve_responses_route", _resolve_probe)
+    monkeypatch.setattr(
+        responses_gateway,
+        "_resolve_responses_route",
+        _gate_route_resolver(_local_coding_route(probe_route_id)),
+    )
     monkeypatch.setattr(
         responses_gateway,
         "_reserve_responses_quota",
@@ -1041,9 +1126,6 @@ async def _seed_group_b_world(
         endpoint="/v1/responses",
     )
 
-    async def _resolve_owned_route(**_kwargs: object):
-        return _local_coding_route(route.id, _GROUP_B_UPSTREAM_MODEL)
-
     async def _db_session(request: object | None = None):
         yield session
 
@@ -1051,7 +1133,9 @@ async def _seed_group_b_world(
         responses_gateway, "_get_db_session_after_auth_header_check", _db_session
     )
     monkeypatch.setattr(
-        responses_gateway, "_resolve_responses_route", _resolve_owned_route
+        responses_gateway,
+        "_resolve_responses_route",
+        _gate_route_resolver(_local_coding_route(route.id, _GROUP_B_UPSTREAM_MODEL)),
     )
     return _auth_key(key)
 
@@ -1249,42 +1333,114 @@ async def test_group_b_preserve_passthrough_settles_success(
 
 # --- Group B extension: owned nonempty history -> full gateway workflow -----
 
-_RESPONSES_CAPS = {"text": True, "stateless": True, "streaming": True}
+_ALL_CODEX_CAPS = (
+    "codex_request_envelope",
+    "codex_client_tools",
+    "codex_streaming_tool_events",
+)
 
-# kind -> (route provider, upstream profile id or None, codec wire mode,
-#          historical call wire name, current kept wire name, removal notice)
+
+async def _seed_owned_history_world(
+    session: AsyncSession,
+    *,
+    settings: Settings,
+    provider: str,
+    allowed_capabilities: tuple[str, ...],
+) -> tuple[object, object]:
+    """Seed the consistent rev-16 world for the owned-history workflow.
+
+    The public model the body requests is the one the seeded key allows, the
+    selected route serves it from the allowed provider, complete synthetic EUR
+    pricing exists for quota admission, and the exact historical identity
+    (fc-1 / call-1 / functions.read) is HMAC-owned by the key on that route.
+    """
+    owner, cohort, key = await _seed_key(
+        session,
+        pin=_pin(_REV16_VERSION, _REV16_DIGEST),
+        allowed_providers=(provider,),
+        allowed_capabilities=allowed_capabilities,
+    )
+    now = datetime.now(UTC)
+    ledger = await _seed_ledger(session, key=key, owner=owner, cohort=cohort, now=now)
+    route = await ModelRoutesRepository(session).create_model_route(
+        requested_model=_GATE_PUBLIC_MODEL,
+        provider=provider,
+        upstream_model=_GROUP_B_UPSTREAM_MODEL,
+        endpoint="/v1/responses",
+    )
+    await PricingRulesRepository(session).create_pricing_rule(
+        provider=provider,
+        upstream_model=_GROUP_B_UPSTREAM_MODEL,
+        valid_from=now - timedelta(minutes=1),
+        endpoint="/v1/responses",
+        currency="EUR",
+        input_price_per_1m=_GROUP_B_INPUT_PRICE,
+        output_price_per_1m=_GROUP_B_OUTPUT_PRICE,
+    )
+    candidates = (
+        CodexReplayRequestCandidate(
+            item_kind="function_call",
+            item_id="fc-1",
+            call_id="call-1",
+            tool_namespace="functions",
+            tool_name="read",
+        ),
+    )
+    persisted = await _seed_replay_refs(
+        session, settings=settings, key=key, ledger=ledger, candidates=candidates, route=route, now=now
+    )
+    assert persisted == 1
+    return key, route
+
+
+# Every success kind carries the SAME removed historical tool: the completed
+# call (fc-1/call-1/functions.read) is HMAC-owned, the validated removal
+# notice is compiled out BEFORE placement (so the history is representable in
+# every placement mode), and the second additional_tools declaration is the
+# current-kept update.  kind -> provider, upstream profile id or None, adapter
+# family, historical call wire name, current kept wire name, and the expected
+# historical-call namespace on the provider wire (explicit for preserve
+# transports, absent because codecs carry the identity in the wire name).
 _SUCCESS_KINDS = {
-    "vllm": (
-        "local-coding-vLLM",
-        None,
-        vllm_wire_name("functions", "read", portable_names=False),
-        vllm_wire_name("functions", "kept", portable_names=False),
-        True,
+    "local-preserve": SimpleNamespace(
+        provider="local-coding",
+        profile_id=None,
+        adapter="local",
+        removed_name="read",
+        kept_name="kept",
+        namespace="functions",
     ),
-    "llama-preserve": (
-        "synthetic-llama",
-        "llama-cpp-qwen-v1",
-        "read",
-        "kept",
-        # The registered llama profile uses leading_system_developer
-        # placement; a removal notice after the history it describes is
-        # deliberately NOT representable there (order-changing placement is
-        # refused), so this kind carries a still-active owned history.
-        False,
+    "vllm": SimpleNamespace(
+        provider="local-coding-vLLM",
+        profile_id=None,
+        adapter="vllm",
+        removed_name=vllm_wire_name("functions", "read", portable_names=False),
+        kept_name=vllm_wire_name("functions", "kept", portable_names=False),
+        namespace=None,
     ),
-    "configured-native": (
-        "synthetic-native-vllm",
-        "native-vllm-v1",
-        vllm_wire_name("functions", "read", portable_names=False),
-        vllm_wire_name("functions", "kept", portable_names=False),
-        True,
+    "llama-preserve": SimpleNamespace(
+        provider="synthetic-llama",
+        profile_id="llama-cpp-qwen-v1",
+        adapter="upstream",
+        removed_name="read",
+        kept_name="kept",
+        namespace="functions",
     ),
-    "configured-portable": (
-        "synthetic-portable",
-        "responses-functions-v1",
-        vllm_wire_name("functions", "read", portable_names=True),
-        vllm_wire_name("functions", "kept", portable_names=True),
-        True,
+    "configured-native": SimpleNamespace(
+        provider="synthetic-native-vllm",
+        profile_id="native-vllm-v1",
+        adapter="upstream",
+        removed_name=vllm_wire_name("functions", "read", portable_names=False),
+        kept_name=vllm_wire_name("functions", "kept", portable_names=False),
+        namespace=None,
+    ),
+    "configured-portable": SimpleNamespace(
+        provider="synthetic-portable",
+        profile_id="responses-functions-v1",
+        adapter="upstream",
+        removed_name=vllm_wire_name("functions", "read", portable_names=True),
+        kept_name=vllm_wire_name("functions", "kept", portable_names=True),
+        namespace=None,
     ),
 }
 
@@ -1298,16 +1454,15 @@ _SUCCESS_OUTPUT = [
 ]
 
 
-def _success_items(with_removal_notice: bool) -> list:
-    items = [
+def _success_items() -> list:
+    return [
         decl(ns("functions", fn("read"), fn("kept")), item_id="d1"),
         call("read", "call-1", id_="fc-1"),
         out("call-1"),
+        notice(tools={("functions", "read")}),
+        decl(ns("functions", fn("kept")), item_id="d2"),
+        user("bounded"),
     ]
-    if with_removal_notice:
-        items.append(notice(tools={("functions", "read")}))
-    items.append(user("bounded"))
-    return items
 
 
 def _route_probe(route_id: uuid.UUID, provider: str, capabilities: dict):
@@ -1320,9 +1475,9 @@ def _route_probe(route_id: uuid.UUID, provider: str, capabilities: dict):
         provider_max_retries=0,
         route_id=route_id,
         resolved_model="synthetic-upstream",
-        requested_model="synthetic-upstream",
+        requested_model=_GATE_PUBLIC_MODEL,
         route_match_type="exact",
-        route_pattern="synthetic-upstream",
+        route_pattern=_GATE_PUBLIC_MODEL,
         priority=1,
         supports_streaming=True,
         capabilities=capabilities,
@@ -1337,67 +1492,57 @@ async def test_group_b_owned_history_success_settles_through_real_workflow(
     monkeypatch: pytest.MonkeyPatch,
     kind: str,
 ) -> None:
-    """Owned nonempty history completes the real gateway workflow.
+    """Every adapter family replays the same removed owned history.
 
-    The historical completed tool call is HMAC-owned in PostgreSQL, the
-    request reaches the real adapter over a mocked HTTP transport, and the
-    wire request carries the exact historical identity/call-output linkage
-    plus current-only declarations.  A valid 200 response settles actual
-    usage exactly once.  Route capabilities match the selected adapter
-    (vLLM / upstream-LLM / static local transport), not a forced codec.
+    All five kinds carry the same removed historical tool plus the second
+    additional_tools current-kept update (the validated removal notice is
+    compiled out before placement, so the history is representable in every
+    placement mode).  The completed call is HMAC-owned in PostgreSQL, the
+    request reaches the real adapter over a mocked HTTP transport, the wire
+    request carries the exact historical identity/call-output linkage plus
+    current-only declarations, and a valid 200 response settles actual usage
+    exactly once.  The resolver mocks ONLY route selection: the existing
+    capability gate runs on the probe, and route capabilities match the
+    selected adapter (original local / vLLM / upstream-LLM), not a forced
+    codec.
     """
     session = async_test_session
     settings = _group_b_settings()
-    provider, profile_id, removed_name, kept_name, with_notice = _SUCCESS_KINDS[kind]
-
-    now = datetime.now(UTC)
-    owner, cohort, key = await _seed_key(
+    spec = _SUCCESS_KINDS[kind]
+    key, route = await _seed_owned_history_world(
         session,
-        pin=_pin(_REV16_VERSION, _REV16_DIGEST),
-        allowed_providers=(provider,),
+        settings=settings,
+        provider=spec.provider,
+        allowed_capabilities=_ALL_CODEX_CAPS,
     )
-    ledger = await _seed_ledger(session, key=key, owner=owner, cohort=cohort, now=now)
-    route = await ModelRoutesRepository(session).create_model_route(
-        requested_model=f"codex-226b-{uuid.uuid4().hex}",
-        provider=provider,
-        upstream_model="synthetic-upstream",
-        endpoint="/v1/responses",
-    )
-    await PricingRulesRepository(session).create_pricing_rule(
-        provider=provider,
-        upstream_model="synthetic-upstream",
-        valid_from=now - timedelta(minutes=1),
-        endpoint="/v1/responses",
-        currency="EUR",
-        input_price_per_1m=_GROUP_B_INPUT_PRICE,
-        output_price_per_1m=_GROUP_B_OUTPUT_PRICE,
-    )
-    # The exact historical identity from this body, owned by this key.
-    candidate = (
-        CodexReplayRequestCandidate(
-            item_kind="function_call",
-            item_id="fc-1",
-            call_id="call-1",
-            tool_namespace="functions",
-            tool_name="read",
-        ),
-    )
-    persisted = await _seed_replay_refs(
-        session, settings=settings, key=key, ledger=ledger, candidates=candidate, route=route, now=now
-    )
-    assert persisted == 1
-
     auth_key = _auth_key(key)
-    _assert_key_route_consistency(auth_key, provider)
+    _assert_key_route_consistency(auth_key, spec.provider)
 
-    if profile_id is None:
-        capabilities = {**VLLM_CAPS, "responses": _RESPONSES_CAPS}
+    if spec.adapter == "local":
+        probe = _local_coding_route(route.id, _GROUP_B_UPSTREAM_MODEL)
+    elif spec.adapter == "vllm":
+        probe = _route_probe(
+            route.id,
+            spec.provider,
+            {**VLLM_CAPS, "responses": _CODEX_RESPONSES_CAPS},
+        )
     else:
-        capabilities = {**upstream_route_capabilities(profile_id), "responses": _RESPONSES_CAPS}
+        probe = _route_probe(
+            route.id,
+            spec.provider,
+            {**upstream_route_capabilities(spec.profile_id), "responses": _CODEX_RESPONSES_CAPS},
+        )
 
     captured: dict = {}
     client = _wire_transport_captured(_SUCCESS_OUTPUT, _SUCCESS_USAGE, captured)
-    if profile_id is None:
+    if spec.adapter == "local":
+        adapter = LocalCodingAdapter(
+            settings,
+            route_capabilities=_LOCAL_CODING_STATIC_CAPS,
+            api_key=_GROUP_B_SERVICE_TOKEN,
+            http_client=client,
+        )
+    elif spec.adapter == "vllm":
         adapter = LocalCodingVLLMAdapter(
             settings,
             route_capabilities=VLLM_CAPS,
@@ -1407,13 +1552,10 @@ async def test_group_b_owned_history_success_settles_through_real_workflow(
     else:
         adapter = ConfiguredUpstreamLLMAdapter(
             settings,
-            route_capabilities=upstream_route_capabilities(profile_id),
+            route_capabilities=upstream_route_capabilities(spec.profile_id),
             api_key=_GROUP_B_SERVICE_TOKEN,
             http_client=client,
         )
-
-    async def _resolve_owned_route(**_kwargs: object):
-        return _route_probe(route.id, provider, capabilities)
 
     async def _db_session(request: object | None = None):
         yield session
@@ -1422,7 +1564,9 @@ async def test_group_b_owned_history_success_settles_through_real_workflow(
         responses_gateway, "_get_db_session_after_auth_header_check", _db_session
     )
     monkeypatch.setattr(
-        responses_gateway, "_resolve_responses_route", _resolve_owned_route
+        responses_gateway,
+        "_resolve_responses_route",
+        _gate_route_resolver(probe),
     )
     monkeypatch.setattr(
         responses_gateway, "get_provider_adapter", lambda route, cfg: adapter
@@ -1433,7 +1577,7 @@ async def test_group_b_owned_history_success_settles_through_real_workflow(
     body = base_model()
     body["model"] = "synthetic-codex-model"
     body["store"] = False
-    body["input"] = _success_items(with_notice)
+    body["input"] = _success_items()
 
     response = await handle_response_create(
         payload=ResponsesCreateRequest.model_validate(body),
@@ -1458,11 +1602,11 @@ async def test_group_b_owned_history_success_settles_through_real_workflow(
         and item.get("call_id") == "call-1"
     ]
     assert len(hist_calls) == 1
-    assert hist_calls[0]["name"] == removed_name
-    if kind == "llama-preserve":
-        # The preserve identity fix materializes the validated namespace
-        # on the provider copy for namespace-less historical calls.
-        assert hist_calls[0].get("namespace") == "functions"
+    assert hist_calls[0]["name"] == spec.removed_name
+    if spec.namespace is not None:
+        # Preserve transports materialize the validated namespace on the
+        # provider copy for namespace-less historical calls.
+        assert hist_calls[0].get("namespace") == spec.namespace
     else:
         # Codec transports carry the identity in the wire name itself.
         assert hist_calls[0].get("namespace") is None
@@ -1475,10 +1619,10 @@ async def test_group_b_owned_history_success_settles_through_real_workflow(
     ]
     assert len(hist_outputs) == 1
     tool_names = _collect_tool_names(wire.get("tools"))
-    assert kept_name in tool_names
-    if with_notice:
-        # The removed tool is excluded from the current declarations.
-        assert removed_name not in tool_names
+    assert spec.kept_name in tool_names
+    # The removal notice plus the second additional_tools update leave the
+    # current declarations without the removed tool.
+    assert spec.removed_name not in tool_names
 
     # Actual usage settled exactly once.
     after = await _group_b_settlement_facts(session, auth_key.gateway_key_id)
@@ -1498,6 +1642,118 @@ async def test_group_b_owned_history_success_settles_through_real_workflow(
     # The plain message response adds no new replay references.
     assert after[4] == before[4]
     await client.aclose()
+
+
+@pytest.mark.parametrize(
+    ("grant_source", "missing_capability"),
+    [
+        ("key", "codex_request_envelope"),
+        ("key", "codex_client_tools"),
+        ("route", "codex_request_envelope"),
+        ("route", "codex_client_tools"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_group_b_missing_codex_grant_denied_before_quota_and_provider(
+    async_test_session: AsyncSession,
+    rev16_client_module: object,
+    monkeypatch: pytest.MonkeyPatch,
+    grant_source: str,
+    missing_capability: str,
+) -> None:
+    """The selected rev-16 shape fails closed when a Codex grant is missing.
+
+    A missing KEY-side grant is refused by the request policy before route
+    resolution; a missing ROUTE-side grant is refused by the existing
+    ``enforce_responses_route_capabilities`` gate inside the (route-selection
+    only) resolver.  Both denials precede quota reservation, provider
+    selection, and any ledger or reservation write.  The world is otherwise
+    valid: the historical identity is HMAC-owned on the selected route.
+    """
+    session = async_test_session
+    settings = _group_b_settings()
+    provider = "local-coding"
+
+    if grant_source == "key":
+        allowed_capabilities = tuple(
+            capability for capability in _ALL_CODEX_CAPS if capability != missing_capability
+        )
+        responses_caps = dict(_CODEX_RESPONSES_CAPS)
+        expected_code = "responses_codex_client_tools_not_allowed"
+    else:
+        allowed_capabilities = _ALL_CODEX_CAPS
+        responses_caps = dict(_CODEX_RESPONSES_CAPS)
+        del responses_caps[missing_capability]
+        expected_code = "responses_route_capability_not_supported"
+
+    key, _route = await _seed_owned_history_world(
+        session,
+        settings=settings,
+        provider=provider,
+        allowed_capabilities=allowed_capabilities,
+    )
+    auth_key = _auth_key(key)
+    _assert_key_route_consistency(auth_key, provider)
+
+    probe = SimpleNamespace(
+        provider=provider,
+        supports_streaming=True,
+        capabilities={
+            "responses": responses_caps,
+            **_LOCAL_CODING_STATIC_CAPS,
+        },
+    )
+
+    body = base_model()
+    body["model"] = _GATE_PUBLIC_MODEL
+    body["store"] = False
+    body["input"] = _success_items()
+
+    timeline: list[str] = []
+    before_reservations = await session.scalar(
+        select(func.count()).select_from(QuotaReservation)
+    )
+    before_ledger = await session.scalar(select(func.count()).select_from(UsageLedger))
+
+    async def _db_session(request: object | None = None):
+        yield session
+
+    monkeypatch.setattr(
+        responses_gateway, "_get_db_session_after_auth_header_check", _db_session
+    )
+    monkeypatch.setattr(
+        responses_gateway,
+        "_resolve_responses_route",
+        _gate_route_resolver(probe),
+    )
+    for name in ("_reserve_redis_rate_limit", "_reserve_responses_quota"):
+        monkeypatch.setattr(
+            responses_gateway, name, _deny_before_ownership_sentinel(timeline, name)
+        )
+    monkeypatch.setattr(
+        responses_gateway,
+        "get_provider_adapter",
+        _deny_before_ownership_sentinel(timeline, "provider"),
+    )
+
+    with pytest.raises(OpenAICompatibleError) as exc_info:
+        await handle_response_create(
+            payload=ResponsesCreateRequest.model_validate(body),
+            authenticated_key=auth_key,
+            settings=settings,
+        )
+
+    error = exc_info.value
+    assert error.status_code == 400
+    assert error.code == expected_code
+    # Denial precedes quota reservation and the provider hook.
+    assert timeline == []
+    after_reservations = await session.scalar(
+        select(func.count()).select_from(QuotaReservation)
+    )
+    after_ledger = await session.scalar(select(func.count()).select_from(UsageLedger))
+    assert after_reservations == before_reservations
+    assert after_ledger == before_ledger
 
 
 @pytest.mark.asyncio
@@ -1668,7 +1924,7 @@ async def test_preserve_wire_bodies_distinct_for_distinct_validated_namespaces(
     provider = "synthetic-llama"
     capabilities = {
         **upstream_route_capabilities("llama-cpp-qwen-v1"),
-        "responses": _RESPONSES_CAPS,
+        "responses": _CODEX_RESPONSES_CAPS,
     }
 
     captured_bodies: list[dict] = []
@@ -1736,11 +1992,10 @@ async def test_preserve_wire_bodies_distinct_for_distinct_validated_namespaces(
         )
         assert persisted == 1
 
-        async def _resolve_owned_route(_route_id=route.id, **_kwargs: object):
-            return _route_probe(_route_id, provider, capabilities)
-
         monkeypatch.setattr(
-            responses_gateway, "_resolve_responses_route", _resolve_owned_route
+            responses_gateway,
+            "_resolve_responses_route",
+            _gate_route_resolver(_route_probe(route.id, provider, capabilities)),
         )
 
         body = base_model()
