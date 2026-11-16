@@ -1126,6 +1126,16 @@ see the [Qwen runbook](runbooks/codex-qwen38.md),
 [clean client examples](../examples/codex/qwen38-27b/README.md), and
 [bounded verification record](verification/codex-qwen38-live-smoke.md).
 
+## Codex declaration-history foundation (objective 226)
+
+The shared pure lifecycle helper
+(``services/codex_tool_history.py``) and its source-derived wire
+contract for pinned Codex ``rust-v0.167.1`` are recorded in the
+[2026-11-16 verification record](verification/2026-11-16-codex-tool-history.md).
+This round changes no HTTP acceptance, frozen profile, or accounting
+behavior; gateway and adapter integration are staged for later
+same-PR rounds.
+
 
 ## Failure before and after streaming starts
 
