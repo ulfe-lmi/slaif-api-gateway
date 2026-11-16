@@ -140,8 +140,9 @@ Core invariants:
   provider body but changes no admission, estimation, quota reservation,
   ledger, or cost accounting; provider final usage/cost remains authoritative.
 - Under the profile-selected positional-update lifecycle (shipped preset
-  `codex-0.167.1`, DATA revision `16`; the packaged default and every other
-  revision are unchanged), Codex create admission estimation is anchored on
+  `codex-0.167.1`, DATA revision `16`; the packaged default and every
+  unmodified shipped preset/profile WITHOUT the feature are unchanged),
+  Codex create admission estimation is anchored on
   the PREPARED body: the resolved transport's own pure preparation (native
   vLLM codec, shared configured-upstream preparation, or exact canonical)
   is re-run over the lowered body, and the bounded prepared-JSON byte

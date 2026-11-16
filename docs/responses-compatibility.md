@@ -56,8 +56,12 @@ audited migration (`migrate-key-profile` dry-run/apply, see
 `codex-0.167.1` (same module ID, DATA revision `16`, canonical identity
 digest `cff9f7b56966eb2068fdbeb203fe04ac32890e34524200372c2d3f2a30e566ed`)
 additionally activates the bounded versioned declaration-history
-lifecycle described below; the packaged default and every other preset
-retain the single-initial-declaration law unchanged. Codex 0.149's observed
+lifecycle described below; the packaged default and every unmodified
+shipped preset/profile WITHOUT the feature retain the
+single-initial-declaration law — the engine selects the mode by the
+explicit profile flag, not a revision heuristic, and a future operator
+revision may select the known mode without granting any authority or a
+general newer-client qualification. Codex 0.149's observed
 `tool_search` and `web_search` declarations are transient adapter-managed
 candidate facts only. They never set hosted web-search admission, external-tool
 fence, pricing, or accounting state. No raw Codex identity/session/workspace
@@ -499,15 +503,16 @@ while preserving the remaining input, as described in
 [`provider-forwarding-contract.md`](provider-forwarding-contract.md). It
 changes no tool-availability semantics, applies to no other profile or
 server pair, and a declaration at any later input position fails closed.
-This single-initial-declaration law applies unchanged to every profile
-DATA revision without the positional-update lifecycle (including the
-packaged default).
+This single-initial-declaration law applies unchanged to the packaged
+default and every unmodified shipped preset/profile WITHOUT the feature
+(the engine selects the explicit profile flag, not a revision
+heuristic).
 
 **Versioned declaration history (profile-selected positional-update
 mode).** The shipped `codex-0.167.1` preset (DATA revision `16`)
 activates the bounded positional-update lifecycle for the same gated
-`additional_tools` slice; every other profile revision keeps the law
-above. In this mode, `additional_tools` items are incremental
+`additional_tools` slice; every unmodified shipped preset/profile
+WITHOUT the feature keeps the law above. In this mode, `additional_tools` items are incremental
 adds/changes at any validated input position (each still passing the
 per-declaration taxonomy, schema, description, and byte law), and
 removals arrive only as standalone developer
@@ -544,11 +549,13 @@ Transports translate historical calls per validated binding (native
 wire names or portable names); a profile that would reorder
 developer/system text for a lifecycle request is refused exactly
 (`upstream_llm_bindings_placement_conflict`) unless the instructions
-already form the leading prefix — identically in the pre-admission
-preview and the transport. The compact endpoint remains unqualified for
-this module: the 0.162 module pairs only with local server modules and
-the local coding auxiliary endpoint is denied, so compact is create-only
-here and frozen 0.147/OpenAI compact behavior is unchanged.
+already form the leading prefix, to preserve ordinary instruction
+chronology in the forwarded body (validated removal notices are already
+compiled out) — identically in the pre-admission preview and the
+transport. This MODULE is create-only: compact is unqualified for it
+(the 0.162 module pairs only with local server modules and the local
+coding auxiliary endpoint is denied), and frozen 0.147/OpenAI compact
+behavior is unchanged.
 
 Streaming call events and replay require a third capability,
 `codex_streaming_tool_events`, on both the key and route in addition to the two

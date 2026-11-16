@@ -186,11 +186,12 @@ remain unchanged, and no other profile or server pair is affected.
 
 ### Codex 0.162 positional declaration-history lowering (profile-selected)
 
-Under the profile DATA revisions that activate positional-update mode
-(the shipped `codex-0.167.1` preset, DATA revision `16`; the packaged
-default and every other revision keep the single-initial-declaration law
-above), the Gateway lowers the FULL validated declaration history on the
-same pair. The core-validated FINAL active catalog becomes the top-level
+Under the profile DATA that activates positional-update mode (the
+shipped `codex-0.167.1` preset, DATA revision `16`; the packaged default
+and every unmodified shipped preset/profile WITHOUT the feature keep the
+single-initial-declaration law above — the engine selects the explicit
+profile flag, not a revision heuristic), the Gateway lowers the FULL
+validated declaration history on the same pair. The core-validated FINAL active catalog becomes the top-level
 `tools` namespace entries in first-seen declaration order (empty
 namespace groups omitted; a later namespace header without description
 clears that optional field rather than reviving an older one). The
@@ -213,9 +214,9 @@ by the production adapter and the pre-admission estimate preview): a
 lifecycle request (non-`None` bindings) on a
 `leading_system_developer` profile is refused exactly with
 `upstream_llm_bindings_placement_conflict` when its instructions do not
-already form the leading prefix, because reordering would move removal
-notices ahead of the tool history they describe; prefix-only inputs
-remain representable, and legacy `bindings=None` requests keep the
+already form the leading prefix, to preserve ordinary instruction
+chronology in the forwarded body (validated removal notices are already
+compiled out); prefix-only inputs remain representable, and legacy `bindings=None` requests keep the
 existing reordering behavior.
 
 Admission estimation for this mode is anchored on the PREPARED body: the

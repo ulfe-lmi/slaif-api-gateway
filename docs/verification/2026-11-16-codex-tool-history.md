@@ -256,13 +256,14 @@ configured upstream) clears ``json_body={}``, ``text_body=None``,
 ``binary_body=None`` and sets the fixed code (e.g.
 ``vllm_tool_protocol_invalid``) while preserving the already-PARSED
 usage/cost/provider metadata; on ``bindings=None`` the parse error
-propagates unchanged (legacy behavior).  Core
-``_reject_settled_codec_rejection`` settles that parsed usage through the
-normal settlement path and then refuses the marked response with a fixed
-502 (code passed through, fixed content-free message) BEFORE replay
-references/storage/return — no free release, no double finalization; no
-raw or partly decoded provider output crosses the seam (exceptions,
-logs, persistence), and the denied call receives no replay references.
+propagates unchanged (legacy behavior).  The core's normal settlement
+settles that parsed usage, and only then does
+``_reject_settled_codec_rejection`` — which refuses, it does not settle
+— withhold the marked response with a fixed 502 (code passed through,
+fixed content-free message) BEFORE replay references/storage/return: no
+free release, no double finalization; no raw or partly decoded provider
+output crosses the seam (exceptions, logs, persistence), and the denied
+call receives no replay references.
 
 ### Admission estimation (round b)
 
@@ -338,19 +339,21 @@ coherent for already-supported compact requests.
   reference provenance at declaration and call position; the full pinned
   notice grammar including every refusal law).
 - Adapter suites ``tests/unit/test_upstream_llm_adapter.py`` +
-  ``tests/unit/test_local_coding_vllm.py``: **103** tests (shared pure
-  preparation parity, placement refusal, codec wire identity, lifecycle
-  refusal seam).  54 + 103 = **157** focused cases, plus governance 10
-  and Ruff/docs hygiene.  Root independently ran the helper suite (53
-  before the added canary) and the final adapter suite (103), and a
-  six-variant mocked marker-seam probe (lifecycle/legacy across local
-  vLLM, configured native_vllm, and configured function_tools): lifecycle
-  retains parsed usage/cost metadata, clears the rejected body, keeps
-  the fixed code out of ``repr``/errors; legacy codec refusal unchanged.
-  No provider/DB calls in any of these.
+  ``tests/unit/test_local_coding_vllm.py`` at the round-a checkpoint:
+  **103** tests (shared pure preparation parity, placement refusal,
+  codec wire identity).  54 + 103 = **157** focused cases, plus
+  governance 10 and Ruff/docs hygiene.  Root independently ran the
+  helper suite (53 before the added canary) and the final adapter suite
+  (103).  These round-a cases do NOT cover the b-round marker seam or
+  the pure-preview wiring.
 
 ### Round-b focused evidence (this record's commits)
 
+- Root's six-variant mocked marker-seam probe (round b; lifecycle/
+  legacy across local vLLM, configured native_vllm, and configured
+  function_tools): lifecycle retains parsed usage/cost metadata,
+  clears the rejected body, keeps the fixed code out of ``repr``/
+  errors; legacy codec refusal unchanged.  No provider/DB calls.
 - New integration regression module
   ``tests/unit/test_codex_tool_history_replay_wiring.py``: **42** tests
   covering extractor ownership law (same-name-later-namespace binding,
@@ -418,17 +421,20 @@ coherent for already-supported compact requests.
 **NOT RUN**: real private-client reproduction, real upstream inference,
 any real operator key migration.  Mocked HTTP paths are clearly
 distinguished from actual inference throughout; synthetic gateway-key
-canaries only.  The normal-admin byte oracle need not rerun (no
-template/CSS change).
+canaries only.
 
 ## Boundaries and honesty notes
 
 - This is a bounded CREATE-only client-tool lifecycle: one new gated
   profile data revision, no new unqualified route/backend, no hosted
   tool authority, no gateway execution, no stored tool content.
-- Absent full-current-prefix turns and customized (non-pinned) notice
-  wording remain unsupported; arbitrary customized prose is not a
-  detection or authorization source after upstream metadata stripping.
+- A turn WITHOUT the full current prefix (the default incremental wire)
+  IS supported whenever the applicable earlier validated declarations
+  are present; the limitations are a call with no applicable validated
+  declaration preceding it, and unsupported mixed full-snapshot/
+  positional dialects. Customized (non-pinned) notice wording remains
+  unsupported, and arbitrary customized prose is not a detection or
+  authorization source after upstream metadata stripping.
 - The prepared-body estimate is a conservative byte approximation, not a
   tokenizer measurement or no-overrun guarantee; raw bounds remain
   authoritative.

@@ -83,10 +83,10 @@ def prepare_upstream_llm_body(
         and profile.instruction_placement == "leading_system_developer"
         and not instructions_already_leading(body.get("input"))
     ):
-        # Lifecycle bindings name historical calls in temporal order.
-        # Reordering developer/system text would move removal notices
-        # ahead of the tool history they describe, so an actual
-        # order-changing transition is refused exactly.
+        # Preserve the temporal chronology of ordinary developer/system
+        # instructions in the forwarded body (validated removal notices
+        # are already compiled out), so an actual order-changing
+        # transition is refused exactly.
         raise ProviderRequestError(
             "Codex tool-call bindings require an order-preserving instruction "
             "placement; this profile reorders developer/system messages.",

@@ -253,6 +253,59 @@ Do not claim that all future Codex protocol semantics fit in profile
 DATA: new execution, stream, or item behavior outside the engine
 validators may still require a code change.
 
+### Codex 226 declaration-history profile upgrade (revision 15 -> 16)
+
+The 226 declaration-history lifecycle is ENGINE behavior plus profile
+DATA: the new preset (`codex-0.167.1`, revision `16`) requires the NEW
+engine containing the lifecycle validators. Pointing the preset file at
+an old engine is NOT a supported upgrade: the old engine's
+single-initial-declaration law refuses the incremental history and may
+return its singleton refusals.
+
+Exact scoped sequence (synthetic planning example; run the literal
+commands with the operator's real key UUIDs and trusted file paths):
+
+1. Deploy the new engine (API, worker, and scheduler images) with the
+   PREVIOUS profile file still active (e.g. the `codex-0.167.0`
+   revision-15 file); no key change yet.
+2. Validate the candidate offline:
+   `slaif-gateway codex inspect-profile-file
+   /operator/client-compatibility/codex-0.167.1.json --json` —
+   expected: module `codex-0.162-responses-v1`, version `16`,
+   canonical digest
+   `cff9f7b56966eb2068fdbeb203fe04ac32890e34524200372c2d3f2a30e566ed`.
+3. Save the active revision-15 file (canonical digest
+   `9634f95de985d8c06fd0b09af3358ae589a14b828d4d4c357d4f98bcafec6a5d`)
+   as the rollback snapshot, then point
+   `CODEX_COMPATIBILITY_PROFILE_FILE` at the revision-16 file (trusted
+   read-only mount, atomic host-side rename).
+4. DRAIN and RESTART every process (all API workers plus any CLI usage
+   against the same configuration): one active profile snapshot per
+   deployment; no hot reload, no mixed-revision serving.
+5. Verify `slaif-gateway codex show-profile` reports module
+   `codex-0.162-responses-v1`, version `16`, digest
+   `cff9f7b56966eb2068fdbeb203fe04ac32890e34524200372c2d3f2a30e566ed`.
+6. Migrate each pinned key explicitly — dry run first, then `--apply`,
+   repeated per key:
+   `slaif-gateway codex migrate-key-profile <key-uuid> --from-version
+   15 --from-digest 9634f95de985d8c06fd0b09af3358ae589a14b828d4d4c357d4f98bcafec6a5d
+   --reason "226 declaration-history upgrade" --json`, then the same
+   command with `--apply` (target `active` by default).
+7. Verify the migrated pinned keys serve under revision 16; any
+   un-migrated pin remains denied closed.
+
+**Rollback (on the new engine, data-only):** restore the saved
+revision-15 file as the active snapshot, restart/drain every process,
+then migrate each key back:
+`slaif-gateway codex migrate-key-profile <key-uuid> --from-version
+16 --from-digest cff9f7b56966eb2068fdbeb203fe04ac32890e34524200372c2d3f2a30e566ed
+--reason "226 rollback" --json`, then `--apply`, and verify revision 15
+is active. Only then, if required, downgrade to the prior image. There
+is NO database or usage rollback: ledger rows, replay references, and
+audit entries are never reverted; and keys served under the restored
+revision-15 snapshot return to the old engine's singleton law, whose
+incremental-history refusals may reappear for 0.167.1-shaped clients.
+
 
 ## Qwen executable compatibility update (packaged profile 8)
 
