@@ -40,11 +40,24 @@ captured Codex 0.162 module (`codex-0.162-responses-v1`, a data-revision
 module captured from CLI 0.162.1 whose effective version is the validated
 profile DATA revision — packaged default revision `8` — and whose fixture
 digest binds the canonical digest of the shipped compatibility policy DATA)
-is registered the same way with exactly one
-`codex-0.162-responses-v1 -> local-coding-v1` pair. A validated operator
-profile file (`CODEX_COMPATIBILITY_PROFILE_FILE`, data revision >= 3) loads
-with the same installed engine and no rebuild; stale legacy pins fail
-closed until an explicit audited migration. Codex 0.149's observed
+is registered the same way with exactly three pairs:
+`codex-0.162-responses-v1 -> local-coding-v1`,
+`codex-0.162-responses-v1 -> local-coding-vLLM`, and
+`codex-0.162-responses-v1 -> configured-upstream-llm`. A validated
+operator profile file (`CODEX_COMPATIBILITY_PROFILE_FILE`, data revision
+>= 3) loads with the same installed engine and no rebuild. The registry
+binds ONE profile data revision per process (one-shot guarded bootstrap:
+same-identity re-initialization is an idempotent no-op, the first
+different identity completes the bootstrap, and any later different
+identity fails closed), so a process serves exactly the revision it
+booted with; stale pins on other revisions fail closed until an explicit
+audited migration (`migrate-key-profile` dry-run/apply, see
+[`upgrade-runbook.md`](upgrade-runbook.md)). The shipped preset
+`codex-0.167.1` (same module ID, DATA revision `16`, canonical identity
+digest `cff9f7b56966eb2068fdbeb203fe04ac32890e34524200372c2d3f2a30e566ed`)
+additionally activates the bounded versioned declaration-history
+lifecycle described below; the packaged default and every other preset
+retain the single-initial-declaration law unchanged. Codex 0.149's observed
 `tool_search` and `web_search` declarations are transient adapter-managed
 candidate facts only. They never set hosted web-search admission, external-tool
 fence, pricing, or accounting state. No raw Codex identity/session/workspace
@@ -486,6 +499,56 @@ while preserving the remaining input, as described in
 [`provider-forwarding-contract.md`](provider-forwarding-contract.md). It
 changes no tool-availability semantics, applies to no other profile or
 server pair, and a declaration at any later input position fails closed.
+This single-initial-declaration law applies unchanged to every profile
+DATA revision without the positional-update lifecycle (including the
+packaged default).
+
+**Versioned declaration history (profile-selected positional-update
+mode).** The shipped `codex-0.167.1` preset (DATA revision `16`)
+activates the bounded positional-update lifecycle for the same gated
+`additional_tools` slice; every other profile revision keeps the law
+above. In this mode, `additional_tools` items are incremental
+adds/changes at any validated input position (each still passing the
+per-declaration taxonomy, schema, description, and byte law), and
+removals arrive only as standalone developer
+notices that begin with one of the EXACT pinned bundled headers and fully
+parse under the pinned upstream grammar (at most two sections, `- `
+lines, bounded names/bytes). A recognized candidate that then fails the
+pinned grammar is a fixed safe refusal; every other developer message —
+including customized or reworded removal wording, which cannot be
+reliably recognized after upstream metadata stripping — is ordinary
+history with no removal or authorization effect. An ordinary developer
+instruction is never an addition or authorization source. Tool calls
+bind immutably to the identity active at their own position: a later
+declaration never authorizes an earlier call, a removed tool cannot be
+newly called, a same-name `function`/`custom` redefinition rebinds only
+later calls, and a `namespace`-omitted call resolves by ONE unambiguous
+active `(name, kind)` match (zero or ambiguous matches refuse). The
+gateway compiles the validated declaration metadata out of the FORWARDED
+body only — every declaration item and inert ID, every validated removal
+notice, and the exact pinned incremental hint only when it is a
+standalone developer text immediately preceding a validated declaration
+— while preserving every other input item (roles, contents, IDs,
+relative order) and forwarding the FINAL active catalog as top-level
+`tools`; the canonical incoming history remains the validation/HMAC/
+resource representation. A new-mode request with no declarations
+materializes an empty active catalog, so any generated tool call is
+denied in non-streaming output and SSE. Replay ownership: every
+validated actual call must yield exactly one candidate (a fixed safe
+denial otherwise, never a silent omission), bound to its original
+`call_id`/identity; the ID-less call form is qualified only for this
+mode (or the existing 0.149 path) AND only when the selected profile
+spec declares `allow_idless_tool_call_replay`, retaining the deferred
+same-key CALL-ID HMAC check after local route/pair validation.
+Transports translate historical calls per validated binding (native
+wire names or portable names); a profile that would reorder
+developer/system text for a lifecycle request is refused exactly
+(`upstream_llm_bindings_placement_conflict`) unless the instructions
+already form the leading prefix — identically in the pre-admission
+preview and the transport. The compact endpoint remains unqualified for
+this module: the 0.162 module pairs only with local server modules and
+the local coding auxiliary endpoint is denied, so compact is create-only
+here and frozen 0.147/OpenAI compact behavior is unchanged.
 
 Streaming call events and replay require a third capability,
 `codex_streaming_tool_events`, on both the key and route in addition to the two

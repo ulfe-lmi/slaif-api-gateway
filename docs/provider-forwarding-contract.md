@@ -184,6 +184,71 @@ metadata for 0.162 requests exactly as it already does for 0.149. The signed
 opaque identity, service Bearer substitution, and all other pair behavior
 remain unchanged, and no other profile or server pair is affected.
 
+### Codex 0.162 positional declaration-history lowering (profile-selected)
+
+Under the profile DATA revisions that activate positional-update mode
+(the shipped `codex-0.167.1` preset, DATA revision `16`; the packaged
+default and every other revision keep the single-initial-declaration law
+above), the Gateway lowers the FULL validated declaration history on the
+same pair. The core-validated FINAL active catalog becomes the top-level
+`tools` namespace entries in first-seen declaration order (empty
+namespace groups omitted; a later namespace header without description
+clears that optional field rather than reviving an older one). The
+validated declaration metadata is compiled out of the FORWARDED body
+only: every `additional_tools` item and its inert protocol ID, every
+validated removal notice, and the exact pinned upstream incremental hint
+ONLY when it is a standalone developer text immediately preceding a
+validated declaration. Every other input item — ordinary messages, tool
+calls, outputs, IDs, and non-adjacent developer text — is preserved in
+order. A non-empty top-level `tools` field, missing or foreign facts, or
+a non-list input fails closed; definitions are deep-copied into the new
+body and the policy representation is never mutated. Historical calls
+are translated per validated binding by the selected transport: native
+vLLM wire names (`namespace.name`) or portable
+`tool_<label>_<sha256-24>` names; `preserve` encodings forward the
+canonical body with no codec.
+
+Instruction placement is part of the SAME shared pure preparation (run
+by the production adapter and the pre-admission estimate preview): a
+lifecycle request (non-`None` bindings) on a
+`leading_system_developer` profile is refused exactly with
+`upstream_llm_bindings_placement_conflict` when its instructions do not
+already form the leading prefix, because reordering would move removal
+notices ahead of the tool history they describe; prefix-only inputs
+remain representable, and legacy `bindings=None` requests keep the
+existing reordering behavior.
+
+Admission estimation for this mode is anchored on the PREPARED body: the
+resolved transport's own pure preparation is re-run over the lowered
+body, and the bounded prepared-JSON byte calculation (complete prepared
+input with real IDs once — including a plain string input — plus
+forwarded `instructions` and the relevant non-message fields present in
+the prepared body, `ceil(bytes/3)` tokens) replaces the provisional
+canonical estimate, re-anchoring `unadjusted_input_tokens` so later
+route/media handling and revalidation neither accumulate deltas nor
+restore stale totals. This is a conservative byte approximation, not a
+tokenizer measurement or a no-overrun promise; raw byte/item/text/schema
+bounds stay independent and always active. A prepared body the transport
+itself would refuse fails closed before any admission side effect,
+preserving the two known fixed representability codes
+(`upstream_llm_bindings_placement_conflict`,
+`vllm_native_wire_identity_collision`) with status 400 and appropriate
+param, and a generic safe `responses_codex_tool_wire_invalid` fallback
+otherwise. Legacy (non-positional) profiles retain their exact old
+estimator and ordering.
+
+When a codec transport on an explicit lifecycle request rejects a
+removed/undeclared wire tool, it clears the rejected output
+(`json_body={}`, text/binary cleared), preserves the already-PARSED
+usage/cost/provider metadata, and marks the response with one fixed
+content-free code (`safe_rejection_code`, excluded from `repr`). The core
+settles that parsed usage through the normal settlement path and then
+refuses the marked response with a fixed 502 BEFORE replay references,
+storage, or return: no double finalization, no free release, no raw or
+partly decoded output in exceptions, logs, or persistence, and no replay
+references for the denied call. `bindings=None` codec parse errors
+propagate unchanged (legacy behavior).
+
 ## Provider Adapters
 
 | Provider | Adapter | Upstream API shape | Implemented endpoint |
@@ -1072,13 +1137,17 @@ provider cost remains held and reserved; it is never silently forgiven.
 
 ## Qwen Local coding compatibility continuation
 
-The packaged 0.162 profile is now revision **7**. Engine changes are version
+The packaged 0.162 profile is now revision **8**. Engine changes are version
 owned: revision 4 permits schema property-map labels such as `secret` while
 still recursively checking their values for provider authority; revision 5
 adds only the custom grammar tool `functions.apply_patch` through declaration,
 streaming, and replay; revision 6 accepts bounded Local visible reasoning SSE
 with omitted `output_index` and empty encrypted content; revision 7 permits
-that same empty-ciphertext visible reasoning in continuation input. An empty
+that same empty-ciphertext visible reasoning in continuation input;
+revision 8 keeps the strict built-in tool-name rule while additionally
+accepting the bounded leading-underscore form for dynamic
+`mcp__codex_apps__*` connector namespaces (a DATA-defined rule with a
+file-updatable leading-underscore ceiling). An empty
 ciphertext never creates an encrypted-replay reference or authorization.
 Existing visible-text shape, size, capability, and opaque replay checks remain.
 Ordinary Responses and older client modules keep their own policies.

@@ -745,6 +745,26 @@ default-off and policy-first:
   audited, or exported. Only versioned HMAC-SHA-256 digests of replay item/call
   identifiers plus safe ownership/routing/kind/name metadata may be persisted
   after successful usage-backed accounting, with an operator-configurable expiry (default and maximum: 365 days).
+- The profile-selected positional-update declaration-history lifecycle
+  (shipped preset `codex-0.167.1`, DATA revision `16`) preserves the same
+  ownership law: every validated actual function/custom call must yield
+  exactly one replay-ownership candidate bound to its original
+  `call_id`/positional identity, and any extraction mismatch is a fixed
+  safe denial — a validated call can never be silently omitted from
+  ownership verification. The facts carry naming only; the gateway still
+  resolves every candidate through the existing same-key item/call-ID
+  HMAC and provider/route/model/kind checks before any side effect. The
+  ID-less call form is qualified only for this mode (or the existing
+  0.149 path) AND only when the selected profile spec declares
+  `allow_idless_tool_call_replay`; an unowned ID-less call is never
+  accepted, and frozen legacy profiles keep their existing boundaries.
+  When a codec transport refuses a removed/undeclared wire tool on an
+  explicit lifecycle request, the rejected output is cleared and only
+  the already-parsed usage/cost/provider metadata plus one fixed
+  content-free marker remain: the core settles that parsed usage and
+  then refuses with a fixed 502 before replay references, storage, or
+  return, and no raw or partly decoded provider output crosses
+  exceptions, logs, or persistence.
 - Fully gated Codex requests also require strict numeric route limits bounded
   by operator ceilings. An omitted output maximum becomes the bounded route
   default (32,768 for the qualification profile), never an unbounded request;

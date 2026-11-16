@@ -118,7 +118,7 @@ Codex CLI 0.162.1 is a separate structural-capture module:
 | Historical version-2 fixture | `tests/fixtures/codex/0.162.1/additional-tools-profile-v2.json` / `b7b257ed9338969a4482fd19434adb6b4a6d96c10037d69899298e643d303f85` (byte-immutable; pinned as the `0162-v2` migration selector) |
 | Historical version-1 fixture | `tests/fixtures/codex/0.162.1/additional-tools-profile-v1.json` / `724ec7358a95e8820f02f7dd2d2b1b4ad1276d4065af2ecd329cc2ca52b5892e` (byte-immutable; pinned as the `0162-v1` migration selector) |
 | Real 197-name regression fixture | `tests/fixtures/codex/0.162.1/connector-tool-names-197-v1.json` / `a32bbf25de4e0be15690feaf3a86a4f453aac2d281b9b67d2cd21daa1bd1c8c4` (supplemental evidence, SYNTHETIC-wrapped, not a runtime inventory) |
-| Runtime status | registered, default-denied; exact `local-coding-v1` pair only |
+| Runtime status | registered, default-denied; exact `local-coding-v1`, `local-coding-vLLM`, and `configured-upstream-llm` pairs |
 
 The profile accepts the gated `additional_tools` declaration under a wider
 finite taxonomy. The shipped default profile DATA (revision 8) retains the
@@ -157,6 +157,20 @@ namespace `tools` array before final serialization and HMAC signing, then
 discarded with its protocol ID while the remaining input is preserved; see
 [`provider-forwarding-contract.md`](provider-forwarding-contract.md). No
 other profile or server pair is altered.
+
+The shipped preset `codex-0.167.1` (same module ID, DATA revision `16`,
+canonical identity digest `cff9f7b56966eb2068fdbeb203fe04ac32890e34524200372c2d3f2a30e566ed`)
+additionally activates the bounded versioned declaration-history
+lifecycle (positional-update declarations, pinned removal notices,
+per-call binding, qualified ID-less replay, and the prepared-body
+admission estimate) documented in
+[`responses-compatibility.md`](responses-compatibility.md) and
+[`verification/2026-11-16-codex-tool-history.md`](verification/2026-11-16-codex-tool-history.md).
+The packaged default (revision 8) and every other preset retain the
+single-initial-declaration law, and loading the new preset makes earlier
+pins stale until the audited `migrate-key-profile` migration (one active
+profile per process; see
+[`upgrade-runbook.md`](upgrade-runbook.md)).
 
 Pinned 0.149-v4 keys may be upgraded to `0149-v5` or `0162-v1` with
 `slaif-gateway codex upgrade-key-module` (dry-run by default; `--apply`

@@ -22,6 +22,7 @@ no silent fallback or per-request file reload.
 | `codex-0.163.0` | `rust-v0.163.0` | 12 | schema 2 |
 | `codex-0.164.0` | `rust-v0.164.0` | 14 | schema 2 |
 | `codex-0.167.0` | `rust-v0.167.0` | 15 | schema 2 |
+| `codex-0.167.1` | `rust-v0.167.1` | 16 | schema 2 |
 
 The existing static module ID `codex-0.162-responses-v1` names the decoder
 generation. Its active version and fixture digest come from the selected data

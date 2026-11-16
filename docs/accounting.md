@@ -139,6 +139,36 @@ Core invariants:
   lowering removes the validated initial declaration prefix from the forwarded
   provider body but changes no admission, estimation, quota reservation,
   ledger, or cost accounting; provider final usage/cost remains authoritative.
+- Under the profile-selected positional-update lifecycle (shipped preset
+  `codex-0.167.1`, DATA revision `16`; the packaged default and every other
+  revision are unchanged), Codex create admission estimation is anchored on
+  the PREPARED body: the resolved transport's own pure preparation (native
+  vLLM codec, shared configured-upstream preparation, or exact canonical)
+  is re-run over the lowered body, and the bounded prepared-JSON byte
+  calculation (complete prepared input with real IDs once, forwarded
+  instructions, and the relevant non-message fields present in the prepared
+  body, `ceil(bytes/3)` tokens) replaces the provisional canonical estimate,
+  re-anchoring `unadjusted_input_tokens` so later route/media handling and
+  revalidation neither accumulate deltas nor restore stale totals. This is
+  a conservative byte approximation, not a tokenizer measurement or
+  no-overrun promise; raw byte/item/text/schema bounds stay independent and
+  always active, and legacy (non-positional) profiles retain their exact old
+  estimator and ordering. A prepared body the transport itself would refuse
+  fails closed BEFORE any admission side effect (quota, pricing, or provider
+  work), preserving the precise fixed representability codes
+  (`upstream_llm_bindings_placement_conflict`,
+  `vllm_native_wire_identity_collision`) with a generic safe
+  `responses_codex_tool_wire_invalid` fallback for other preparation
+  failures; provider final usage/cost remains authoritative.
+- When a codec transport on an explicit positional-lifecycle request rejects
+  a removed/undeclared wire tool, the adapter clears the rejected output and
+  preserves the already-PARSED usage/cost/provider metadata with one fixed
+  content-free marker. The core settles that parsed usage through the normal
+  settlement path and then refuses the response with a fixed 502 before
+  replay references, storage, or return: no free release, no double
+  finalization, no raw or partly decoded output in exceptions, logs, or
+  persistence, and the denied call receives no replay reference.
+  `bindings=None` codec parse errors keep their existing legacy handling.
 - Provider-encrypted Codex reasoning generation/replay requires the independent
   default-off `codex_encrypted_reasoning_replay` key and route capability.
   Encrypted and summary bytes are bounded and counted conservatively as model

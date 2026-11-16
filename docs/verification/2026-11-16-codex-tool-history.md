@@ -1,11 +1,42 @@
-# Codex declaration-history foundation (objective 226-a) — 2026-11-16
+# Codex declaration history (objective 226, rounds a + b) — 2026-11-16
 
-Staged groundwork for versioned Codex ``additional_tools`` declaration
-history.  This round adds ONE new pure shared module, its focused unit
-suite, and this record.  HTTP acceptance is deliberately UNCHANGED (the
-single-``additional_tools``-item law and the 0.162 lowering remain in
-force); gateway integration, profile promotion, and estimation arrive in
-later same-PR rounds.
+Versioned Codex ``additional_tools`` declaration-history support for the
+``codex-0.162-responses-v1`` client module: the pure shared lifecycle module
+(round a) plus its integration into the request policy, gateway, lowering,
+replay ownership, output validation, registered transports, and admission
+estimation under ONE new gated operator profile (round b).  Unit/request
+fixtures are synthetic and providers are mocked; the PostgreSQL evidence
+uses one REAL disposable PostgreSQL 16 instance.  No real private client
+body, credential, or inference was used.
+
+## Delivered feature
+
+- A pure, stdlib-only lifecycle module that validates a bounded
+  incremental declaration history (adds/changes plus pinned removal
+  notices) and produces immutable facts: final active catalog, per-call
+  bindings, and definition provenance at declaration and call position.
+- One new operator profile DATA file (``codex-0.167.1.json``, revision 16,
+  same module ID ``codex-0.162-responses-v1``) whose
+  ``codex_tool_history_positional_updates`` feature activates the
+  ``positional_updates`` lifecycle mode and
+  ``allow_idless_tool_call_replay``.  The packaged default (revision 8) and
+  every frozen legacy preset are unchanged.
+- Request-policy integration: positional validation with request-local
+  facts, exact lowering to the final active tools, replay-candidate
+  ownership extraction (including the qualified ID-less law and a
+  fail-closed completeness guard), and an output current-set guard for
+  non-streaming and SSE responses.
+- Transport integration on the already registered
+  ``codex-0.162-responses-v1`` pairs (local coding, local vLLM, configured
+  upstream LLM): per-call wire identity translation, a shared pure
+  instruction-placement guard with one fixed safe refusal code, and a
+  bounded codec-refusal accounting seam that preserves already-settled
+  usage.
+- Route-aware admission estimation anchored on the PREPARED body the
+  resolved transport actually forwards (byte-based approximation), with the
+  exact fixed representability codes preserved through the policy wrapper.
+- Audited no-key-rotation profile migration/rollback documentation reusing
+  the existing ``migrate-key-profile`` mechanism.
 
 ## Source provenance
 
@@ -24,10 +55,10 @@ independently provided and verified byte-identical against that ref
 | ``/tmp/slaif-codex-01671-step-context.rs`` ``372bc9b4cacf16d5ade275c0002562d49ffd9f673a03f336bf50dfb7743ec8c1`` | ``core/src/session/step_context.rs`` |
 | ``/tmp/slaif-codex-01671-world-state.rs`` ``79aa91535e9c195b7ffab3d30ff1b5efda6737b24e17afb51899f9700110c08a`` | ``core/src/session/world_state.rs`` |
 | ``/tmp/slaif-codex-01671-top-level-tools.rs`` ``6c241cfe0904af7595737dd5677a445e6d85f0191c59569dd5533edc8acf29b2`` | ``core/src/context/world_state/top_level_tools.rs`` |
-| ``/tmp/slaif-codex-01671-models.rs`` ``daeb5bd499ed49b364be4c031e3c754f7fb39945531214c0b8fe00896eb3da82`` | ``protocol/src/models.rs`` |
+| ``/tmp/slaif-codex-01671-models.rs`` ``daeb5bd499ed49b364be4c031e3c754f7fb39945531214c0b8fe0096eb3da82`` | ``protocol/src/models.rs`` |
 
 No private request body, raw prompt/history, credential, or real
-response ID is used or recorded here; the affected request is referred
+response ID is used or recorded here; the motivating request is referred
 to only by the operator-safe fact that a second ``additional_tools``
 item sits at ``input[265]``.
 
@@ -64,112 +95,343 @@ PRESENCE of a second item at ``input[265]`` — not its contents,
 equivalence, cause, or the private client settings — and this record
 makes no claim about that request.
 
-## Implemented shared foundation
+## Final implementation
 
-New module ``app/slaif_gateway/modules/codex_tool_history.py`` (pure,
-stdlib-only, no app imports):
+### Pure lifecycle helper (round a, relocated in round b)
 
-- **Explicit modes.** ``full_snapshot`` (every declaration replaces the
-  catalog; an absent first declaration legally means "no local
-  tools") and ``positional_updates`` (declarations are adds/changes
-  only; removals arrive as parsed notice facts).  Absence of a mode
-  keeps legacy behavior because the gateway does not consult the
-  helper yet.  Unknown modes fail closed.
-- **Events** (all frozen dataclasses): validated declaration
-  (canonical taxonomy + optional inert item ID + optional definition
-  references keyed ``(namespace, tool)``), parsed removal notice, tool
-  call (``namespace`` may be ``None``), tool call output (exact
-  ``function``/``custom`` kind, optional output item ID).
-- **Facts** (immutable ``CodexToolHistoryFacts``): applied
-  chronological steps in caller order, final active taxonomy,
-  ``call_bindings`` — the stable core-to-adapter shape: an immutable
-  stdlib ``types.MappingProxyType`` mapping keyed by the ORIGINAL
-  ``call_id`` to ``(namespace, name, kind)`` — pending call IDs, and
+``app/slaif_gateway/modules/codex_tool_history.py`` — pure, stdlib-only,
+no app imports.  Round b relocated it from ``services/`` to ``modules/``
+to satisfy the client-module no-gateway-authority-imports dependency gate
+(no duplicated helper, no re-export wrapper); the relocation preserved the
+round-a lifecycle logic, and round b additionally added the bounded
+pinned-hint recognition helpers.
+
+- **Explicit modes.** ``full_snapshot`` and ``positional_updates``; absent
+  mode keeps legacy behavior; unknown modes fail closed.
+- **Events** (frozen dataclasses): validated declaration (canonical
+  taxonomy + optional inert item ID + definition references keyed
+  ``(namespace, tool)``), parsed removal notice, tool call (``namespace``
+  may be ``None``), tool call output (exact ``function``/``custom`` kind).
+- **Facts** (immutable ``CodexToolHistoryFacts``): applied chronological
+  steps, final active taxonomy, ``call_bindings`` — an immutable
+  stdlib ``MappingProxyType`` mapping ORIGINAL ``call_id`` to
+  ``(namespace, name, kind)`` — pending call IDs, and
   ``active_definitions`` (the caller's validated definition objects
-  **by reference**, never copied or read).  Call steps additionally
-  carry the definition reference **at the call position**, so later
-  core can detect schema/type transport conflicts without rebuilding a
-  second lifecycle.
+  **by reference**).  Call steps carry the definition reference at the
+  call position for later schema/type transport-conflict detection.
 - **Laws.** A call binds to the identity active at its own position,
   immutably; a later declaration never authorizes a preceding call; a
-  removed tool cannot be newly called; a same-name
-  function/custom redefinition rebinds only LATER calls; a
-  ``namespace=None`` call resolves by ONE unambiguous ``(name, kind)``
-  match (the existing policy's name-and-type law, with ambiguity
-  refused); call IDs and output IDs are unique; exactly one output per
-  call; output kind must equal the bound call's kind; a declaration
-  sequence is either consistently definition-free or every declaration
-  supplies exactly its taxonomy's definitions (no silent stale
-  references); positions are strictly increasing within the explicit
-  ``max_items`` item bound; removals must name only currently active
-  tools.  Every refusal is a fixed
+  removed tool cannot be newly called; a same-name function/custom
+  redefinition rebinds only LATER calls; a ``namespace=None`` call
+  resolves by ONE unambiguous ``(name, kind)`` match (ambiguity and
+  zero matches refuse); call/output IDs are unique; exactly one output
+  per call; output kind equals the bound call's kind; the policy always
+  supplies validated definition references for the selected taxonomy
+  (production invariant); removals name only currently active tools.  Every refusal is a fixed
   ``CodexToolHistoryError`` with a stable content-free ``reason_code``,
-  the event ``position``, ``field``, and ``observed``/``limit``
-  counts — no raw request content is echoed.
-- **Pinned removal-notice grammar**
-  (``parse_codex_removal_notice``): at most two sections joined by
-  ``"\n\n"``; each section is its EXACT pinned header line (the bundled
-  upstream defaults, or caller-supplied pinned values) followed by one
-  or more ``"- " name`` lines; namespace section first (bare names, no
-  dot) then tool section (``namespace.tool``, exactly one dot);
-  no repeated section kind; no duplicate names; no tool subsumed by a
-  removed namespace in the same notice; explicit
-  ``max_names``/``max_body_bytes`` bounds.  Anything else — prose,
-  reworded headers, unknown sections — is a fixed safe refusal.
+  the event position, and bounded counts — no raw request content.
+- **Pinned removal-notice grammar.** At most two sections joined by
+  ``"\n\n"``; each section is the EXACT pinned header (bundled upstream
+  defaults or caller-pinned values) plus one or more ``"- " name``
+  lines; namespace section first, tool section second; no repeated
+  section kind, duplicate names, or subsumed tools; explicit
+  ``max_names``/``max_body_bytes`` bounds.  At the policy, only a
+  developer message beginning with one of the EXACT pinned bundled
+  headers is a recognition candidate; a recognized candidate that then
+  fails the pinned grammar is a fixed safe refusal.  Every other
+  developer message — including customized or reworded removal wording,
+  which upstream metadata stripping makes indistinguishable from ordinary
+  prose — is ordinary history, preserved with no removal or authorization
+  effect: customized removal wording is unsupported, and the parser's
+  direct refusal is not automatic detection of arbitrary customized
+  developer prose.  An ordinary developer instruction is never an
+  addition/authorization source.
 
-**Scope honesty.**  The helper is not a validator (raw declarations
-must already have passed the existing policy-owned per-declaration
-taxonomy/schema validation, including invalid earlier entries) and not
-a replay authority.  It enforces call/output ID uniqueness, one-output
-per call, and kind linkage over the events it is supplied; it does NOT
-see or enforce replay item ID checks for other item families
-(reasoning, compaction, encrypted content, message IDs) or HMAC replay
-ownership — those remain with their existing owners.  It grants no
-execution or persistence and carries no secrets.
+Scope honesty: the helper is not a validator (raw declarations must
+already pass the policy-owned per-declaration validation) and not a
+replay authority (item-ID and HMAC ownership checks remain with their
+existing owners).  It grants no execution or persistence and carries no
+secrets.
+
+### New gated profile DATA (round b)
+
+``app/slaif_gateway/modules/clients/profiles/codex-0.167.1.json`` —
+schema v2, module ID ``codex-0.162-responses-v1``, **revision 16**,
+provenance ``rust-v0.167.1`` / ``0a94398fa60c4fac0e7659e4213a0a36e613dd46``,
+registered in ``profiles/presets.json`` as preset ``codex-0.167.1``.
+Its dialect feature ``codex_tool_history_positional_updates`` maps to
+spec ``codex_tool_history_mode="positional_updates"`` and
+``allow_idless_tool_call_replay=True``.  Canonical identity is the
+loader digest **``cff9f7b56966eb2068fdbeb203fe04ac32890e34524200372c2d3f2a30e566ed``**
+(``load_codex_profile_file(...).digest`` / ``module.fixture_sha256``) —
+NOT the SHA-256 of the pretty-printed file.  The packaged default stays
+``codex_0162.json`` revision 8 (digest
+``1d1e5b05587d1a8bf1f90057e43e357b7b3627dc3268ec09108e5fafa52e6d11``);
+frozen legacy presets are immutable.
+
+The registry binds ONE concrete profile at bootstrap
+(``bind_codex_0162_client_module``): same-identity re-initialization is an
+idempotent no-op, the first different identity completes the one-shot
+bootstrap, and any later different identity fails closed
+(``codex_0162_bootstrap_locked``).  A process therefore serves exactly
+one active profile data revision (see Deployment).
+
+### Request policy integration (round b)
+
+``services/responses_request_policy.py``:
+
+- In ``positional_updates`` mode, ``apply()`` validates the full
+  declaration history through the helper and stores request-local
+  ``CodexToolHistoryFacts`` on the policy result (ephemeral, excluded
+  from ``model_dump``).  Facts are reset on every public ``apply`` /
+  ``apply_compact`` entry, so a reused policy instance never carries
+  stale state.  A new-mode request with no declarations (including plain
+  string input) materializes EMPTY active facts, so the output guard
+  denies any generated tool call.
+- ``codex_replay_request_candidates(...)`` extracts replay candidates
+  with validated per-call bindings: in new mode EVERY actual
+  function/custom call emits exactly one candidate from its immutable
+  positional identity; an omitted namespace resolves from the trusted
+  binding, an EXPLICIT contradicting namespace denies, and
+  unbound/duplicate/missing-bound identities deny with fixed safe codes.
+  ``require_call_completeness=True`` makes any extraction mismatch a
+  fixed safe denial (never a silent omission).  ID-less replay is
+  qualified only for the existing 0.149 module path OR the new lifecycle
+  mode, AND only when the selected spec declares
+  ``allow_idless_tool_call_replay``; the existing deferred same-key
+  CALL-ID HMAC check remains.  Reasoning/compaction candidates and
+  legacy/0147 compact behavior are unchanged.  Facts are naming-only:
+  the gateway still verifies every candidate's key/route/provider
+  HMAC.  Wired at the ``policy.apply`` provider-state-mixing check and
+  ``handle_response_create`` ownership extraction.
+
+### Lowering (round b)
+
+``codex_0162_lower_positional_tool_history`` (``modules/clients/codex_0162.py``)
+lowers the FULL validated history for the exact 0.162 x local pair under
+the profile-selected mode: the final active catalog becomes top-level
+``tools`` (first-seen declaration order; empty namespace groups omitted;
+latest namespace-header semantics — a later header without description
+clears that optional field); every ``additional_tools`` item and its
+inert ID, every validated removal notice, and the EXACT pinned upstream
+incremental hint when it is a standalone developer text immediately
+preceding a validated declaration are compiled out; EVERY other input
+item (ordinary messages, tool calls, outputs, IDs, non-adjacent hints)
+is preserved in order, and the policy representation/facts are never
+mutated.  A non-empty top-level ``tools`` field, missing/foreign facts,
+or non-list input fail closed.  The canonical incoming body remains the
+validation/HMAC/resource/diagnostics representation.
+
+### Transports and placement (round b)
+
+- Local vLLM and configured upstream LLM translate historical calls with
+  the validated per-call bindings (native wire names or portable
+  ``tool_<label>_<sha256-24>`` names); ``preserve`` encodings forward the
+  canonical body with no codec.
+- The order-changing instruction-placement guard lives in the SHARED
+  pure ``prepare_upstream_llm_body`` (run by both the production
+  ``_prepare`` and the pre-admission core preview): a lifecycle request
+  (non-``None`` bindings) on a ``leading_system_developer`` profile whose
+  instructions do not already form the leading prefix is refused exactly
+  with ``upstream_llm_bindings_placement_conflict`` (400, fixed safe
+  message); prefix-only inputs remain representable; legacy
+  ``bindings=None`` requests keep the existing reordering behavior.
+
+### Output current-set guard (round b)
+
+``responses_gateway._enforce_codex_positional_output_policy`` applies to
+new-mode non-streaming output and SSE frames: generated function/custom
+calls must name a tool in the FINAL active catalog (after removals);
+malformed identities (missing/non-string name, non-string namespace)
+refuse; with an empty catalog any generated tool call refuses.  The
+guard runs after accounting settlement and before references/storage.
+
+### Codec-refusal accounting seam (round b)
+
+``ProviderResponse`` gains one optional ``repr=False`` str field
+``safe_rejection_code`` (default ``None``; ``json_body`` stays
+``Mapping[str, Any]``).  On an explicit lifecycle request, a codec
+transport that rejects a removed/undeclared wire tool (local vLLM and
+configured upstream) clears ``json_body={}``, ``text_body=None``,
+``binary_body=None`` and sets the fixed code (e.g.
+``vllm_tool_protocol_invalid``) while preserving the already-PARSED
+usage/cost/provider metadata; on ``bindings=None`` the parse error
+propagates unchanged (legacy behavior).  Core
+``_reject_settled_codec_rejection`` settles that parsed usage through the
+normal settlement path and then refuses the marked response with a fixed
+502 (code passed through, fixed content-free message) BEFORE replay
+references/storage/return — no free release, no double finalization; no
+raw or partly decoded provider output crosses the seam (exceptions,
+logs, persistence), and the denied call receives no replay references.
+
+### Admission estimation (round b)
+
+``apply_codex_positional_prepared_estimate`` runs the resolved
+transport's OWN pure preparation (``prepare_vllm_body`` for native vLLM
+routes, ``prepare_upstream_llm_body`` for configured upstream routes,
+exact canonical otherwise) over the actual lowered body and re-estimates
+with the bounded prepared-JSON calculation: canonical JSON bytes of the
+COMPLETE prepared input (list items or plain string; real IDs exactly
+once as forwarded) plus forwarded ``instructions`` and the relevant
+non-message fields PRESENT in the prepared body (``tools``, ``include``,
+``parallel_tool_calls``, ``prompt_cache_key``, ``reasoning``, ``text``),
+with the existing ``ceil(bytes/3)`` token convention.  This is a
+byte-based approximation — not an exact tokenizer measurement and not a
+mathematical no-overrun promise.  ``unadjusted_input_tokens`` anchors to
+the prepared estimate so later route/media handling and revalidation
+neither accumulate deltas nor restore stale canonical totals; the
+canonical ``effective_body`` is preserved untouched for replay and
+resource ownership.  A prepared body the transport itself would refuse
+fails closed BEFORE any admission side effect, preserving the two known
+fixed representability codes
+(``upstream_llm_bindings_placement_conflict``,
+``vllm_native_wire_identity_collision``) with status 400 and
+appropriate param, and a generic safe ``responses_codex_tool_wire_invalid``
+fallback for all other preparation failures — no raw provider message or
+request content crosses the wrapper.  Raw byte/item/text/schema bounds
+stay independent and always active; legacy (non-positional) profiles
+retain their exact old estimator and ordering.
+
+### Compact boundary (round b, verified)
+
+The client-server registry pairs ``codex-0.162-responses-v1`` only with
+local server modules, and ``handle_response_compact`` immediately
+rejects the local coding auxiliary endpoint, so 0.167.1/0162 compact is
+NOT a qualified transport; the denial is retained and frozen
+0147/OpenAI compact behavior is unchanged.  Legacy compact may forward
+declarations and retains their bytes; lifecycle/replay helpers remain
+coherent for already-supported compact requests.
+
+## Deployment and migration
+
+- A process binds ONE active profile data revision at bootstrap (one-shot
+  guarded binding; see above).  Loading revision 16 makes keys pinned to
+  the packaged default (revision 8) or any other earlier revision STALE
+  until explicitly migrated; the packaged default remains unchanged, so
+  deployments that do not configure the new profile file are unaffected.
+- Migration reuses the existing audited
+  ``migrate-key-profile`` dry-run/apply/rollback mechanism with source
+  and target full identities (module ID + data revision + canonical
+  digest); pin preservation, restart, and configuration steps are
+  documented in ``docs/upgrade-runbook.md``.  NO actual operator keys
+  were migrated or rotated in this work, and no same-process one-key
+  "canary" is claimed: while the process serves one active profile,
+  other-pinned requests are denied closed until migrated or the process
+  is restarted on the previous profile file (the rollback path).
+- No data or schema migration was required or performed.
 
 ## Verification
 
-- Focused unit suite
-  ``tests/unit/test_codex_tool_history.py``: 53 tests (49 test
-functions, one parametrized) covering the
-  single full set; identical/equivalent updates with same, different
-  and absent protocol IDs; successive add/remove/reintroduce;
+### Accepted round-a component evidence (reused, not rerun)
+
+- Shared helper suite ``tests/unit/test_codex_tool_history.py``:
+  **54** tests (single full set; identical/equivalent updates with same,
+  different and absent protocol IDs; successive add/remove/reintroduce;
   same-name function/custom changes; call-before-declaration refusal;
   historical bindings retained after removal; new-calls-after-removal
   refusal; pending calls un-rebindable; repeated call/output IDs and
   mismatched/repeated outputs; a synthetic second declaration at
-  ``input[265]`` under an explicit 512-item configuration (with the
-  boundary position refused); explicit resource bounds; no mutation,
-  no event loss, no reordering; kind-mismatch refusal;
-  ``namespace=None`` resolution (unique/zero/ambiguous); consistent
-  definition mode with reference provenance at declaration and call
-  position; and the full pinned notice grammar including every
-  refusal law.  All pass (``.venv/bin/python -m pytest
-  tests/unit/test_codex_tool_history.py -p no:warnings -q``).
-- Ruff on the changed Python files: All checks passed.
-- No real provider/Codex process, production database, or credentials
-  were used; no template, CSS, schema, or frozen profile/fixture
-  digest changed.
+  ``input[265]`` under an explicit 512-item configuration with the
+  boundary position refused; explicit resource bounds; no mutation, no
+  event loss, no reordering; kind-mismatch refusal; ``namespace=None``
+  resolution (unique/zero/ambiguous); consistent definition mode with
+  reference provenance at declaration and call position; the full pinned
+  notice grammar including every refusal law).
+- Adapter suites ``tests/unit/test_upstream_llm_adapter.py`` +
+  ``tests/unit/test_local_coding_vllm.py``: **103** tests (shared pure
+  preparation parity, placement refusal, codec wire identity, lifecycle
+  refusal seam).  54 + 103 = **157** focused cases, plus governance 10
+  and Ruff/docs hygiene.  Root independently ran the helper suite (53
+  before the added canary) and the final adapter suite (103), and a
+  six-variant mocked marker-seam probe (lifecycle/legacy across local
+  vLLM, configured native_vllm, and configured function_tools): lifecycle
+  retains parsed usage/cost metadata, clears the rejected body, keeps
+  the fixed code out of ``repr``/errors; legacy codec refusal unchanged.
+  No provider/DB calls in any of these.
 
-**NOT RUN in this round** (required for the final integrated head):
-the full unit matrix, the isolated-PostgreSQL replay/local-server/
-accounting tests, and hosted CI on the final head.  The normal-admin
-byte oracle need not rerun (no template/CSS change).
+### Round-b focused evidence (this record's commits)
 
-## Documentation-impact statement
+- New integration regression module
+  ``tests/unit/test_codex_tool_history_replay_wiring.py``: **42** tests
+  covering extractor ownership law (same-name-later-namespace binding,
+  explicit-namespace contradiction, unbound/duplicate denial, ID-less
+  qualification both modes, completeness denial, reasoning/compaction
+  coexistence), policy-level positives (index-265 under an explicit
+  512-item configuration, identical/equivalent repeated declarations,
+  ``functions.exec`` function/custom transitions both directions with
+  completed historical calls, same-name schema redefinition, missing
+  key/route permission denials, provider-state-mixing denials including
+  the union-drop case, predeclaration/removed-call/invalid-position/
+  duplicate/unfinished guards, add-remove-reintroduce final catalog,
+  content-free transition errors, reused-policy state reset,
+  string-input and declaration-free-list empty facts), lowering
+  (entire ordinary history preserved at explicit canonical indices with
+  a non-adjacent hint retained and the adjacent hint compiled out; no
+  mutation), both backends' prepared bodies (native ``functions.alpha``
+  vs portable ``tool_functions_alpha_…``), prepared-estimate forwarded
+  field counting with prompt-cache stripping and reanchoring
+  idempotence, the pure-preview/transport placement refusal parity
+  (prefix-only acceptance and legacy reordering preserved), the
+  pre-admission refusal with the precise wire codes, the empty-catalog
+  and post-removal output guards, and the codec-refusal settlement
+  seam (local vLLM + configured upstream + core fixed-502 marker check
+  with ``repr``/message canaries).
+  Command: ``.venv/bin/python -m pytest
+  -o addopts= tests/unit/test_codex_tool_history_replay_wiring.py`` —
+  42 passed.
+- Changed-component suites at commit ``ef6fe594`` (pre-integration head):
+  wiring 42 + upstream LLM adapter 57 + request policy 214 = **313
+  passed**; Codex 0162/0149 roundtrip + local vLLM suites **125 passed**.
+  Command: ``.venv/bin/python -m pytest -o addopts= -q
+  tests/unit/test_codex_tool_history_replay_wiring.py
+  tests/unit/test_responses_request_policy.py
+  tests/unit/test_upstream_llm_adapter.py`` and ``.venv/bin/python -m
+  pytest -o addopts= -q tests/unit/test_codex_0162_client_tools.py
+  tests/unit/test_codex_0162_apply_patch.py
+  tests/unit/test_codex_0149_local_roundtrip.py
+  tests/unit/test_local_coding_vllm.py``.
+- The 834-test focused matrix (14 files including streaming/replay/
+  policy/codec suites) was green at checkpoint ``bdf5a7da`` and is
+  superseded for the changed components by the runs above; the full unit
+  suite runs ONCE at the final implementation head (recorded there).
 
-This round changes: one new pure module
-(``modules/codex_tool_history.py``), one new focused unit test file,
-this verification record, and ONE link from
-``responses-compatibility.md``.  All existing contracts — request
-policy, the single-item law, the 0.162 lowering, response validation,
-replay ownership, accounting, estimation, and the frozen revision-15
-profile identity (module ID, revision, fixture digest) — are
-unchanged.  Gateway/policy integration, profile promotion (including
-any audited migrate-key-profile identity), route-aware admission
-estimation, and adapter binding integration are PENDING in later
-same-PR rounds, which must update
-``responses-compatibility.md``, ``provider-forwarding-contract.md``,
-``accounting.md``, ``security-model.md``, the client preset/module
-docs, and deployment/rollback documentation.  This is a staged
-implementation, not completion of the reported bug.
+### Owned PostgreSQL and final matrix (recorded at the final head)
+
+- Owned disposable PostgreSQL 16 fixture (container ``slaif-oap226-pg16``,
+  ``127.0.0.1:33934``, database ``slaif226test``; ``TEST_DATABASE_URL``
+  delivered through a 0600 env file; no production DB, no password
+  rotation, no raw DSN in evidence).
+- Secondary-owned acceptance module
+  ``tests/integration/test_codex_tool_history_postgres.py`` (owned-row
+  HMAC route/provider denials, qualified ID-less success + forged/
+  other-key/route negatives, codec settlement against real PostgreSQL,
+  profile migration resume, final isolated PG matrix) plus the relevant
+  isolated PG modules
+  ``test_codex_replay_references_postgres.py``,
+  ``test_local_coding_server_module_postgres.py``, and
+  ``test_accounting_finalization_postgres.py`` — **PENDING at the final
+  integrated head; results recorded before report publication.**
+- Full unit suite (``.venv/bin/python -m pytest tests/unit -o
+  addopts=``, once, no production DB environment) and final-head hosted
+  CI — **PENDING; recorded before report publication.**
+
+**NOT RUN**: real private-client reproduction, real upstream inference,
+any real operator key migration.  Mocked HTTP paths are clearly
+distinguished from actual inference throughout; synthetic gateway-key
+canaries only.  The normal-admin byte oracle need not rerun (no
+template/CSS change).
+
+## Boundaries and honesty notes
+
+- This is a bounded CREATE-only client-tool lifecycle: one new gated
+  profile data revision, no new unqualified route/backend, no hosted
+  tool authority, no gateway execution, no stored tool content.
+- Absent full-current-prefix turns and customized (non-pinned) notice
+  wording remain unsupported; arbitrary customized prose is not a
+  detection or authorization source after upstream metadata stripping.
+- The prepared-body estimate is a conservative byte approximation, not a
+  tokenizer measurement or no-overrun guarantee; raw bounds remain
+  authoritative.
+- The immutable round-a report records its publication-order deviation
+  (committed 16 s before PR #386 creation) as-is; this record does not
+  rewrite that sequence.
