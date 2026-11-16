@@ -9,6 +9,7 @@ from dataclasses import replace
 from slaif_gateway.modules.servers.local_coding.adapter import LocalCodingAdapter
 from slaif_gateway.modules.servers.local_coding_vllm.codec import VLLMToolCodec
 from slaif_gateway.modules.servers.upstream_llm.profiles import validate_route
+from slaif_gateway.providers.errors import ProviderRequestError
 
 
 def normalize_instructions(body: dict, placement: str) -> dict:
@@ -51,9 +52,29 @@ class ConfiguredUpstreamLLMAdapter(LocalCodingAdapter):
         super().__init__(settings, route_capabilities=route_capabilities, **kwargs)
 
     def _prepare(self, request):
+        if (
+            request.codex_tool_call_bindings is not None
+            and self.profile.instruction_placement == "leading_system_developer"
+        ):
+            # Lifecycle bindings name historical calls in temporal order.
+            # Reordering developer/system text would move removal notices
+            # ahead of the tool history they describe, so this combination
+            # is refused exactly instead of reordered silently.
+            raise ProviderRequestError(
+                "Codex tool-call bindings require an order-preserving instruction "
+                "placement; this profile reorders developer/system messages.",
+                provider=self.provider_name,
+                status_code=400,
+                error_type="invalid_request_error",
+                error_code="upstream_llm_bindings_placement_conflict",
+            )
         body = normalize_instructions(dict(request.body), self.profile.instruction_placement)
         codec = (
-            VLLMToolCodec(body, portable_names=self.profile.tool_encoding == "function_tools")
+            VLLMToolCodec(
+                body,
+                portable_names=self.profile.tool_encoding == "function_tools",
+                tool_call_bindings=request.codex_tool_call_bindings,
+            )
             if self.profile.tool_encoding in {"native_vllm", "function_tools"} else None
         )
         return replace(request, body=codec.body if codec is not None else body), codec

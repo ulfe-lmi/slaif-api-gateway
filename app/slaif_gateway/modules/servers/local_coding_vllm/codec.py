@@ -6,6 +6,7 @@ import copy
 import hashlib
 import json
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass, field as dataclass_field
 
 from slaif_gateway.providers.errors import ProviderResponseParseError, ProviderRequestError
@@ -96,7 +97,7 @@ class _Call:
 
 
 class VLLMToolCodec:
-    def __init__(self, body, *, portable_names=False):
+    def __init__(self, body, *, portable_names=False, tool_call_bindings=None):
         self.portable_names = portable_names
         self.body = copy.deepcopy(dict(body))
         self.original_tools = copy.deepcopy(self.body.get("tools", []))
@@ -104,6 +105,12 @@ class VLLMToolCodec:
         self.calls: dict[str, _Call] = {}
         self.in_sequence = -1
         self.out_sequence = 0
+        self.tool_call_bindings = (
+            self._validate_tool_call_bindings(tool_call_bindings)
+            if tool_call_bindings is not None
+            else None
+        )
+        self._bound_wire_identities: dict[str, tuple[str | None, str]] = {}
         flat = []
         for group in self.original_tools:
             namespace = group.get("name") if group.get("type") == "namespace" else None
@@ -167,18 +174,122 @@ class VLLMToolCodec:
             if kind == "custom_tool_call_output":
                 item["type"] = "function_call_output"
             elif kind in {"custom_tool_call", "function_call"}:
+                namespace_present = "namespace" in item
                 namespace = item.pop("namespace", None)
-                wire_name = self._wire_name(namespace, item.get("name"))
-                declaration = self.tools.get(wire_name)
                 expected = "custom" if kind == "custom_tool_call" else "function"
-                if declaration is None or declaration[2] != expected:
-                    raise ProviderRequestError(provider="local-coding-vLLM")
+                if self.tool_call_bindings is None:
+                    wire_name = self._wire_name(namespace, item.get("name"))
+                    declaration = self.tools.get(wire_name)
+                    if declaration is None or declaration[2] != expected:
+                        raise ProviderRequestError(provider="local-coding-vLLM")
+                else:
+                    wire_name = self._bound_wire_name(
+                        item, namespace, namespace_present, expected
+                    )
                 item["name"] = wire_name
                 if kind == "custom_tool_call":
                     item["type"] = "function_call"
                     item["arguments"] = json.dumps({"input": item.pop("input")}, ensure_ascii=True)
                 else:
                     _function_arguments(item.get("arguments"), replay=True)
+
+    def _validate_tool_call_bindings(self, bindings):
+        """Validate ephemeral core-validated per-call translation facts.
+
+        The map is keyed by original ``call_id`` with value
+        ``(namespace, name, kind)``. It is not client JSON, not execution or
+        replay authorization, and not persistent data: it only lets the
+        transport re-map a historical call for a tool that is no longer
+        declared. It never expands authority, never feeds the active tool
+        map, and never reaches provider JSON, signatures, responses, logs,
+        audit, metrics, or stored rows. Map cardinality is bounded by the
+        core-configured input size/item bounds; the transport adds no
+        separate cardinality policy.
+        """
+        if not isinstance(bindings, Mapping):
+            raise ProviderRequestError(provider="local-coding-vLLM")
+        result = {}
+        for call_id, binding in bindings.items():
+            if (
+                not isinstance(call_id, str)
+                or not _ID.fullmatch(call_id)
+                or not (isinstance(binding, tuple) and len(binding) == 3)
+            ):
+                raise ProviderRequestError(provider="local-coding-vLLM")
+            namespace, name, kind = binding
+            if (
+                namespace is not None
+                and (not isinstance(namespace, str) or not _NAME.fullmatch(namespace))
+                or not isinstance(name, str)
+                or not _NAME.fullmatch(name)
+                or kind not in {"function", "custom"}
+            ):
+                raise ProviderRequestError(provider="local-coding-vLLM")
+            result[call_id] = binding
+        return result
+
+    def _bound_wire_name(self, item, namespace, namespace_present, expected):
+        """Resolve one historical call against its verified binding.
+
+        Missing entries and identities contradicting the core-verified fact
+        fail closed. Existing policy permits an omitted ``namespace`` key;
+        that absence resolves through ``bound_namespace`` while an explicit
+        namespace that contradicts the binding still denies. A binding for a
+        removed or transitioned tool maps deterministically to its native or
+        portable wire name. Historical encoding always uses the per-call
+        historical kind (each item keeps its own validated wrapper), while
+        new call decoding uses only the active current map, so a same
+        namespace/name kind transition is representable without exposing
+        historical declarations as active tools. The binding kind is part of
+        the core identity and remains checked against the item.
+
+        Native flattening derives the wire string from dotted namespace/name
+        text, so distinct identities can share one string; that collision is
+        refused with a fixed content-free code. Portable hashed identities
+        remain distinct by design and need no such detection.
+        """
+        call_id = item.get("call_id")
+        binding = (
+            self.tool_call_bindings.get(call_id) if isinstance(call_id, str) else None
+        )
+        if binding is None:
+            # Unbound call: a new output for a removed/undeclared tool, or a
+            # historical call without a core-verified fact.
+            raise ProviderRequestError(provider="local-coding-vLLM")
+        bound_namespace, bound_name, bound_kind = binding
+        if namespace_present and namespace != bound_namespace:
+            # Explicit namespace contradicts the core-verified fact. An
+            # omitted key is policy-permitted and resolves via the binding.
+            raise ProviderRequestError(provider="local-coding-vLLM")
+        if bound_name != item.get("name") or bound_kind != expected:
+            # The item identity contradicts the core-verified per-call fact.
+            raise ProviderRequestError(provider="local-coding-vLLM")
+        wire_name = self._wire_name(bound_namespace, bound_name)
+        identity = (bound_namespace, bound_name)
+        if not self.portable_names:
+            previous = self._bound_wire_identities.get(wire_name)
+            if previous is not None and previous != identity:
+                # Deliberate boundary: two distinct historical identities
+                # would become indistinguishable calls on one wire name.
+                raise ProviderRequestError(
+                    "Two distinct historical tool identities share one native "
+                    "wire name and cannot be represented.",
+                    provider="local-coding-vLLM",
+                    error_code="vllm_native_wire_identity_collision",
+                )
+            self._bound_wire_identities[wire_name] = identity
+        declaration = self.tools.get(wire_name)
+        if declaration is not None:
+            if (declaration[0], declaration[1]) != identity:
+                # The wire name is currently owned by a different identity;
+                # the historical call would be conflated with that tool.
+                raise ProviderRequestError(
+                    "A historical tool identity cannot be mapped onto a wire "
+                    "name currently declared by a different tool.",
+                    provider="local-coding-vLLM",
+                    error_code="vllm_native_wire_identity_collision",
+                )
+        return wire_name
 
     def _wire_name(self, namespace, name):
         canonical = f"{namespace}.{name}" if namespace else name

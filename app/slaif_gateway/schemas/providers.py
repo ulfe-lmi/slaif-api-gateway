@@ -27,6 +27,13 @@ class ProviderRequest:
 
     This object intentionally excludes gateway keys, client Authorization
     headers, provider API keys, token hashes, and persistence details.
+
+    ``codex_tool_call_bindings`` is an optional, ephemeral, core-validated
+    per-call translation fact set, keyed by original ``call_id`` with value
+    ``(namespace, name, kind)`` where kind is ``"function"`` or ``"custom"``.
+    It is not client JSON, not execution or replay authorization, and not
+    persistent data; adapters must never copy it into provider JSON,
+    signature inputs, responses, logs, audit, metrics, or stored rows.
     """
 
     provider: str
@@ -37,6 +44,9 @@ class ProviderRequest:
     request_id: str | None = None
     extra_headers: Mapping[str, str] | None = None
     server_context: Mapping[str, object] | None = None
+    codex_tool_call_bindings: Mapping[str, tuple[str | None, str, str]] | None = field(
+        default=None, repr=False
+    )
 
 
 @dataclass(frozen=True, slots=True)

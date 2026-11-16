@@ -24,12 +24,16 @@ class LocalCodingVLLMAdapter(LocalCodingAdapter):
         self._local_coding_contract = contract
 
     async def forward_response(self, request):
-        codec = VLLMToolCodec(request.body)
+        codec = VLLMToolCodec(
+            request.body, tool_call_bindings=request.codex_tool_call_bindings
+        )
         result = await super().forward_response(replace(request, body=codec.body))
         return replace(result, json_body=codec.response(result.json_body))
 
     async def stream_response(self, request):
-        codec = VLLMToolCodec(request.body)
+        codec = VLLMToolCodec(
+            request.body, tool_call_bindings=request.codex_tool_call_bindings
+        )
         async for chunk in super().stream_response(replace(request, body=codec.body)):
             if chunk.is_done or chunk.json_body is None:
                 yield chunk

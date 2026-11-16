@@ -2,6 +2,7 @@
 
 import copy
 import json
+import re
 from dataclasses import replace
 
 import httpx
@@ -23,7 +24,11 @@ from slaif_gateway.modules.servers.upstream_llm.adapter import (
 from slaif_gateway.modules.servers.upstream_llm.profiles import (
     MODULE_ID, LLMProfile, bootstrap_upstream_llm_profiles, load_profiles, resolve_profile,
 )
-from slaif_gateway.providers.errors import ProviderConfigurationError, UnsupportedProviderEndpointError
+from slaif_gateway.providers.errors import (
+    ProviderConfigurationError,
+    ProviderRequestError,
+    UnsupportedProviderEndpointError,
+)
 from slaif_gateway.schemas.providers import ProviderRequest
 from slaif_gateway.services.responses_gateway import _reject_local_coding_auxiliary_endpoint
 
@@ -456,3 +461,190 @@ async def test_generic_functions_profile_roundtrips_namespaces_custom_tools_and_
     assert item["call_id"] == "call_new"
     assert item["input" if custom else "arguments"] == ("new raw text" if custom else "{}")
     assert seen[0]["model"] == "backend-model"
+
+
+# --- Codex tool-call bindings (226-a secondary adapter scope) -------------
+# Bindings are ephemeral core-validated per-call translation facts; profiles
+# configure transport only and grant no authority.
+
+BINDINGS_REMOVED = {"call_removed": ("functions", "apply_patch", "custom")}
+
+
+def removed_history_functions_body():
+    body = history()
+    body["tools"] = [
+        {
+            "type": "namespace",
+            "name": "functions",
+            "tools": [
+                {
+                    "type": "function",
+                    "name": "inspect",
+                    "description": "Inspect a local file.",
+                    "parameters": {"type": "object", "properties": {}},
+                }
+            ],
+        }
+    ]
+    body["input"] += [
+        {"type": "custom_tool_call", "id": "fc_removed", "call_id": "call_removed",
+         "namespace": "functions", "name": "apply_patch", "input": "read file"},
+        {"type": "custom_tool_call_output", "call_id": "call_removed", "output": "previous result"},
+        {"role": "user", "content": "Continue after removal."},
+    ]
+    return body
+
+
+@pytest.mark.asyncio
+async def test_functions_profile_translates_removed_history_via_bindings_and_leaks_nothing():
+    seen = []
+
+    async def handler(req):
+        wire = json.loads(req.content)
+        seen.append(wire)
+        assert set(wire) == {"model", "instructions", "input", "store", "max_output_tokens", "tools"}
+        assert len(wire["tools"]) == 1
+        assert "functions.inspect" in wire["tools"][0]["description"]
+        call, output, user = wire["input"][-3:]
+        assert re.fullmatch(r"tool_[A-Za-z0-9_]{1,32}_[0-9a-f]{24}", call["name"])
+        assert call["name"] != wire["tools"][0]["name"]
+        assert output == {"type": "function_call_output", "call_id": "call_removed",
+                          "output": "previous result"}
+        assert user["content"] == "Continue after removal."
+        assert "codex_tool_call_bindings" not in json.dumps(wire)
+        return httpx.Response(200, json={"id": "resp_new", "output": [
+            {"type": "function_call", "id": "fc_new", "call_id": "call_new",
+             "name": wire["tools"][0]["name"], "arguments": "{}", "status": "completed"}],
+            "usage": {"input_tokens": 20, "output_tokens": 3, "total_tokens": 23}})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        adapter = ConfiguredUpstreamLLMAdapter(Settings(),
+            route_capabilities=capabilities("responses-functions-v1"),
+            base_url="http://backend.test/v1", api_key=SERVICE_SECRET, http_client=client)
+        result = await adapter.forward_response(
+            replace(request(removed_history_functions_body()), codex_tool_call_bindings=BINDINGS_REMOVED))
+    out = result.json_body["output"][0]
+    assert out["type"] == "function_call"
+    assert out["namespace"] == "functions" and out["name"] == "inspect"
+    assert out["call_id"] == "call_new"
+
+
+@pytest.mark.asyncio
+async def test_native_profile_translates_removed_function_history_via_bindings():
+    seen = []
+    body = history()
+    body["tools"] = [
+        {
+            "type": "namespace",
+            "name": "functions",
+            "tools": [
+                {"type": "custom", "name": "apply_patch", "description": "Apply a patch",
+                 "format": {"type": "grammar", "syntax": "lark", "definition": "start: /.+/"}}
+            ],
+        }
+    ]
+    body["input"] += [
+        {"type": "function_call", "id": "fc_removed", "call_id": "call_removed",
+         "namespace": "functions", "name": "exec_command", "arguments": "{}"},
+        {"type": "function_call_output", "call_id": "call_removed", "output": "ok"},
+    ]
+
+    async def handler(req):
+        wire = json.loads(req.content)
+        seen.append(wire)
+        assert wire["tools"][0]["name"] == "functions.apply_patch"
+        call, output = wire["input"][-2:]
+        assert call == {"type": "function_call", "id": "fc_removed", "call_id": "call_removed",
+                        "name": "functions.exec_command", "arguments": "{}"}
+        assert output["type"] == "function_call_output" and output["call_id"] == "call_removed"
+        assert "codex_tool_call_bindings" not in json.dumps(wire)
+        return httpx.Response(200, json={"id": "resp_new", "output": [
+            {"type": "function_call", "id": "fc_new", "call_id": "call_new",
+             "name": "functions.apply_patch", "arguments": json.dumps({"input": "patch"}),
+             "status": "completed"}],
+            "usage": {"input_tokens": 20, "output_tokens": 3, "total_tokens": 23}})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        adapter = ConfiguredUpstreamLLMAdapter(Settings(),
+            route_capabilities=capabilities("native-vllm-v1"),
+            base_url="http://backend.test/v1", api_key=SERVICE_SECRET, http_client=client)
+        result = await adapter.forward_response(replace(request(body),
+            codex_tool_call_bindings={"call_removed": ("functions", "exec_command", "function")}))
+    out = result.json_body["output"][0]
+    assert out["type"] == "custom_tool_call"
+    assert out["namespace"] == "functions" and out["name"] == "apply_patch"
+    assert out["input"] == "patch"
+
+
+@pytest.mark.asyncio
+async def test_leading_system_developer_placement_refuses_lifecycle_bindings():
+    seen = []
+
+    async def handler(req):
+        seen.append(req)
+        pytest.fail("No HTTP allowed")
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        # The shipped llama.cpp profile reorders developer text: exact refusal.
+        adapter = ConfiguredUpstreamLLMAdapter(Settings(), route_capabilities=capabilities(),
+            base_url="http://backend.test/v1", api_key=SERVICE_SECRET, http_client=client)
+        with pytest.raises(ProviderRequestError) as exc:
+            await adapter.forward_response(
+                replace(request(), codex_tool_call_bindings=BINDINGS_REMOVED))
+    assert exc.value.error_code == "upstream_llm_bindings_placement_conflict"
+    assert exc.value.status_code == 400
+    assert "apply_patch" not in exc.value.safe_message
+    assert seen == []
+
+
+@pytest.mark.asyncio
+async def test_reordering_profile_refuses_bindings_even_with_tool_encoding(tmp_path):
+    # Refusal is placement-driven, not codec-driven: an operator profile that
+    # both reorders and encodes tools is refused before any translation.
+    profile = LLMProfile(profile_id="operator-reorder-codec", revision=1,
+        instruction_placement="leading_system_developer", tool_encoding="function_tools")
+    path = tmp_path / "operator.json"
+    write_bundle(path, [profile.model_dump()])
+    bootstrap_upstream_llm_profiles(str(path))
+    caps = {"local_coding": dict(TRANSPORT), "upstream_llm": {
+        "version": 1, "profile": profile.profile_id,
+        "revision": profile.revision, "sha256": profile.sha256,
+    }}
+
+    async def handler(req):
+        pytest.fail("No HTTP allowed")
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        adapter = ConfiguredUpstreamLLMAdapter(Settings(),
+            route_capabilities=caps,
+            base_url="http://backend.test/v1", api_key=SERVICE_SECRET, http_client=client)
+        with pytest.raises(ProviderRequestError) as exc:
+            await adapter.forward_response(
+                replace(request(), codex_tool_call_bindings=BINDINGS_REMOVED))
+    assert exc.value.error_code == "upstream_llm_bindings_placement_conflict"
+
+
+@pytest.mark.asyncio
+async def test_passthrough_profile_forwards_canonical_history_with_inert_bindings():
+    seen = []
+    body = history()
+    body["input"].append(
+        {"type": "function_call", "id": "fc_old", "call_id": "call_old",
+         "name": "inspect", "namespace": "functions", "arguments": "{}"})
+
+    async def handler(req):
+        seen.append(json.loads(req.content))
+        return httpx.Response(200, json={"output": []})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        adapter = ConfiguredUpstreamLLMAdapter(Settings(),
+            route_capabilities=capabilities("responses-passthrough-v1"),
+            base_url="http://backend.test/v1", api_key=SERVICE_SECRET, http_client=client)
+        await adapter.forward_response(replace(request(body),
+            codex_tool_call_bindings={"call_old": ("functions", "inspect", "function")}))
+    wire = seen[0]
+    # Ordinary canonical historical types/namespace and current top-level
+    # tools are unchanged; the bindings stay inert metadata, never wire data.
+    assert wire["input"][-1] == {"type": "function_call", "id": "fc_old", "call_id": "call_old",
+                                 "name": "inspect", "namespace": "functions", "arguments": "{}"}
+    assert "codex_tool_call_bindings" not in wire
