@@ -64,6 +64,7 @@ from tests.unit.test_codex_tool_history_replay_wiring import (
     decl,
     fn,
     ns,
+    notice,
     out,
     user,
 )
@@ -159,7 +160,7 @@ def _responses_policy(pin: dict[str, object]) -> dict[str, object]:
 
 
 async def _seed_key(
-    session: AsyncSession, *, pin: dict[str, object]
+    session: AsyncSession, *, pin: dict[str, object], allowed_providers: tuple[str, ...]
 ) -> tuple[object, object, object]:
     """Create owner/cohort/key with non-default restrictions, limits, and usage."""
     unique = uuid.uuid4().hex
@@ -192,7 +193,7 @@ async def _seed_key(
         allowed_endpoints=["/v1/responses"],
         metadata_json={
             "responses_policy": _responses_policy(pin),
-            "allowed_providers": ["synthetic-native"],
+            "allowed_providers": list(allowed_providers),
         },
     )
     # Pre-existing settled usage consistent with the ledger row seeded below.
@@ -421,6 +422,16 @@ def _deny_before_ownership_sentinel(timeline: list[str], name: str):
     return _hook
 
 
+def _assert_key_route_consistency(auth_key: AuthenticatedGatewayKey, provider: str) -> None:
+    """The seeded key must actually permit the provider the mock route resolves.
+
+    The resolver is mocked in these cases, so the real permission check is
+    bypassed; assert fixture consistency instead of hiding a mismatch.
+    """
+    assert auth_key.allowed_providers is None or provider in auth_key.allowed_providers
+    assert "synthetic-codex-model" in auth_key.allowed_models
+
+
 @pytest.mark.asyncio
 async def test_group_a_ambiguity_candidate_denied_before_route_without_reference(
     async_test_session: AsyncSession,
@@ -437,8 +448,11 @@ async def test_group_a_ambiguity_candidate_denied_before_route_without_reference
     """
     session = async_test_session
     settings = _replay_settings()
-    _, _, key = await _seed_key(session, pin=_pin(_REV16_VERSION, _REV16_DIGEST))
+    _, _, key = await _seed_key(
+        session, pin=_pin(_REV16_VERSION, _REV16_DIGEST), allowed_providers=("local-coding",)
+    )
     auth_key = _auth_key(key)
+    _assert_key_route_consistency(auth_key, "local-coding")
 
     body = base_model()
     body["model"] = "synthetic-codex-model"
@@ -565,7 +579,11 @@ async def _seed_owned_reference(
 ) -> tuple[object, object]:
     """Seed owner/cohort/key/ledger/route plus matching HMAC references."""
     now = datetime.now(UTC)
-    owner, cohort, key = await _seed_key(session, pin=_pin(_REV16_VERSION, _REV16_DIGEST))
+    owner, cohort, key = await _seed_key(
+        session,
+        pin=_pin(_REV16_VERSION, _REV16_DIGEST),
+        allowed_providers=(provider,),
+    )
     ledger = await _seed_ledger(session, key=key, owner=owner, cohort=cohort, now=now)
     route = await ModelRoutesRepository(session).create_model_route(
         requested_model=f"codex-226b-{uuid.uuid4().hex}",
@@ -604,12 +622,17 @@ async def test_group_a_other_key_reference_denied_before_route(
     suffix = uuid.uuid4().hex[:12]
 
     # The authenticated key owns no replay references at all.
-    _, _, key = await _seed_key(session, pin=_pin(_REV16_VERSION, _REV16_DIGEST))
+    _, _, key = await _seed_key(
+        session, pin=_pin(_REV16_VERSION, _REV16_DIGEST), allowed_providers=("local-coding",)
+    )
     auth_key = _auth_key(key)
+    _assert_key_route_consistency(auth_key, "local-coding")
 
     # The only matching references belong to a different key.
     forger_owner, forger_cohort, forger_key = await _seed_key(
-        session, pin=_pin(_REV16_VERSION, _REV16_DIGEST)
+        session,
+        pin=_pin(_REV16_VERSION, _REV16_DIGEST),
+        allowed_providers=("synthetic-native",),
     )
     forger_ledger = await _seed_ledger(
         session, key=forger_key, owner=forger_owner, cohort=forger_cohort, now=now
@@ -699,6 +722,7 @@ async def test_group_a_wrong_route_denied_before_redis_quota_and_provider(
 
     key, owned_route = await _seed_owned_reference(session, settings=settings, suffix=suffix)
     auth_key = _auth_key(key)
+    _assert_key_route_consistency(auth_key, "local-coding")
 
     body = base_model()
     body["model"] = "synthetic-codex-model"
@@ -767,6 +791,7 @@ async def test_group_a_idless_owned_candidate_passes_deferred_verification(
 
     key, owned_route = await _seed_owned_reference(session, settings=settings, suffix=suffix)
     auth_key = _auth_key(key)
+    _assert_key_route_consistency(auth_key, "local-coding")
 
     body = base_model()
     body["model"] = "synthetic-codex-model"
@@ -812,6 +837,122 @@ async def test_group_a_idless_owned_candidate_passes_deferred_verification(
     assert timeline == ["_reserve_responses_quota"]
 
 
+@pytest.mark.parametrize("mode", ["unowned", "other-key", "wrong-route"])
+@pytest.mark.asyncio
+async def test_group_a_idless_negatives_denied_before_quota_and_provider(
+    async_test_session: AsyncSession,
+    rev16_client_module: object,
+    monkeypatch: pytest.MonkeyPatch,
+    mode: str,
+) -> None:
+    """ID-less deferred verification denies unowned, other-key, and wrong-route.
+
+    The call omits its item id, so only the deferred call-id HMAC lookup on
+    real PostgreSQL rows can authorize it.  Every denial variant must land
+    before quota reservation and before any provider hook.
+    """
+    session = async_test_session
+    settings = _group_b_settings()
+    suffix = uuid.uuid4().hex[:12]
+
+    if mode == "unowned":
+        _, _, key = await _seed_key(
+            session,
+            pin=_pin(_REV16_VERSION, _REV16_DIGEST),
+            allowed_providers=("local-coding",),
+        )
+        probe_route_id = uuid.uuid4()
+        expected_code = "responses_codex_replay_reference_not_found"
+    elif mode == "other-key":
+        now = datetime.now(UTC)
+        _, _, key = await _seed_key(
+            session,
+            pin=_pin(_REV16_VERSION, _REV16_DIGEST),
+            allowed_providers=("local-coding",),
+        )
+        # The only matching call-id reference belongs to a different key.
+        forger_owner, forger_cohort, forger_key = await _seed_key(
+            session,
+            pin=_pin(_REV16_VERSION, _REV16_DIGEST),
+            allowed_providers=("local-coding",),
+        )
+        forger_ledger = await _seed_ledger(
+            session, key=forger_key, owner=forger_owner, cohort=forger_cohort, now=now
+        )
+        forger_route = await ModelRoutesRepository(session).create_model_route(
+            requested_model=f"codex-226b-{uuid.uuid4().hex}",
+            provider="local-coding",
+            upstream_model="synthetic-upstream",
+            endpoint="/v1/responses",
+        )
+        persisted = await _seed_replay_refs(
+            session,
+            settings=settings,
+            key=forger_key,
+            ledger=forger_ledger,
+            candidates=_seed_candidates(suffix),
+            route=forger_route,
+            now=now,
+        )
+        assert persisted == len(_seed_candidates(suffix))
+        probe_route_id = forger_route.id
+        expected_code = "responses_codex_replay_reference_not_found"
+    else:
+        key, _owned_route = await _seed_owned_reference(
+            session, settings=settings, suffix=suffix
+        )
+        probe_route_id = uuid.uuid4()  # a different route than the owned one
+        expected_code = "responses_codex_replay_route_mismatch"
+
+    auth_key = _auth_key(key)
+    _assert_key_route_consistency(auth_key, "local-coding")
+
+    body = base_model()
+    body["model"] = "synthetic-codex-model"
+    body["store"] = False
+    body["input"] = [
+        decl(ns("mcp__codex_apps__space", fn("read")), item_id="d1"),
+        call("read", f"call_226b_{suffix}"),  # ID omitted
+        out(f"call_226b_{suffix}"),
+    ]
+
+    timeline: list[str] = []
+
+    async def _resolve_probe(**_kwargs: object):
+        return _local_coding_route(probe_route_id)
+
+    async def _db_session(request: object | None = None):
+        yield session
+
+    monkeypatch.setattr(
+        responses_gateway, "_get_db_session_after_auth_header_check", _db_session
+    )
+    monkeypatch.setattr(responses_gateway, "_resolve_responses_route", _resolve_probe)
+    monkeypatch.setattr(
+        responses_gateway,
+        "_reserve_responses_quota",
+        _deny_before_ownership_sentinel(timeline, "quota"),
+    )
+    monkeypatch.setattr(
+        responses_gateway,
+        "get_provider_adapter",
+        _deny_before_ownership_sentinel(timeline, "provider"),
+    )
+
+    with pytest.raises(OpenAICompatibleError) as exc_info:
+        await handle_response_create(
+            payload=ResponsesCreateRequest.model_validate(body),
+            authenticated_key=auth_key,
+            settings=settings,
+        )
+
+    assert exc_info.value.code == expected_code
+    if expected_code == "responses_codex_replay_reference_not_found":
+        assert exc_info.value.status_code == 404
+    # Denial precedes quota reservation and the provider hook.
+    assert timeline == []
+
+
 # --- Group B: real codec boundary -> real PostgreSQL settlement -------------
 
 _GROUP_B_PROVIDER = "local-coding"
@@ -843,7 +984,15 @@ def _group_b_body() -> dict:
 
 
 def _wire_transport(output_items: list, usage: dict) -> httpx.AsyncClient:
+    return _wire_transport_captured(output_items, usage)
+
+
+def _wire_transport_captured(
+    output_items: list, usage: dict, captured: dict | None = None
+) -> httpx.AsyncClient:
     def handler(request: httpx.Request) -> httpx.Response:
+        if captured is not None:
+            captured["request_json"] = json.loads(request.content)
         return httpx.Response(
             200,
             json={"id": "resp-226b", "output": output_items, "usage": usage},
@@ -853,11 +1002,29 @@ def _wire_transport(output_items: list, usage: dict) -> httpx.AsyncClient:
     return httpx.AsyncClient(transport=httpx.MockTransport(handler))
 
 
+def _collect_tool_names(tools: object) -> set[str]:
+    names: set[str] = set()
+    if not isinstance(tools, list):
+        return names
+    for entry in tools:
+        if not isinstance(entry, dict):
+            continue
+        if entry.get("type") == "namespace" and isinstance(entry.get("tools"), list):
+            names |= _collect_tool_names(entry["tools"])
+        if isinstance(entry.get("name"), str):
+            names.add(entry["name"])
+    return names
+
+
 async def _seed_group_b_world(
     session: AsyncSession, settings: Settings, monkeypatch: pytest.MonkeyPatch
 ) -> AuthenticatedGatewayKey:
     """rev-16 key + real EUR pricing + owned local-coding route probe."""
-    _, _, key = await _seed_key(session, pin=_pin(_REV16_VERSION, _REV16_DIGEST))
+    _, _, key = await _seed_key(
+        session,
+        pin=_pin(_REV16_VERSION, _REV16_DIGEST),
+        allowed_providers=(_GROUP_B_PROVIDER,),
+    )
     await PricingRulesRepository(session).create_pricing_rule(
         provider=_GROUP_B_PROVIDER,
         upstream_model=_GROUP_B_UPSTREAM_MODEL,
@@ -1080,6 +1247,253 @@ async def test_group_b_preserve_passthrough_settles_success(
     await client.aclose()
 
 
+# --- Group B extension: owned nonempty history -> full gateway workflow -----
+
+_RESPONSES_CAPS = {"text": True, "stateless": True, "streaming": True}
+
+# kind -> (route provider, upstream profile id or None, codec wire mode,
+#          historical call wire name, current kept wire name, removal notice)
+_SUCCESS_KINDS = {
+    "vllm": (
+        "local-coding-vLLM",
+        None,
+        vllm_wire_name("functions", "read", portable_names=False),
+        vllm_wire_name("functions", "kept", portable_names=False),
+        True,
+    ),
+    "llama-preserve": (
+        "synthetic-llama",
+        "llama-cpp-qwen-v1",
+        "read",
+        "kept",
+        # The registered llama profile uses leading_system_developer
+        # placement; a removal notice after the history it describes is
+        # deliberately NOT representable there (order-changing placement is
+        # refused), so this kind carries a still-active owned history.
+        False,
+    ),
+    "configured-native": (
+        "synthetic-native-vllm",
+        "native-vllm-v1",
+        vllm_wire_name("functions", "read", portable_names=False),
+        vllm_wire_name("functions", "kept", portable_names=False),
+        True,
+    ),
+    "configured-portable": (
+        "synthetic-portable",
+        "responses-functions-v1",
+        vllm_wire_name("functions", "read", portable_names=True),
+        vllm_wire_name("functions", "kept", portable_names=True),
+        True,
+    ),
+}
+
+_SUCCESS_USAGE = {"prompt_tokens": 5, "completion_tokens": 2, "total_tokens": 7}
+_SUCCESS_OUTPUT = [
+    {
+        "type": "message",
+        "role": "assistant",
+        "content": [{"type": "output_text", "text": "bounded"}],
+    }
+]
+
+
+def _success_items(with_removal_notice: bool) -> list:
+    items = [
+        decl(ns("functions", fn("read"), fn("kept")), item_id="d1"),
+        call("read", "call-1", id_="fc-1"),
+        out("call-1"),
+    ]
+    if with_removal_notice:
+        items.append(notice(tools={("functions", "read")}))
+    items.append(user("bounded"))
+    return items
+
+
+def _route_probe(route_id: uuid.UUID, provider: str, capabilities: dict):
+    return SimpleNamespace(
+        provider=provider,
+        provider_kind="openai_compatible",
+        provider_base_url="http://127.0.0.1:18031/v1",
+        provider_api_key_env_var="UPSTREAM_SERVICE_TOKEN",
+        provider_timeout_seconds=10,
+        provider_max_retries=0,
+        route_id=route_id,
+        resolved_model="synthetic-upstream",
+        requested_model="synthetic-upstream",
+        route_match_type="exact",
+        route_pattern="synthetic-upstream",
+        priority=1,
+        supports_streaming=True,
+        capabilities=capabilities,
+    )
+
+
+@pytest.mark.parametrize("kind", sorted(_SUCCESS_KINDS))
+@pytest.mark.asyncio
+async def test_group_b_owned_history_success_settles_through_real_workflow(
+    async_test_session: AsyncSession,
+    rev16_client_module: object,
+    monkeypatch: pytest.MonkeyPatch,
+    kind: str,
+) -> None:
+    """Owned nonempty history completes the real gateway workflow.
+
+    The historical completed tool call is HMAC-owned in PostgreSQL, the
+    request reaches the real adapter over a mocked HTTP transport, and the
+    wire request carries the exact historical identity/call-output linkage
+    plus current-only declarations.  A valid 200 response settles actual
+    usage exactly once.  Route capabilities match the selected adapter
+    (vLLM / upstream-LLM / static local transport), not a forced codec.
+    """
+    session = async_test_session
+    settings = _group_b_settings()
+    provider, profile_id, removed_name, kept_name, with_notice = _SUCCESS_KINDS[kind]
+
+    now = datetime.now(UTC)
+    owner, cohort, key = await _seed_key(
+        session,
+        pin=_pin(_REV16_VERSION, _REV16_DIGEST),
+        allowed_providers=(provider,),
+    )
+    ledger = await _seed_ledger(session, key=key, owner=owner, cohort=cohort, now=now)
+    route = await ModelRoutesRepository(session).create_model_route(
+        requested_model=f"codex-226b-{uuid.uuid4().hex}",
+        provider=provider,
+        upstream_model="synthetic-upstream",
+        endpoint="/v1/responses",
+    )
+    await PricingRulesRepository(session).create_pricing_rule(
+        provider=provider,
+        upstream_model="synthetic-upstream",
+        valid_from=now - timedelta(minutes=1),
+        endpoint="/v1/responses",
+        currency="EUR",
+        input_price_per_1m=_GROUP_B_INPUT_PRICE,
+        output_price_per_1m=_GROUP_B_OUTPUT_PRICE,
+    )
+    # The exact historical identity from this body, owned by this key.
+    candidate = (
+        CodexReplayRequestCandidate(
+            item_kind="function_call",
+            item_id="fc-1",
+            call_id="call-1",
+            tool_namespace="functions",
+            tool_name="read",
+        ),
+    )
+    persisted = await _seed_replay_refs(
+        session, settings=settings, key=key, ledger=ledger, candidates=candidate, route=route, now=now
+    )
+    assert persisted == 1
+
+    auth_key = _auth_key(key)
+    _assert_key_route_consistency(auth_key, provider)
+
+    if profile_id is None:
+        capabilities = {**VLLM_CAPS, "responses": _RESPONSES_CAPS}
+    else:
+        capabilities = {**upstream_route_capabilities(profile_id), "responses": _RESPONSES_CAPS}
+
+    captured: dict = {}
+    client = _wire_transport_captured(_SUCCESS_OUTPUT, _SUCCESS_USAGE, captured)
+    if profile_id is None:
+        adapter = LocalCodingVLLMAdapter(
+            settings,
+            route_capabilities=VLLM_CAPS,
+            api_key=_GROUP_B_SERVICE_TOKEN,
+            http_client=client,
+        )
+    else:
+        adapter = ConfiguredUpstreamLLMAdapter(
+            settings,
+            route_capabilities=upstream_route_capabilities(profile_id),
+            api_key=_GROUP_B_SERVICE_TOKEN,
+            http_client=client,
+        )
+
+    async def _resolve_owned_route(**_kwargs: object):
+        return _route_probe(route.id, provider, capabilities)
+
+    async def _db_session(request: object | None = None):
+        yield session
+
+    monkeypatch.setattr(
+        responses_gateway, "_get_db_session_after_auth_header_check", _db_session
+    )
+    monkeypatch.setattr(
+        responses_gateway, "_resolve_responses_route", _resolve_owned_route
+    )
+    monkeypatch.setattr(
+        responses_gateway, "get_provider_adapter", lambda route, cfg: adapter
+    )
+
+    before = await _group_b_settlement_facts(session, auth_key.gateway_key_id)
+
+    body = base_model()
+    body["model"] = "synthetic-codex-model"
+    body["store"] = False
+    body["input"] = _success_items(with_notice)
+
+    response = await handle_response_create(
+        payload=ResponsesCreateRequest.model_validate(body),
+        authenticated_key=auth_key,
+        settings=settings,
+    )
+
+    assert response.status_code == 200
+    content = json.loads(response.body)
+    assert content["output"] == _SUCCESS_OUTPUT
+
+    # Wire request: exact historical identity/call-output linkage and
+    # current-only declarations.
+    wire = captured["request_json"]
+    input_items = wire.get("input")
+    assert isinstance(input_items, list)
+    hist_calls = [
+        item
+        for item in input_items
+        if isinstance(item, dict)
+        and item.get("type") == "function_call"
+        and item.get("call_id") == "call-1"
+    ]
+    assert len(hist_calls) == 1
+    assert hist_calls[0]["name"] == removed_name
+    assert hist_calls[0].get("namespace") in (None, "functions")
+    hist_outputs = [
+        item
+        for item in input_items
+        if isinstance(item, dict)
+        and item.get("type") == "function_call_output"
+        and item.get("call_id") == "call-1"
+    ]
+    assert len(hist_outputs) == 1
+    tool_names = _collect_tool_names(wire.get("tools"))
+    assert kept_name in tool_names
+    if with_notice:
+        # The removed tool is excluded from the current declarations.
+        assert removed_name not in tool_names
+
+    # Actual usage settled exactly once.
+    after = await _group_b_settlement_facts(session, auth_key.gateway_key_id)
+    expected_cost = (
+        Decimal(5) * _GROUP_B_INPUT_PRICE + Decimal(2) * _GROUP_B_OUTPUT_PRICE
+    ) / Decimal(1_000_000)
+    assert after[0][0] == before[0][0] + 1
+    assert after[0][1] == before[0][1] + 5
+    assert after[0][2] == before[0][2] + 2
+    assert after[0][3] == before[0][3] + 7
+    assert after[0][5] == before[0][5] + expected_cost
+    assert after[1][0] == before[1][0] + 7
+    assert after[1][1] == before[1][1] + 1
+    assert after[1][2] == before[1][2] + expected_cost
+    assert after[2] == before[2] + 1
+    assert after[3][-1].status == "finalized"
+    # The plain message response adds no new replay references.
+    assert after[4] == before[4]
+    await client.aclose()
+
+
 @pytest.mark.asyncio
 async def test_profile_migration_15_to_16_preserves_key_replay_and_usage(
     async_test_session: AsyncSession,
@@ -1089,7 +1503,11 @@ async def test_profile_migration_15_to_16_preserves_key_replay_and_usage(
     session = async_test_session
     now = datetime.now(UTC)
 
-    owner, cohort, key = await _seed_key(session, pin=_pin(_REV15_VERSION, _REV15_DIGEST))
+    owner, cohort, key = await _seed_key(
+        session,
+        pin=_pin(_REV15_VERSION, _REV15_DIGEST),
+        allowed_providers=("synthetic-native",),
+    )
     ledger = await _seed_ledger(session, key=key, owner=owner, cohort=cohort, now=now)
     route = await ModelRoutesRepository(session).create_model_route(
         requested_model=f"codex-226b-{uuid.uuid4().hex}",
