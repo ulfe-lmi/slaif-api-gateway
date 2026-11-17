@@ -113,6 +113,10 @@ class ResponsesClientPolicySpec:
     allow_empty_visible_reasoning: bool = False
     allow_sparse_function_events: bool = False
     allow_tool_output_images: bool = False
+    # Explicit versioned declaration-history mode selected by the profile
+    # data (see modules/codex_tool_history.py). ``None`` keeps the legacy
+    # single-declaration behavior for every other profile and endpoint.
+    codex_tool_history_mode: str | None = None
     dialect_rules: DialectRules = field(default_factory=DialectRules)
 
 

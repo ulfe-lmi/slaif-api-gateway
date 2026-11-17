@@ -58,6 +58,20 @@ from slaif_gateway.modules.clients.responses_support import (
 from slaif_gateway.modules.contracts import ResponsesClientPolicySpec
 from slaif_gateway.config import Settings
 from slaif_gateway.schemas.policy import ResponsesPolicyResult
+from slaif_gateway.modules.codex_tool_history import (
+    DEFAULT_REMOVED_NAMESPACES_HEADER,
+    DEFAULT_REMOVED_TOOLS_HEADER,
+    MODE_POSITIONAL_UPDATES,
+    CodexToolCallEvent,
+    CodexToolCallOutputEvent,
+    CodexToolDeclarationEvent,
+    CodexToolHistoryError,
+    CodexToolHistoryFacts,
+    CodexToolRemovalEvent,
+    analyze_codex_tool_history,
+    codex_positional_hint_positions,
+    parse_codex_removal_notice,
+)
 from slaif_gateway.services.input_token_estimation import canonical_json_bytes
 from slaif_gateway.services.media_input_estimation import apply_media_input_estimate, text_only_input_estimate
 from slaif_gateway.services.policy_errors import RequestPolicyError
@@ -204,6 +218,11 @@ class ResponsesRequestPolicy:
         self._codex_spec = client_spec
         self._active_scope: Mapping[str, Any] | None = None
         self._compatibility_metadata_bytes = 0
+        # Request-local, non-serialized declaration-history facts set by
+        # the positional-update lifecycle pass; None for every other
+        # profile and for compact/input-token-count contracts.
+        self._codex_tool_history_facts: CodexToolHistoryFacts | None = None
+        self._codex_positional_compiled_out_bytes = 0
 
     def apply(
         self,
@@ -226,6 +245,8 @@ class ResponsesRequestPolicy:
     ) -> ResponsesPolicyResult:
         self._active_scope = scope
         self._compatibility_metadata_bytes = 0
+        self._codex_tool_history_facts = None
+        self._codex_positional_compiled_out_bytes = 0
         effective_body = copy.deepcopy(dict(body))
         codex_client_tools_requested = responses_codex_client_tools_requested(effective_body)
         if codex_client_tools_requested and not (
@@ -304,9 +325,16 @@ class ResponsesRequestPolicy:
             allow_codex_compaction_replay=allow_codex_compaction_replay,
             codex_client_tool_taxonomy=codex_client_tool_taxonomy,
             codex_top_level_tool_taxonomy=continuation_taxonomy,
+            codex_tool_history_mode=(
+                self._codex_spec.codex_tool_history_mode
+                if self._codex_spec is not None
+                else None
+            ),
         )
         effective_body["input"] = canonical_input
         input_material_bytes += request_extension_bytes
+        if self._codex_tool_history_facts is not None:
+            input_material_bytes -= self._codex_positional_compiled_out_bytes
         instructions = self._validate_optional_string(
             effective_body.get("instructions"),
             param="instructions",
@@ -321,13 +349,32 @@ class ResponsesRequestPolicy:
                 "responses_conversation_previous_response_not_supported",
                 "Responses conversation and previous_response_id cannot be combined in this gateway.",
             )
-        if codex_replay_request_candidates(
-            effective_body,
-            allow_idless_tool_call_replay=(
-                self._codex_spec is not None and self._codex_spec.allow_idless_tool_call_replay
-            ),
-            top_level_tool_taxonomy=continuation_taxonomy,
-        ) and ("conversation" in effective_body or "previous_response_id" in effective_body):
+        try:
+            replay_candidates_present = bool(
+                codex_replay_request_candidates(
+                    effective_body,
+                    allow_idless_tool_call_replay=(
+                        self._codex_spec is not None
+                        and self._codex_spec.allow_idless_tool_call_replay
+                    ),
+                    top_level_tool_taxonomy=continuation_taxonomy,
+                    codex_tool_call_bindings=(
+                        self._codex_tool_history_facts.call_bindings
+                        if self._codex_tool_history_facts is not None
+                        else None
+                    ),
+                    require_call_completeness=True,
+                )
+            )
+        except ValueError:
+            _raise(
+                "input",
+                "responses_codex_replay_reference_invalid",
+                "The Codex client-managed replay references in this request cannot be verified.",
+            )
+        if replay_candidates_present and (
+            "conversation" in effective_body or "previous_response_id" in effective_body
+        ):
             _raise(
                 "input",
                 "responses_codex_replay_provider_state_not_supported",
@@ -431,7 +478,13 @@ class ResponsesRequestPolicy:
             tools_schema_bytes=tools_schema_bytes,
             tool_choice_bytes=tool_choice_bytes,
             codex_client_tool_declaration_bytes=(
-                _codex_client_tool_declaration_estimation_bytes(effective_body.get("input"))
+                _codex_positional_active_declaration_bytes(
+                    self._codex_tool_history_facts, effective_body.get("input")
+                )
+                if self._codex_tool_history_facts is not None
+                else _codex_client_tool_declaration_estimation_bytes(
+                    effective_body.get("input")
+                )
             ),
         )
         input_ceiling = (
@@ -439,13 +492,18 @@ class ResponsesRequestPolicy:
             if allow_codex_extended_limits
             else self._settings.HARD_MAX_INPUT_TOKENS
         )
-        preliminary = text_only_input_estimate(estimated_input_tokens, effective_body) if defer_media_limit else estimated_input_tokens
-        if preliminary > input_ceiling:
-            _raise(
-                "input",
-                "input_token_limit_exceeded",
-                "Estimated Responses input size exceeds the configured hard maximum.",
-            )
+        # New lifecycle mode defers the provisional token ceiling until the
+        # route-specific prepared-body estimate (the raw body/item/text/
+        # schema guards above remain unconditional); legacy modes keep the
+        # exact provisional check.
+        if self._codex_tool_history_facts is None:
+            preliminary = text_only_input_estimate(estimated_input_tokens, effective_body) if defer_media_limit else estimated_input_tokens
+            if preliminary > input_ceiling:
+                _raise(
+                    "input",
+                    "input_token_limit_exceeded",
+                    "Estimated Responses input size exceeds the configured hard maximum.",
+                )
 
         effective_body.update(request_extensions)
         return ResponsesPolicyResult(
@@ -460,11 +518,14 @@ class ResponsesRequestPolicy:
             estimated_non_message_input_bytes=estimated_non_message_input_bytes,
             estimated_non_message_input_fields=estimated_non_message_input_fields,
             injected_default_output_tokens=injected_default,
+            codex_tool_history=self._codex_tool_history_facts,
         )
 
     def apply_input_token_count(self, body: Mapping[str, Any]) -> ResponsesPolicyResult:
         """Validate a Responses input-token count request without create-only fields."""
 
+        self._codex_tool_history_facts = None
+        self._codex_positional_compiled_out_bytes = 0
         effective_body = copy.deepcopy(dict(body))
         self._reject_unknown_fields(
             effective_body,
@@ -525,6 +586,8 @@ class ResponsesRequestPolicy:
     ) -> ResponsesPolicyResult:
         """Validate a bounded text-focused Responses compaction request."""
 
+        self._codex_tool_history_facts = None
+        self._codex_positional_compiled_out_bytes = 0
         effective_body = copy.deepcopy(dict(body))
         codex_requested = responses_codex_compaction_requested(effective_body)
         if codex_requested and not allow_codex_compaction:
@@ -668,6 +731,7 @@ class ResponsesRequestPolicy:
         allow_codex_compaction_replay: bool = False,
         codex_client_tool_taxonomy: str | None = None,
         codex_top_level_tool_taxonomy: frozenset[tuple[str, str, str]] | None = None,
+        codex_tool_history_mode: str | None = None,
     ) -> tuple[str | list[dict[str, Any]], int]:
         if isinstance(value, str):
             if not value:
@@ -681,6 +745,15 @@ class ResponsesRequestPolicy:
                 param="input",
                 max_bytes=self._settings.RESPONSES_MAX_INPUT_TEXT_BYTES,
             )
+            if codex_tool_history_mode == MODE_POSITIONAL_UPDATES:
+                # A new-mode request with no declaration items still has
+                # an explicit (empty) current catalog: any generated tool
+                # call is outside the final active set and must be denied.
+                self._codex_tool_history_facts = analyze_codex_tool_history(
+                    [],
+                    mode=MODE_POSITIONAL_UPDATES,
+                    max_items=1,
+                )
             return value, len(value.encode("utf-8"))
 
         if isinstance(value, list):
@@ -693,6 +766,7 @@ class ResponsesRequestPolicy:
                 allow_codex_compaction_replay=allow_codex_compaction_replay,
                 codex_client_tool_taxonomy=codex_client_tool_taxonomy,
                 codex_top_level_tool_taxonomy=codex_top_level_tool_taxonomy,
+                codex_tool_history_mode=codex_tool_history_mode,
             )
 
         _raise(
@@ -913,6 +987,7 @@ class ResponsesRequestPolicy:
         allow_codex_compaction_replay: bool = False,
         codex_client_tool_taxonomy: str | None = None,
         codex_top_level_tool_taxonomy: frozenset[tuple[str, str, str]] | None = None,
+        codex_tool_history_mode: str | None = None,
     ) -> tuple[list[dict[str, Any]], int]:
         if not value:
             _raise(
@@ -941,7 +1016,10 @@ class ResponsesRequestPolicy:
         for index, item in enumerate(value):
             if isinstance(item, Mapping) and item.get("type") == "additional_tools":
                 codex_client_tool_items += 1
-                if codex_client_tool_items > 1:
+                if (
+                    codex_client_tool_items > 1
+                    and codex_tool_history_mode != MODE_POSITIONAL_UPDATES
+                ):
                     _raise(
                         f"input[{index}].type",
                         "responses_codex_client_tools_invalid",
@@ -1023,8 +1101,61 @@ class ResponsesRequestPolicy:
                     "The Responses input file data URLs exceed the gateway size limit.",
                 )
             canonical_items.append(canonical_item)
+        codex_tool_history_facts: CodexToolHistoryFacts | None = None
+        if codex_tool_history_mode == MODE_POSITIONAL_UPDATES:
+            # Every declaration was individually validated above; only
+            # now is the chronological lifecycle interpreted.  An
+            # invalid earlier declaration cannot be concealed by a
+            # later valid update because the per-item validation ran
+            # first, in input order.
+            try:
+                events = _codex_positional_events_from_items(canonical_items)
+                codex_tool_history_facts = analyze_codex_tool_history(
+                    events,
+                    mode=MODE_POSITIONAL_UPDATES,
+                    max_items=len(canonical_items),
+                )
+            except CodexToolHistoryError as exc:
+                # The helper owns fixed, content-free messages and a stable
+                # reason_code; preserve that safe cause (and the original
+                # input position) instead of flattening every transition
+                # failure to one generic sentence.
+                param = f"input[{exc.position}]" if exc.position is not None else "input"
+                _raise(
+                    param,
+                    "responses_codex_tool_history_invalid",
+                    str(exc),
+                    diagnostics={"source": "codex_tool_history", "reason": exc.reason_code},
+                )
+            if codex_tool_history_facts.pending_call_ids:
+                _raise(
+                    "input",
+                    "responses_codex_tool_history_invalid",
+                    "The Codex tool-call continuation requires exactly one matching bounded output.",
+                )
+            self._validate_codex_positional_final_catalog(codex_tool_history_facts, canonical_items)
+            self._codex_tool_history_facts = codex_tool_history_facts
+            # The lowering compiles exactly this metadata out of the
+            # provider body, so it is subtracted from the forwarded
+            # context estimate (incoming resource bounds above already
+            # covered it and remain unchanged).
+            # Only the message metadata (removal notices and the pinned
+            # hint) is part of the message material bytes; the declaration
+            # items themselves contributed 0 there and are accounted by the
+            # active-set estimate instead.
+            compiled_out_messages = frozenset(
+                step.position
+                for step in codex_tool_history_facts.steps
+                if step.kind == "removal"
+            ) | codex_positional_hint_positions(canonical_items)
+            self._codex_positional_compiled_out_bytes = sum(
+                len(canonical_json_bytes(canonical_items[index]))
+                for index in compiled_out_messages
+            )
         if codex_tool_call_items and not codex_client_tool_items:
-            if codex_top_level_tool_taxonomy is None:
+            if codex_tool_history_facts is not None:
+                pass  # positional binding already proved every call
+            elif codex_top_level_tool_taxonomy is None:
                 _raise(
                     "input",
                     "responses_codex_tool_roundtrip_invalid",
@@ -1033,12 +1164,17 @@ class ResponsesRequestPolicy:
         if (
             codex_client_tool_items
             or codex_reasoning_items
-            or (codex_tool_call_items and codex_top_level_tool_taxonomy is not None)
+            or (codex_tool_call_items and (codex_top_level_tool_taxonomy is not None or codex_tool_history_facts is not None))
         ):
             self._validate_codex_tool_roundtrip_items(
                 canonical_items,
                 allow_codex_streaming_tool_events=allow_codex_streaming_tool_events,
                 top_level_tool_taxonomy=codex_top_level_tool_taxonomy,
+                codex_tool_call_bindings=(
+                    codex_tool_history_facts.call_bindings
+                    if codex_tool_history_facts is not None
+                    else None
+                ),
             )
         return canonical_items, total_material_bytes
 
@@ -1378,6 +1514,153 @@ class ResponsesRequestPolicy:
             )
         except Exception:  # noqa: BLE001 - observability must never affect the request
             pass
+
+    def _validate_codex_positional_final_catalog(
+        self,
+        facts: CodexToolHistoryFacts,
+        canonical_input: list[dict[str, Any]],
+    ) -> None:
+        """Re-apply the preset-owned ceilings to the FINAL active catalog.
+
+        Individually valid positional deltas can accumulate a final current
+        catalog beyond the profile ceilings; that final set is what every
+        backend forwards, so it must satisfy the same limits one raw
+        declaration would.  A transient intermediate exceedance (a
+        legitimate add-then-remove history) is legal: only the final set is
+        bounded here.  The checks reuse the exact preset-owned classifier,
+        the same per-tool validators as the raw-item pass, and the same
+        lowered namespace-description provenance; no independent authority
+        union is introduced.
+        """
+        # A fully removed catalog (empty namespace skeletons only) forwards
+        # nothing, so the ceilings are vacuously satisfied; the lowering
+        # omits such groups.
+        if not facts.active_definitions:
+            return
+        classifier = self._codex_spec.taxonomy_classifier
+        if classifier is None:
+            _raise(
+                "input",
+                "responses_codex_client_tools_invalid",
+                "The final Codex tool catalog cannot be validated.",
+            )
+        # Empty namespace skeletons (every member removed) are neither
+        # classifier input nor forwarded, even while other namespaces
+        # remain active.
+        active_groups = [
+            (namespace, tools) for namespace, tools in facts.active_taxonomy if tools
+        ]
+        result = classifier(
+            [
+                {
+                    "name": namespace,
+                    "tools": [
+                        {"name": tool, "type": kind} for tool, kind in tools
+                    ],
+                }
+                for namespace, tools in active_groups
+            ]
+        )
+        if not result.accepted:
+            self._record_taxonomy_rejection("input", result)
+            _raise(
+                "input",
+                "responses_codex_client_tools_invalid",
+                "The final Codex tool catalog exceeds the profile limits.",
+            )
+        # Last-declared namespace descriptions, the same provenance the
+        # lowering forwards, counted like the raw validator.
+        namespace_descriptions: dict[str, str | None] = {}
+        for item in canonical_input:
+            if not (isinstance(item, Mapping) and item.get("type") == "additional_tools"):
+                continue
+            for group in item.get("tools") or []:
+                if not isinstance(group, Mapping) or group.get("type") != "namespace":
+                    continue
+                name = group.get("name")
+                if not isinstance(name, str):
+                    continue
+                # Latest namespace header wins: an omission clears the
+                # optional field instead of inheriting stale text.
+                description = group.get("description")
+                namespace_descriptions[name] = (
+                    description if isinstance(description, str) else None
+                )
+        total_schema_properties = 0
+        total_function_schema_bytes = 0
+        total_custom_format_bytes = 0
+        total_description_bytes = sum(
+            len(description.encode("utf-8"))
+            for namespace, _tools in active_groups
+            if (description := namespace_descriptions.get(str(namespace))) is not None
+        )
+        for (namespace, tool), definition in facts.active_definitions.items():
+            canonical_tool, schema_bytes, format_bytes = self._validate_local_tool(
+                definition,
+                param=f"input.final.{namespace}.{tool}",
+                description_max_bytes=self._codex_spec.max_client_tool_description_bytes,
+            )
+            if canonical_tool["type"] == "function":
+                total_schema_properties += _validate_codex_schema_complexity(
+                    canonical_tool["parameters"],
+                    param=f"input.final.{namespace}.{tool}.parameters",
+                    client_spec=self._codex_spec,
+                )
+                total_function_schema_bytes += schema_bytes
+            else:
+                total_custom_format_bytes += format_bytes
+            description = canonical_tool.get("description")
+            if isinstance(description, str):
+                total_description_bytes += len(description.encode("utf-8"))
+        if total_schema_properties > self._codex_spec.max_client_tool_schema_properties:
+            _raise(
+                "input",
+                "responses_codex_client_tools_property_count_exceeded",
+                "The final Codex client function schemas have too many properties.",
+            )
+        if (
+            total_function_schema_bytes
+            > self._settings.RESPONSES_MAX_TOTAL_FUNCTION_TOOL_SCHEMA_BYTES
+        ):
+            _raise(
+                "input",
+                "responses_function_tool_schema_too_large",
+                "The final Codex client function schema size exceeds the gateway limit.",
+            )
+        if total_custom_format_bytes > self._settings.RESPONSES_MAX_TOTAL_CUSTOM_TOOL_FORMAT_BYTES:
+            _raise(
+                "input",
+                "responses_custom_tool_format_too_large",
+                "The final Codex client custom format size exceeds the gateway limit.",
+            )
+        if total_description_bytes > self._codex_spec.max_client_tool_total_description_bytes:
+            _raise(
+                "input",
+                "responses_codex_client_tools_too_large",
+                "The final Codex client tool description size exceeds the gateway limit.",
+            )
+        # The assembled final declaration (the exact top-level groups the
+        # lowering forwards) must satisfy the same single-declaration byte
+        # limit as one raw additional_tools item.
+        assembled = []
+        for namespace, tools in active_groups:
+            entry: dict[str, Any] = {"type": "namespace", "name": namespace}
+            description = namespace_descriptions.get(str(namespace))
+            if description is not None:
+                entry["description"] = description
+            entry["tools"] = [
+                facts.active_definitions[(namespace, tool)] for tool, _kind in tools
+            ]
+            assembled.append(entry)
+        if (
+            len(canonical_json_bytes(assembled))
+            > self._codex_spec.max_client_tool_declaration_bytes
+        ):
+            _raise(
+                "input",
+                "responses_codex_client_tools_too_large",
+                "The final Codex client tool declaration exceeds the gateway size limit.",
+            )
 
     def _validate_codex_additional_tools_item(
         self,
@@ -2051,6 +2334,7 @@ class ResponsesRequestPolicy:
         *,
         allow_codex_streaming_tool_events: bool,
         top_level_tool_taxonomy: frozenset[tuple[str, str, str]] | None = None,
+        codex_tool_call_bindings: Mapping[str, tuple[str | None, str, str]] | None = None,
     ) -> None:
         input_declarations = _codex_declarations_from_input_items(items)
         if top_level_tool_taxonomy is not None:
@@ -2091,13 +2375,21 @@ class ResponsesRequestPolicy:
             item_type = item.get("type")
             item_id = item.get("id")
             if isinstance(item_id, str):
-                if item_id in item_ids:
+                if (
+                    codex_tool_call_bindings is not None
+                    and item_type == "additional_tools"
+                ):
+                    # Inert declaration protocol ID: it may repeat or be
+                    # absent and gains no authority in the positional mode.
+                    pass
+                elif item_id in item_ids:
                     _raise(
                         f"input[{index}].id",
                         "responses_codex_tool_roundtrip_invalid",
                         "Codex replay item IDs must be unique within one request.",
                     )
-                item_ids.add(item_id)
+                else:
+                    item_ids.add(item_id)
             if item_type == "reasoning":
                 continue
             if item_type in {"function_call", "custom_tool_call"}:
@@ -2110,6 +2402,33 @@ class ResponsesRequestPolicy:
                 tool_type = "custom" if item_type == "custom_tool_call" else "function"
                 name = str(item["name"])
                 namespace = item.get("namespace")
+                if codex_tool_call_bindings is not None:
+                    # Positional mode: the call binds to the identity
+                    # active at its OWN position (core-verified facts);
+                    # historical sets never enter this match and the
+                    # final active set never rebinds this call.
+                    binding = codex_tool_call_bindings.get(str(item["call_id"]))
+                    if (
+                        binding is None
+                        or binding[1] != name
+                        or binding[2] != tool_type
+                        or (namespace is not None and binding[0] != namespace)
+                    ):
+                        _raise(
+                            f"input[{index}].name",
+                            "responses_codex_tool_history_invalid",
+                            "Codex tool calls must match the exact declared client-tool taxonomy at their position.",
+                        )
+                    call_id = str(item["call_id"])
+                    if call_id in calls:
+                        _raise(
+                            f"input[{index}].call_id",
+                            "responses_codex_tool_roundtrip_invalid",
+                            "Codex tool-call IDs must be unique.",
+                        )
+                    calls[call_id] = binding
+                    pending.add(call_id)
+                    continue
                 matches = [
                     declaration
                     for declaration in declarations
@@ -2159,6 +2478,21 @@ class ResponsesRequestPolicy:
             elif pending and not (
                 item_type in (None, "message") and item.get("role") == "assistant"
             ):
+                if codex_tool_call_bindings is not None and (
+                    item_type == "additional_tools"
+                    or (
+                        item_type in (None, "message")
+                        and item.get("role") == "developer"
+                        and _codex_removal_notice_text(item.get("content")) is not None
+                    )
+                ):
+                    # Positional mode: validated declaration updates and
+                    # pinned removal-notice metadata do not rebind the
+                    # pending call (it stays bound to the identity active
+                    # at its own position), so they may sit between a call
+                    # and its output.  Ordinary user/developer input and
+                    # compaction remain blocked while pending.
+                    continue
                 _raise(
                     f"input[{index}]",
                     "responses_codex_tool_roundtrip_invalid",
@@ -4461,17 +4795,136 @@ def responses_codex_encrypted_reasoning_replay_allowed(policy: object) -> bool:
     )
 
 
+def _codex_positional_replay_candidates(
+    input_value: list[Any],
+    codex_tool_call_bindings: Mapping[str, tuple[str | None, str, str]],
+    *,
+    allow_idless_tool_call_replay: bool,
+) -> tuple[CodexReplayRequestCandidate | CodexCompactionReplayCandidate, ...]:
+    """New lifecycle mode: emit every actual call from its positional identity.
+
+    The core-verified ``codex_tool_call_bindings`` map each ``call_id`` to
+    the exact ``(namespace, name, kind)`` active at the call's OWN
+    position.  Those facts name the identity; they grant NO ownership
+    authority - every emitted candidate still passes the existing
+    same-key/route/provider HMAC verification.  Any call that cannot be
+    extracted (unbound, inconsistent, or with an unreferencable ID form)
+    fails closed with a fixed safe error: an ownership check is never
+    silently dropped.  The completeness check at the end guarantees that
+    every core-bound call yielded exactly one candidate.
+    """
+    candidates: list[CodexReplayRequestCandidate | CodexCompactionReplayCandidate] = []
+    seen_call_ids: set[str] = set()
+    for item in input_value:
+        if not isinstance(item, Mapping):
+            continue
+        item_type = item.get("type")
+        if item_type == "compaction":
+            item_id = item.get("id")
+            encrypted_content = item.get("encrypted_content")
+            if isinstance(item_id, str) and isinstance(encrypted_content, str):
+                candidates.append(
+                    CodexCompactionReplayCandidate(
+                        item_kind="compaction",
+                        item_id=item_id,
+                        call_id=None,
+                        tool_namespace=None,
+                        tool_name=None,
+                        encrypted_content=encrypted_content,
+                    )
+                )
+            continue
+        if item_type == "reasoning":
+            # Empty ciphertext is visible context, never an opaque replay reference.
+            if item.get("encrypted_content") == "":
+                continue
+            item_id = item.get("id")
+            if isinstance(item_id, str):
+                candidates.append(
+                    CodexReplayRequestCandidate(
+                        item_kind="reasoning",
+                        item_id=item_id,
+                        call_id=None,
+                        tool_namespace=None,
+                        tool_name=None,
+                    )
+                )
+            continue
+        if item_type not in {"function_call", "custom_tool_call"}:
+            continue
+        call_id = item.get("call_id")
+        item_id = item.get("id")
+        item_namespace = item.get("namespace")
+        if (
+            not isinstance(call_id, str)
+            or call_id in seen_call_ids
+            or not isinstance(item_namespace, (str, type(None)))
+        ):
+            raise ValueError("codex_replay_candidate_extraction_failed")
+        binding = codex_tool_call_bindings.get(call_id)
+        if binding is None:
+            raise ValueError("codex_replay_candidate_extraction_failed")
+        namespace, name, kind = binding
+        tool_type = "custom" if item_type == "custom_tool_call" else "function"
+        if (
+            not isinstance(name, str)
+            or item.get("name") != name
+            or kind != tool_type
+            or (item_namespace is not None and item_namespace != namespace)
+        ):
+            # An omitted namespace uses the immutable bound namespace (the
+            # codec applies the same rule); only an EXPLICIT namespace
+            # contradicting the trusted binding denies.
+            raise ValueError("codex_replay_candidate_extraction_failed")
+        if not (
+            isinstance(item_id, str)
+            or (item_id is None and allow_idless_tool_call_replay)
+        ):
+            raise ValueError("codex_replay_reference_form_unavailable")
+        seen_call_ids.add(call_id)
+        candidates.append(
+            CodexReplayRequestCandidate(
+                item_kind=str(item_type),
+                item_id=item_id,
+                call_id=call_id,
+                tool_namespace=namespace if isinstance(namespace, str) else None,
+                tool_name=name,
+            )
+        )
+    if seen_call_ids != set(codex_tool_call_bindings):
+        # Completeness: every core-bound call yields exactly one candidate.
+        raise ValueError("codex_replay_candidate_extraction_failed")
+    return tuple(candidates)
+
+
 def codex_replay_request_candidates(
     body: Mapping[str, Any],
     *,
     top_level_tool_taxonomy: frozenset[tuple[str, str, str]] | None = None,
     allow_idless_tool_call_replay: bool = False,
+    codex_tool_call_bindings: Mapping[str, tuple[str | None, str, str]] | None = None,
+    require_call_completeness: bool = False,
 ) -> tuple[CodexReplayRequestCandidate | CodexCompactionReplayCandidate, ...]:
-    """Extract only validated IDs and approved identities from canonical input."""
+    """Extract only validated IDs and approved identities from canonical input.
+
+    When the core-verified ``codex_tool_call_bindings`` (explicit new
+    lifecycle mode) are supplied, every actual call is emitted from its
+    immutable positional identity and any call that cannot be extracted
+    fails closed.  Otherwise the legacy union-of-declarations behavior
+    applies; with ``require_call_completeness`` a validated legacy call
+    whose reference form cannot be owned is denied safely instead of
+    being silently omitted from the ownership check.
+    """
 
     input_value = body.get("input")
     if not isinstance(input_value, list):
         return ()
+    if codex_tool_call_bindings is not None:
+        return _codex_positional_replay_candidates(
+            input_value,
+            codex_tool_call_bindings,
+            allow_idless_tool_call_replay=allow_idless_tool_call_replay,
+        )
     input_declarations = _codex_declarations_from_input_items(
         [dict(item) for item in input_value if isinstance(item, Mapping)]
     )
@@ -4533,21 +4986,34 @@ def codex_replay_request_candidates(
             and declaration[2] == tool_type
             and (namespace is None or declaration[0] == namespace)
         ]
-        if (
-            (isinstance(item_id, str) or (item_id is None and allow_idless_tool_call_replay))
-            and isinstance(call_id, str)
-            and isinstance(name, str)
-            and len(matches) == 1
-        ):
-            candidates.append(
-                CodexReplayRequestCandidate(
-                    item_kind=str(item_type),
-                    item_id=item_id,
-                    call_id=call_id,
-                    tool_namespace=matches[0][0],
-                    tool_name=name,
+        id_ok = isinstance(item_id, str) or (
+            item_id is None and allow_idless_tool_call_replay
+        )
+        shape_ok = isinstance(call_id, str) and isinstance(name, str)
+        if shape_ok and len(matches) == 1:
+            if id_ok:
+                candidates.append(
+                    CodexReplayRequestCandidate(
+                        item_kind=str(item_type),
+                        item_id=item_id,
+                        call_id=call_id,
+                        tool_namespace=matches[0][0],
+                        tool_name=name,
+                    )
                 )
-            )
+            elif require_call_completeness:
+                # A validated legacy call whose reference form cannot be
+                # owned (for example a missing item ID where ID-less
+                # replay is not qualified) must not be silently omitted
+                # from the ownership check; deny it safely.
+                raise ValueError("codex_replay_reference_form_unavailable")
+        elif require_call_completeness:
+            # Zero or ambiguous declaration matches (or a non-referencable
+            # call shape) cannot be mapped to an owned reference; the
+            # policy roundtrip normally refuses such calls first, but the
+            # extractor fails closed on its own so no actual call can
+            # ever be silently omitted from the ownership check.
+            raise ValueError("codex_replay_candidate_extraction_failed")
     return tuple(candidates)
 
 
@@ -4700,6 +5166,349 @@ def _first_codex_client_tools_param(body: Mapping[str, Any]) -> str:
             if isinstance(item, Mapping) and item.get("type") == "additional_tools":
                 return f"input[{index}].type"
     return "input"
+
+
+def _codex_removal_notice_text(content: Any) -> str | None:
+    """Recognize ONE pinned-grammar removal-notice candidate, or None.
+
+    Only a single text body (a plain string, or exactly one text part)
+    whose content begins with one of the EXACT pinned bundled headers
+    is a recognition candidate.  Every other developer message is
+    ordinary history and is never parsed: an ordinary instruction can
+    never become an addition, removal, or authorization source.  A
+    recognized candidate that then fails the pinned grammar is refused
+    by the caller with a fixed safe error.
+    """
+    if isinstance(content, str):
+        text = content
+    elif isinstance(content, list) and len(content) == 1:
+        part = content[0]
+        if (
+            isinstance(part, Mapping)
+            and part.get("type") == "input_text"
+            and isinstance(part.get("text"), str)
+        ):
+            text = part["text"]
+        else:
+            return None
+    else:
+        return None
+    if text.startswith(DEFAULT_REMOVED_NAMESPACES_HEADER) or text.startswith(
+        DEFAULT_REMOVED_TOOLS_HEADER
+    ):
+        return text
+    return None
+
+
+def _codex_positional_events_from_items(
+    canonical_items: list[dict[str, Any]],
+) -> list:
+    """Project CANONICALIZED input items into chronological events.
+
+    Every item has already passed the policy-owned per-item validation
+    (including every earlier declaration); this only extracts inert
+    facts for the shared positional-update analyzer.  Raw request
+    bodies are never read here.
+    """
+    events = []
+    for index, item in enumerate(canonical_items):
+        item_type = item.get("type")
+        if item_type == "additional_tools":
+            taxonomy = []
+            definitions: dict[tuple[str, str], Any] = {}
+            for group in item.get("tools") or []:
+                if not isinstance(group, Mapping) or group.get("type") != "namespace":
+                    continue
+                namespace = group.get("name")
+                tools = []
+                for tool in group.get("tools") or []:
+                    if not isinstance(tool, Mapping) or not isinstance(tool.get("name"), str):
+                        continue
+                    tools.append((tool["name"], str(tool.get("type"))))
+                    definitions[(str(namespace), tool["name"])] = tool
+                taxonomy.append((str(namespace), tuple(tools)))
+            item_id = item.get("id")
+            events.append(
+                CodexToolDeclarationEvent(
+                    taxonomy=tuple(taxonomy),
+                    position=index,
+                    item_id=item_id if isinstance(item_id, str) else None,
+                    definitions=definitions,
+                )
+            )
+        elif item_type in (None, "message") and item.get("role") == "developer":
+            notice = _codex_removal_notice_text(item.get("content"))
+            if notice is not None:
+                parsed = parse_codex_removal_notice(notice)
+                events.append(
+                    CodexToolRemovalEvent(
+                        namespaces=parsed.namespaces,
+                        tools=parsed.tools,
+                        position=index,
+                    )
+                )
+        elif item_type in {"function_call", "custom_tool_call"}:
+            namespace = item.get("namespace")
+            events.append(
+                CodexToolCallEvent(
+                    call_id=str(item["call_id"]),
+                    namespace=namespace if isinstance(namespace, str) else None,
+                    name=str(item["name"]),
+                    kind="custom" if item_type == "custom_tool_call" else "function",
+                    position=index,
+                )
+            )
+        elif item_type in {"function_call_output", "custom_tool_call_output"}:
+            output_id = item.get("id")
+            events.append(
+                CodexToolCallOutputEvent(
+                    call_id=str(item["call_id"]),
+                    kind="custom" if item_type == "custom_tool_call_output" else "function",
+                    position=index,
+                    output_id=output_id if isinstance(output_id, str) else None,
+                )
+            )
+    return events
+
+
+def _codex_positional_active_declaration_bytes(facts: CodexToolHistoryFacts, canonical_input: Any) -> int:
+    """Transport-independent canonical bytes of the final active catalog.
+
+    The lowering forwards ONLY the final active catalog as top-level
+    tools (plus last-declared namespace descriptions), so historical
+    declaration items are not counted; forwarded removal notices are
+    ordinary message history counted by the text estimate.  This
+    canonical form is the pre-route bound used by the raw input guard;
+    the route-specific prepared representation the transport actually
+    forwards is measured by the shared codec preparation in
+    ``apply_codex_positional_prepared_estimate`` before admission, so no
+    guessed per-tool wrapper constant exists anywhere.
+    """
+    namespace_descriptions: dict[str, str | None] = {}
+    for item in canonical_input or []:
+        if not (isinstance(item, Mapping) and item.get("type") == "additional_tools"):
+            continue
+        for group in item.get("tools") or []:
+            if not isinstance(group, Mapping) or group.get("type") != "namespace":
+                continue
+            name = group.get("name")
+            if not isinstance(name, str):
+                continue
+            # Latest namespace header wins: an omission clears the
+            # optional field instead of inheriting stale text.
+            description = group.get("description")
+            namespace_descriptions[name] = (
+                description if isinstance(description, str) else None
+            )
+    namespace_order: list[str] = []
+    tools_by_namespace: dict[str, list[Any]] = {}
+    for (namespace, _tool), definition in facts.active_definitions.items():
+        key = str(namespace)
+        if key not in tools_by_namespace:
+            tools_by_namespace[key] = []
+            namespace_order.append(key)
+        tools_by_namespace[key].append(definition)
+    groups = []
+    total_tools = 0
+    for namespace in namespace_order:
+        tools = tools_by_namespace[namespace]
+        if not tools:
+            continue
+        group: dict[str, Any] = {"type": "namespace", "name": namespace}
+        description = namespace_descriptions.get(namespace)
+        if description is not None:
+            group["description"] = description
+        group["tools"] = tools
+        groups.append(group)
+        total_tools += len(tools)
+    if not groups:
+        return 0
+    return len(canonical_json_bytes(groups))
+
+
+def _codex_positional_prepared_body(
+    upstream_body: Mapping[str, Any],
+    route_capabilities: Mapping[str, object] | None,
+    tool_call_bindings: Mapping[str, tuple[str | None, str, str]] | None,
+) -> dict[str, Any]:
+    """The COMPLETE body the resolved transport will actually forward.
+
+    Produced by that transport's own pure preparation (no provider,
+    credential, HTTP, or route lookup); only the server module already
+    registered on the resolved route is selected.  Native vLLM routes run
+    the codec directly, configured upstream LLM routes run the profile's
+    shared preparation (codec only for codec encodings), and every other
+    registered transport forwards the body unchanged (exact canonical).
+    """
+    caps = route_capabilities if isinstance(route_capabilities, Mapping) else {}
+    from slaif_gateway.modules.servers.local_coding_vllm.contract import (
+        VLLM_ROUTE_CAPABILITY_KEY,
+    )
+    from slaif_gateway.modules.servers.upstream_llm.profiles import (
+        CAPABILITY_KEY as UPSTREAM_LLM_CAPABILITY_KEY,
+    )
+
+    if VLLM_ROUTE_CAPABILITY_KEY in caps:
+        from slaif_gateway.modules.servers.local_coding_vllm.adapter import (
+            prepare_vllm_body,
+        )
+
+        prepared, _ = prepare_vllm_body(
+            dict(upstream_body), tool_call_bindings=tool_call_bindings
+        )
+        return prepared
+    if UPSTREAM_LLM_CAPABILITY_KEY in caps:
+        from slaif_gateway.modules.servers.upstream_llm.adapter import (
+            prepare_upstream_llm_body,
+        )
+        from slaif_gateway.modules.servers.upstream_llm.profiles import (
+            resolve_profile,
+        )
+
+        profile = resolve_profile(caps)
+        prepared, _ = prepare_upstream_llm_body(
+            dict(upstream_body), profile, tool_call_bindings=tool_call_bindings
+        )
+        return prepared
+    return dict(upstream_body)
+
+
+def _codex_positional_prepared_estimate_bytes(
+    prepared_body: Mapping[str, Any],
+) -> tuple[int, int, tuple[str, ...]]:
+    """Bounded conservative (total, non_message, fields) bytes of PREPARED body.
+
+    The existing byte-based approximation for the new lifecycle mode:
+    canonical JSON bytes of the COMPLETE prepared input (list items or a
+    plain string input; real IDs exactly once, as forwarded), plus the
+    forwarded instructions and the relevant non-message fields (tools,
+    include, parallel_tool_calls, prompt_cache_key, reasoning, text)
+    present in the PREPARED body - i.e. exactly the representation the
+    selected transport forwards, never fields dropped from it.
+    Transport-transformed historical calls (wire names, custom argument
+    wrappers, output renames), compiled-out metadata, and dropped
+    declaration IDs are observed exactly as the prepared body represents
+    them.  This is a byte estimate, not an exact tokenizer measurement
+    and not a mathematical no-overrun promise.
+    """
+    total = 0
+    input_value = prepared_body.get("input")
+    if isinstance(input_value, str):
+        total += len(input_value.encode("utf-8"))
+    elif isinstance(input_value, list):
+        total += sum(
+            len(canonical_json_bytes(item)) for item in input_value if isinstance(item, Mapping)
+        )
+    instructions = prepared_body.get("instructions")
+    if isinstance(instructions, str):
+        total += len(instructions.encode("utf-8"))
+    non_message = 0
+    non_message_fields: list[str] = []
+    tools = prepared_body.get("tools")
+    if isinstance(tools, list) and tools:
+        non_message += len(canonical_json_bytes(tools))
+        non_message_fields.append("tools")
+    for field in ("include", "parallel_tool_calls", "prompt_cache_key", "reasoning", "text"):
+        if field in prepared_body and prepared_body[field] is not None:
+            non_message += len(canonical_json_bytes({field: prepared_body[field]}))
+            non_message_fields.append(field)
+    total += non_message
+    return total, non_message, tuple(non_message_fields)
+
+
+_PREPARED_WIRE_CODE_PASS_THROUGH = frozenset(
+    {
+        "upstream_llm_bindings_placement_conflict",
+        "vllm_native_wire_identity_collision",
+    }
+)
+
+
+def apply_codex_positional_prepared_estimate(
+    policy_result,
+    *,
+    upstream_body: Mapping[str, Any],
+    route_capabilities: Mapping[str, object] | None,
+    input_ceiling: int,
+):
+    """Re-anchor the input estimate on the PREPARED forwarded body (new mode).
+
+    Runs the resolved transport's shared pure preparation over the actual
+    (lowered) body and re-estimates the semantic input plus forwarded
+    tools with the bounded prepared-JSON calculation, replacing the
+    provisional canonical estimate.  ``unadjusted_input_tokens`` is
+    anchored to the prepared estimate so the existing route/media
+    handling that applies afterward (and its revalidation) neither
+    accumulates deltas nor restores the stale canonical total.  The
+    canonical ``effective_body`` is preserved untouched for replay and
+    resource ownership.  Legacy (non-positional) results are returned
+    unchanged.  A prepared body the transport itself would refuse fails
+    closed before any admission side effect.
+    """
+    facts = getattr(policy_result, "codex_tool_history", None)
+    if facts is None:
+        return policy_result
+    from slaif_gateway.providers.errors import (
+        ProviderConfigurationError,
+        ProviderRequestError,
+    )
+
+    try:
+        prepared_body = _codex_positional_prepared_body(
+            upstream_body, route_capabilities, facts.call_bindings
+        )
+    except ProviderRequestError as exc:
+        if exc.error_code in _PREPARED_WIRE_CODE_PASS_THROUGH:
+            # Known fixed representability law: surface the precise safe
+            # compatibility code (its fixed safe message only) so callers
+            # can distinguish the refusal cause; no raw provider message
+            # or request content crosses this wrapper.
+            param = (
+                "input"
+                if exc.error_code == "upstream_llm_bindings_placement_conflict"
+                else "tools"
+            )
+            raise ResponsesRequestPolicyError(
+                exc.safe_message,
+                param=param,
+                error_code=exc.error_code,
+            ) from exc
+        raise ResponsesRequestPolicyError(
+            "The prepared Codex tool history body cannot be represented by the selected route transport.",
+            param="tools",
+            error_code="responses_codex_tool_wire_invalid",
+        ) from exc
+    except (ProviderConfigurationError, TypeError, ValueError, AttributeError) as exc:
+        raise ResponsesRequestPolicyError(
+            "The prepared Codex tool history body cannot be represented by the selected route transport.",
+            param="tools",
+            error_code="responses_codex_tool_wire_invalid",
+        ) from exc
+    total_bytes, non_message_bytes, non_message_fields = (
+        _codex_positional_prepared_estimate_bytes(prepared_body)
+    )
+    estimated_input_tokens = max(1, (total_bytes + 2) // 3)
+    estimated_non_message_input_tokens = (
+        (non_message_bytes + 2) // 3 if non_message_bytes else 0
+    )
+    return apply_media_input_estimate(
+        policy_result.model_copy(
+            update={
+                "estimated_input_tokens": estimated_input_tokens,
+                "estimated_message_input_tokens": max(
+                    0, estimated_input_tokens - estimated_non_message_input_tokens
+                ),
+                "estimated_non_message_input_tokens": estimated_non_message_input_tokens,
+                "estimated_non_message_input_bytes": non_message_bytes,
+                "estimated_non_message_input_fields": non_message_fields,
+                "unadjusted_input_tokens": estimated_input_tokens,
+                "estimated_media_input_tokens": 0,
+                "encoded_media_input_bytes": 0,
+            }
+        ),
+        route_capabilities=route_capabilities,
+        input_ceiling=input_ceiling,
+    )
 
 
 def _codex_client_tool_declaration_estimation_bytes(value: Any) -> int:

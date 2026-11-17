@@ -51,10 +51,16 @@ permissions.
 The operator-only `CODEX_COMPATIBILITY_PROFILE_FILE` override loads a
 validated data revision >= 3 once at bootstrap with the same installed
 engine and no rebuild; data revisions `1`/`2` remain frozen migration
-selectors only. Both newer
+selectors only. These newer
 modules are
-default-denied except for their one reviewed `local-coding-v1` pair each.
-Pair metadata is
+default-denied: `codex-0.149-responses-v1` has one reviewed
+`local-coding-v1` pair, and `codex-0.162-responses-v1` has reviewed
+`local-coding-v1`, `local-coding-vLLM`, and `configured-upstream-llm`
+pairs. The registry binds ONE profile DATA revision per process (one-shot
+guarded bootstrap), and the shipped preset `codex-0.167.1` (DATA revision
+`16`) additionally activates the bounded positional-update
+declaration-history lifecycle (see
+[Responses compatibility](responses-compatibility.md)). Pair metadata is
 finite compatibility data; it does not grant an endpoint, model, route,
 provider, capability, pricing mode, hosted tool, or key permission.
 

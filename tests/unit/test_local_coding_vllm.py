@@ -2,6 +2,7 @@
 
 import copy
 import json
+import re
 from dataclasses import replace
 
 import httpx
@@ -398,3 +399,431 @@ def test_malformed_native_values_fail_without_raw_exceptions(field, value):
     native.events(events[0])
     with pytest.raises(ProviderResponseParseError):
         native.events(dict(events[1], **{field: value}))
+
+
+# --- Codex tool-call bindings (226-a secondary adapter scope) -------------
+# Bindings are ephemeral core-validated per-call translation facts: they
+# translate historical calls for removed tools without expanding authority.
+
+
+def removed_history_body():
+    """History calls functions.apply_patch after it left the current tools."""
+    base = body()
+    base["tools"][0]["tools"] = [base["tools"][0]["tools"][1]]
+    base["input"] += [
+        {
+            "type": "custom_tool_call",
+            "id": "ct_removed",
+            "call_id": "c_removed",
+            "namespace": "functions",
+            "name": "apply_patch",
+            "input": "synthetic patch",
+        },
+        {"type": "custom_tool_call_output", "call_id": "c_removed", "output": "ok"},
+    ]
+    return base
+
+
+def exec_events(arguments='{"cmd":"true"}'):
+    return [
+        {
+            "type": "response.output_item.added",
+            "output_index": 0,
+            "item": dict(item(arguments, name="functions.exec_command"), status="in_progress"),
+            "sequence_number": 0,
+        },
+        {
+            "type": "response.function_call_arguments.delta",
+            "item_id": "fc_synthetic",
+            "output_index": 0,
+            "delta": arguments,
+            "sequence_number": 1,
+        },
+        {
+            "type": "response.function_call_arguments.done",
+            "item_id": "fc_synthetic",
+            "output_index": 0,
+            "name": "functions.exec_command",
+            "arguments": arguments,
+            "sequence_number": 2,
+        },
+        {
+            "type": "response.output_item.done",
+            "output_index": 0,
+            "item": dict(item(arguments, name="functions.exec_command"), status="completed"),
+            "sequence_number": 3,
+        },
+    ]
+
+
+def test_removed_history_is_translated_against_bindings_without_active_declaration():
+    original = removed_history_body()
+    snapshot = copy.deepcopy(original)
+    codec = VLLMToolCodec(
+        original, tool_call_bindings={"c_removed": ("functions", "apply_patch", "custom")}
+    )
+    assert original == snapshot
+    # Active tools stay exactly the current declarations; no history union.
+    assert [x["name"] for x in codec.body["tools"]] == ["functions.exec_command"]
+    call = codec.body["input"][1]
+    assert call["type"] == "function_call"
+    assert call["name"] == "functions.apply_patch"
+    assert json.loads(call["arguments"]) == {"input": "synthetic patch"}
+    assert codec.body["input"][2] == {
+        "type": "function_call_output", "call_id": "c_removed", "output": "ok"
+    }
+
+
+@pytest.mark.parametrize("portable", [False, True])
+def test_removed_history_wire_names_are_stable_across_native_and_portable(portable):
+    bindings = {"c_removed": ("functions", "apply_patch", "custom")}
+    codec = VLLMToolCodec(
+        removed_history_body(), portable_names=portable, tool_call_bindings=bindings
+    )
+    wire_name = codec.body["input"][1]["name"]
+    # Same deterministic wire name as an equivalent still-declared tool.
+    declared = VLLMToolCodec(body(), portable_names=portable)
+    assert wire_name == declared.body["tools"][0]["name"]
+    if portable:
+        assert re.fullmatch(r"tool_[A-Za-z0-9_]{1,32}_[0-9a-f]{24}", wire_name)
+    other = VLLMToolCodec(
+        removed_history_body(), portable_names=portable, tool_call_bindings=bindings
+    )
+    assert other.body["input"][1]["name"] == wire_name
+    assert codec.tool_call_bindings == bindings
+
+
+def test_removed_new_output_is_denied_while_active_new_output_passes():
+    codec = VLLMToolCodec(
+        removed_history_body(), tool_call_bindings={"c_removed": ("functions", "apply_patch", "custom")}
+    )
+    removed_wire_name = codec.body["input"][1]["name"]
+    with pytest.raises(ProviderResponseParseError):
+        codec.item(
+            dict(item(name=removed_wire_name), id="fc_new", call_id="call_new"), added=True
+        )
+    active = dict(
+        item('{"cmd":"true"}', name="functions.exec_command"), id="fc_active", call_id="call_active"
+    )
+    assert codec.item(active, added=True)["name"] == "exec_command"
+
+
+@pytest.mark.parametrize(
+    "bindings",
+    [
+        # Missing entry: the historical call has no verified fact.
+        {"other_call": ("functions", "apply_patch", "custom")},
+        # Mismatched kind.
+        {"c_removed": ("functions", "apply_patch", "function")},
+        # Mismatched name.
+        {"c_removed": ("functions", "other_tool", "custom")},
+        # Explicit namespace contradicting the bound identity.
+        {"c_removed": (None, "apply_patch", "custom")},
+        # Malformed entries fail closed.
+        {"c_removed": ("functions", "apply_patch")},
+        {"c_removed": ("functions", "apply patch", "custom")},
+        {"c_removed": (None, "apply_patch", "other")},
+        {"bad id!": ("functions", "apply_patch", "custom")},
+        ["not", "a", "mapping"],
+    ],
+)
+def test_missing_or_mismatched_bindings_are_denied(bindings):
+    with pytest.raises(ProviderRequestError):
+        VLLMToolCodec(removed_history_body(), tool_call_bindings=bindings)
+
+
+def test_history_call_without_call_id_is_denied_with_bindings():
+    original = removed_history_body()
+    del original["input"][1]["call_id"]
+    with pytest.raises(ProviderRequestError):
+        VLLMToolCodec(
+            original, tool_call_bindings={"c_removed": ("functions", "apply_patch", "custom")}
+        )
+
+
+def test_omitted_namespace_resolves_through_binding_but_explicit_contradiction_denies():
+    original = removed_history_body()
+    del original["input"][1]["namespace"]
+    codec = VLLMToolCodec(
+        original, tool_call_bindings={"c_removed": ("functions", "apply_patch", "custom")}
+    )
+    assert codec.body["input"][1]["name"] == "functions.apply_patch"
+    explicit = removed_history_body()
+    explicit["input"][1]["namespace"] = None
+    with pytest.raises(ProviderRequestError):
+        VLLMToolCodec(
+            explicit, tool_call_bindings={"c_removed": ("functions", "apply_patch", "custom")}
+        )
+
+
+@pytest.mark.parametrize(
+    "current_tool,historical_item,historical_binding",
+    [
+        # Old custom call; the tool is currently declared as a function.
+        (
+            {
+                "type": "function",
+                "name": "apply_patch",
+                "description": "Apply a patch",
+                "parameters": {"type": "object", "properties": {}},
+            },
+            {
+                "type": "custom_tool_call",
+                "id": "ct1",
+                "call_id": "c1",
+                "namespace": "functions",
+                "name": "apply_patch",
+                "input": "patch",
+            },
+            ("functions", "apply_patch", "custom"),
+        ),
+        # Old function call; the tool is currently declared as custom.
+        (
+            {
+                "type": "custom",
+                "name": "apply_patch",
+                "description": "Apply a patch",
+                "format": {"type": "grammar", "syntax": "lark", "definition": "start: /.+/"},
+            },
+            {
+                "type": "function_call",
+                "id": "fc1",
+                "call_id": "c1",
+                "namespace": "functions",
+                "name": "apply_patch",
+                "arguments": '{"cmd":"x"}',
+            },
+            ("functions", "apply_patch", "function"),
+        ),
+    ],
+)
+def test_same_name_kind_transition_uses_historical_wrapper_and_active_map(
+    current_tool, historical_item, historical_binding
+):
+    base = body()
+    base["tools"] = [{"type": "namespace", "name": "functions", "tools": [current_tool]}]
+    base["input"] += [
+        historical_item,
+        {"type": "function_call_output", "call_id": "c1", "output": "ok"},
+    ]
+    codec = VLLMToolCodec(base, tool_call_bindings={"c1": historical_binding})
+    call = codec.body["input"][1]
+    # Exact historical encoding per call kind, identity from the binding.
+    assert call["id"] == historical_item["id"]
+    assert call["call_id"] == "c1"
+    assert call["type"] == "function_call"
+    assert call["name"] == "functions.apply_patch"
+    if historical_item["type"] == "custom_tool_call":
+        assert json.loads(call["arguments"]) == {"input": "patch"}
+    else:
+        assert call["arguments"] == '{"cmd":"x"}'
+    # Call/output association and original history order preserved.
+    assert codec.body["input"][2] == {
+        "type": "function_call_output", "call_id": "c1", "output": "ok"
+    }
+    # Active response map is exactly the current declaration; no history union.
+    if current_tool["type"] == "custom":
+        assert codec.body["tools"] == [
+            {
+                "type": "function",
+                "name": "functions.apply_patch",
+                "description": "Apply a patch Pass the raw custom-tool text as input.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"input": {"type": "string"}},
+                    "required": ["input"],
+                    "additionalProperties": False,
+                },
+                "strict": False,
+            }
+        ]
+    else:
+        assert codec.body["tools"] == [dict(current_tool, name="functions.apply_patch")]
+    # New response calls decode only with the active (current) kind.
+    if current_tool["type"] == "custom":
+        new = dict(
+            item(json.dumps({"input": "new"}), name="functions.apply_patch"),
+            id="fc_new",
+            call_id="call_new",
+        )
+        decoded = codec.item(new)
+        assert decoded["type"] == "custom_tool_call"
+        assert decoded["input"] == "new"
+    else:
+        new = dict(item('{"cmd":"y"}', name="functions.apply_patch"), id="fc_new", call_id="call_new")
+        decoded = codec.item(new)
+        assert decoded["type"] == "function_call"
+        assert decoded["arguments"] == '{"cmd":"y"}'
+    assert decoded["namespace"] == "functions" and decoded["name"] == "apply_patch"
+
+
+def test_active_same_kind_history_uses_binding_and_active_map():
+    original = body()
+    original["input"] += [
+        {
+            "type": "custom_tool_call",
+            "id": "ct1",
+            "call_id": "c1",
+            "namespace": "functions",
+            "name": "apply_patch",
+            "input": "patch",
+        },
+        {"type": "custom_tool_call_output", "call_id": "c1", "output": "ok"},
+    ]
+    codec = VLLMToolCodec(
+        original, tool_call_bindings={"c1": ("functions", "apply_patch", "custom")}
+    )
+    assert [x["name"] for x in codec.body["tools"]] == [
+        "functions.apply_patch",
+        "functions.exec_command",
+    ]
+    assert json.loads(codec.body["input"][1]["arguments"]) == {"input": "patch"}
+
+
+def test_bindings_are_ephemeral_and_never_mutated():
+    original = removed_history_body()
+    snapshot = copy.deepcopy(original)
+    bindings = {"c_removed": ("functions", "apply_patch", "custom")}
+    bindings_snapshot = dict(bindings)
+    codec = VLLMToolCodec(original, tool_call_bindings=bindings)
+    assert original == snapshot
+    assert bindings == bindings_snapshot
+    assert "codex_tool_call_bindings" not in json.dumps(codec.body, ensure_ascii=True)
+    assert set(codec.body["input"][1]) == {"type", "id", "call_id", "name", "arguments"}
+
+
+def test_legacy_none_bindings_keep_current_map_behavior():
+    assert VLLMToolCodec(body()).tool_call_bindings is None
+    # Without bindings a historical call to a removed tool stays denied.
+    with pytest.raises(ProviderRequestError):
+        VLLMToolCodec(removed_history_body())
+
+
+def dot_collision_history():
+    """Two distinct approved identities collapse onto one native wire string."""
+    base = body()
+    base["tools"][0]["tools"] = [base["tools"][0]["tools"][1]]
+    base["input"] += [
+        {"type": "function_call", "id": "fc_a", "call_id": "c_a",
+         "namespace": "mcp__codex_apps__space", "name": "sub.read", "arguments": "{}"},
+        {"type": "function_call_output", "call_id": "c_a", "output": "a"},
+        {"type": "function_call", "id": "fc_b", "call_id": "c_b",
+         "namespace": "mcp__codex_apps__space.sub", "name": "read", "arguments": "{}"},
+        {"type": "function_call_output", "call_id": "c_b", "output": "b"},
+    ]
+    return base
+
+
+def test_native_wire_identity_collision_between_historical_calls_is_denied():
+    with pytest.raises(ProviderRequestError) as exc:
+        VLLMToolCodec(dot_collision_history(), tool_call_bindings={
+            "c_a": ("mcp__codex_apps__space", "sub.read", "function"),
+            "c_b": ("mcp__codex_apps__space.sub", "read", "function"),
+        })
+    assert exc.value.error_code == "vllm_native_wire_identity_collision"
+    assert "mcp__codex_apps__space" not in exc.value.safe_message
+
+
+def test_native_wire_identity_collision_with_current_declaration_is_denied():
+    base = body()
+    base["tools"] = [
+        {"type": "namespace", "name": "mcp__codex_apps__space.sub", "tools": [
+            {"type": "function", "name": "read",
+             "parameters": {"type": "object", "properties": {}}},
+        ]},
+    ]
+    base["input"] += [
+        {"type": "function_call", "id": "fc_a", "call_id": "c_a",
+         "namespace": "mcp__codex_apps__space", "name": "sub.read", "arguments": "{}"},
+        {"type": "function_call_output", "call_id": "c_a", "output": "a"},
+    ]
+    with pytest.raises(ProviderRequestError) as exc:
+        VLLMToolCodec(base, tool_call_bindings={
+            "c_a": ("mcp__codex_apps__space", "sub.read", "function")
+        })
+    assert exc.value.error_code == "vllm_native_wire_identity_collision"
+
+
+def test_portable_wire_identities_remain_distinct_for_dot_colliding_names():
+    base = dot_collision_history()
+    base["input"] += [
+        {"type": "function_call", "id": "fc_a2", "call_id": "c_a2",
+         "namespace": "mcp__codex_apps__space", "name": "sub.read", "arguments": "{}"},
+        {"type": "function_call_output", "call_id": "c_a2", "output": "a2"},
+    ]
+    codec = VLLMToolCodec(base, portable_names=True, tool_call_bindings={
+        "c_a": ("mcp__codex_apps__space", "sub.read", "function"),
+        "c_b": ("mcp__codex_apps__space.sub", "read", "function"),
+        "c_a2": ("mcp__codex_apps__space", "sub.read", "function"),
+    })
+    names = [codec.body["input"][i]["name"] for i in (1, 3, 5)]
+    assert names[0] != names[1]
+    # Repeated calls of one identity keep the same deterministic wire name.
+    assert names[0] == names[2]
+    assert all(re.fullmatch(r"tool_[A-Za-z0-9_]{1,32}_[0-9a-f]{24}", n) for n in names)
+
+
+@pytest.mark.asyncio
+async def test_vllm_transport_translates_bound_removed_history_and_leaks_nothing():
+    arguments = '{"cmd":"true"}'
+    seen = []
+
+    class Stream(httpx.AsyncByteStream):
+        def __init__(self, content):
+            self.content = content
+
+        async def __aiter__(self):
+            yield self.content
+
+    def handler(request):
+        wire = json.loads(request.content)
+        seen.append(wire)
+        expected_keys = {"model", "input", "tools"} | ({"stream"} if wire.get("stream") else set())
+        assert set(wire) == expected_keys
+        assert [t["name"] for t in wire["tools"]] == ["functions.exec_command"]
+        assert wire["input"][1] == {
+            "type": "function_call",
+            "id": "ct_removed",
+            "call_id": "c_removed",
+            "name": "functions.apply_patch",
+            "arguments": '{"input": "synthetic patch"}',
+        }
+        assert wire["input"][2]["type"] == "function_call_output"
+        assert request.headers["authorization"] == "Bearer backend-only-synthetic-0123456789abcdef"
+        assert "cookie" not in request.headers
+        if wire.get("stream"):
+            content = "".join(
+                "data: " + json.dumps(event) + "\n\n" for event in exec_events()
+            )
+            return httpx.Response(
+                200, headers={"content-type": "text/event-stream"}, stream=Stream(content.encode())
+            )
+        return httpx.Response(
+            200,
+            json={"output": [dict(item(arguments, name="functions.exec_command"), status="completed")]},
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        adapter = LocalCodingVLLMAdapter(
+            Settings(),
+            route_capabilities=CAPS,
+            base_url="https://backend.example/v1",
+            api_key="backend-only-synthetic-0123456789abcdef",
+            http_client=client,
+        )
+        request = ProviderRequest(
+            provider="test",
+            upstream_model="synthetic",
+            endpoint="/v1/responses",
+            body=removed_history_body(),
+            codex_tool_call_bindings={"c_removed": ("functions", "apply_patch", "custom")},
+        )
+        chunks = [chunk async for chunk in adapter.stream_response(request)]
+        assert chunks[-1].json_body["item"]["type"] == "function_call"
+        assert chunks[-1].json_body["item"]["name"] == "exec_command"
+        assert chunks[-1].json_body["item"]["namespace"] == "functions"
+        response = await adapter.forward_response(request)
+        assert response.json_body["output"][0]["type"] == "function_call"
+        assert response.json_body["output"][0]["arguments"] == arguments
+    for wire in seen:
+        assert "codex_tool_call_bindings" not in wire

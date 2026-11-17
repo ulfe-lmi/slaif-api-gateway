@@ -243,6 +243,10 @@
             "tool_output_images": {
               "type": "boolean",
               "description": "Known bounded tool-result image parser; requires independent existing key/route image-input policy."
+            },
+            "codex_tool_history_positional_updates": {
+              "type": "boolean",
+              "description": "Versioned additional_tools declaration history in positional-update mode; removals use the pinned machine-readable notice grammar only."
             }
           },
           "required": [

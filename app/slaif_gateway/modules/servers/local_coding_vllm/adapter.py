@@ -6,7 +6,21 @@ from dataclasses import replace
 from slaif_gateway.modules.servers.local_coding.adapter import LocalCodingAdapter
 from slaif_gateway.modules.servers.local_coding_vllm.codec import VLLMToolCodec
 from slaif_gateway.modules.servers.local_coding_vllm.contract import parse_vllm_route_contract
-from slaif_gateway.providers.errors import ProviderConfigurationError
+from slaif_gateway.providers.errors import (
+    ProviderConfigurationError,
+    ProviderResponseParseError,
+)
+
+
+def prepare_vllm_body(body, *, tool_call_bindings=None) -> tuple[dict, VLLMToolCodec]:
+    """Pure native-vLLM request-body preparation shared by adapter and preview.
+
+    The codec constructor is itself the deterministic transformation (no
+    provider, credential, or HTTP machinery); this named seam lets the
+    pre-admission prepared-body estimate run the exact same preparation.
+    """
+    codec = VLLMToolCodec(body, tool_call_bindings=tool_call_bindings)
+    return codec.body, codec
 
 
 class LocalCodingVLLMAdapter(LocalCodingAdapter):
@@ -24,12 +38,33 @@ class LocalCodingVLLMAdapter(LocalCodingAdapter):
         self._local_coding_contract = contract
 
     async def forward_response(self, request):
-        codec = VLLMToolCodec(request.body)
-        result = await super().forward_response(replace(request, body=codec.body))
-        return replace(result, json_body=codec.response(result.json_body))
+        body, codec = prepare_vllm_body(
+            request.body, tool_call_bindings=request.codex_tool_call_bindings
+        )
+        result = await super().forward_response(replace(request, body=body))
+        try:
+            json_body = codec.response(result.json_body)
+        except ProviderResponseParseError as exc:
+            if request.codex_tool_call_bindings is None:
+                raise
+            # Explicit lifecycle request: the provider already performed
+            # and metered the work.  Keep the parsed usage/cost/provider
+            # metadata as settlement evidence, clear the rejected output
+            # (no raw or partly decoded passthrough), and mark the fixed
+            # content-free code; the core refuses AFTER settlement.
+            return replace(
+                result,
+                json_body={},
+                text_body=None,
+                binary_body=None,
+                safe_rejection_code=exc.error_code,
+            )
+        return replace(result, json_body=json_body)
 
     async def stream_response(self, request):
-        codec = VLLMToolCodec(request.body)
+        _, codec = prepare_vllm_body(
+            request.body, tool_call_bindings=request.codex_tool_call_bindings
+        )
         async for chunk in super().stream_response(replace(request, body=codec.body)):
             if chunk.is_done or chunk.json_body is None:
                 yield chunk
