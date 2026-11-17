@@ -181,6 +181,15 @@ Core invariants:
   suppresses normal completion without releasing or reversing charged usage.
   Missing usage, malformed/error events, and disconnects create no usable
   replay reference. Reference rows are control metadata, never billing truth.
+- A non-hosted output-limited Responses terminal with reason
+  `max_output_tokens` is settled using its authoritative usage, including
+  reasoning/cache components, before the terminal is released. Both canonical
+  `response.incomplete` and a vLLM completed event with incomplete status keep
+  the original status/reason and partial output. This is finalized HTTP usage,
+  not a claim that generation completed. Completed validated replay candidates
+  retain the same post-settlement ownership checks; unfinished items create
+  none. Missing usage, malformed output or failed settlement retains the
+  existing failure/reconciliation path. Hosted web-search settlement is unchanged.
 - Fully gated Codex admission replaces only the injected ordinary 1,024 output
   default with the strict route default (32,768 in the qualification profile),
   then enforces route/operator output and context bounds before Redis, pricing,

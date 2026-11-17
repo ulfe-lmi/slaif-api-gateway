@@ -527,11 +527,12 @@ class VLLMToolCodec:
                     raise _bad()
                 event["name"] = declaration[1]
         elif isinstance(event.get("response"), dict):
-            if typ == "response.completed" and any(
+            terminal = typ in {"response.completed", "response.incomplete"}
+            if terminal and any(
                 not state.closed for state in self.calls.values()
             ):
                 raise _bad()
             event["response"] = self.response(
-                event["response"], terminal=typ == "response.completed"
+                event["response"], terminal=terminal
             )
         return [self._emit(event)]

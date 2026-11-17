@@ -349,7 +349,8 @@ async def test_native_transport_normalizes_stream_and_nonstream_without_public_k
 @pytest.mark.parametrize(
     "kind,name", [("custom", "functions.apply_patch"), ("function", "functions.exec_command")]
 )
-def test_native_terminal_regenerated_ids_restore_only_exact_closed_stream_call(kind, name):
+@pytest.mark.parametrize("event_type", ["response.completed", "response.incomplete"])
+def test_native_terminal_regenerated_ids_restore_only_exact_closed_stream_call(kind, name, event_type):
     codec = VLLMToolCodec(body())
     arguments = json.dumps({"input": "synthetic patch"} if kind == "custom" else {"cmd": "true"})
     for event in native_events(arguments):
@@ -362,7 +363,7 @@ def test_native_terminal_regenerated_ids_restore_only_exact_closed_stream_call(k
         item(arguments, name=name), id="fc_terminal_new", call_id="call_terminal_new", status=None
     )
     result = codec.events(
-        {"type": "response.completed", "sequence_number": 5, "response": {"output": [native]}}
+        {"type": event_type, "sequence_number": 5, "response": {"output": [native]}}
     )[0]
     canonical = result["response"]["output"][0]
     assert canonical["id"] == "fc_synthetic" and canonical["call_id"] == "call_synthetic"

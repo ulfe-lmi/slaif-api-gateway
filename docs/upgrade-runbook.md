@@ -6,6 +6,17 @@
 
 ## Before changing a deployment
 
+For the Qwen output-budget/terminal update, follow the
+[Codex tuning guide](codex-tuning-qwen.md). The engine change accepts bounded,
+usage-backed output-limit terminals and requires recreating API workers; it adds
+no schema or compatibility-preset revision and requires no key rotation/pin
+migration. Apply the six reviewed 64,000-default/128,000-maximum route changes
+through audited partial-update plans. Coordinate the conservative client
+compaction settings first, especially for the 100,000-context RTX3090 backend.
+The examples do not overwrite existing user configurations or rewrite historical
+qualification identities. Rollback restores prior route values through fresh
+audited plans and the prior image; never roll back finalized usage.
+
 1. Pin the candidate tag or full commit and review its release notes and
    migration diff.
 2. Snapshot PostgreSQL and preserve every secret version needed to validate

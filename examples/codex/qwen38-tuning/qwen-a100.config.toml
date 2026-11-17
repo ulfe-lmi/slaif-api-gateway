@@ -1,0 +1,21 @@
+# Codex 0.167.1 template; install.py supplies the URL and absolute catalog path.
+model = "qwen3.8-27b"
+model_provider = "slaif_qwen"
+model_catalog_json = "qwen-tuning-models.json"
+model_reasoning_effort = "medium"
+web_search = "disabled"
+approval_policy = "on-request"
+sandbox_mode = "workspace-write"
+
+[model_providers.slaif_qwen]
+name = "SLAIF Qwen"
+base_url = "https://gateway.example/v1"
+env_key = "OPENAI_API_KEY"
+wire_api = "responses"
+requires_openai_auth = false
+supports_websockets = false
+
+[features]
+worktrees = false
+incremental_tools = true
+remote_compaction_v2 = false

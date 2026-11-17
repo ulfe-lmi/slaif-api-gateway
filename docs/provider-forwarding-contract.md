@@ -1044,6 +1044,16 @@ usage-backed finalization succeeds; if an upstream provider also sends
 `data: [DONE]`, it is held behind the completed event and is not emitted on
 missing-usage or finalization-failure paths.
 
+For non-hosted output exhaustion, the same hold/settlement order applies to
+a bounded `response.incomplete` with `status=incomplete`, reason
+`max_output_tokens`, and coherent authoritative usage. OpenAI, OpenRouter,
+and Local/configured-upstream adapters extract its nested usage just as for a
+completed terminal. A vLLM completed event carrying incomplete status is also
+supported. Partial output and the original terminal are forwarded unchanged;
+only validated completed items can receive replay references. Unknown reasons,
+malformed tool encodings, missing usage and accounting failures remain failures.
+Hosted web-search uses its existing independent evidence/hold boundary.
+
 The bounded OpenAI Responses `web_search` runtime forwards only the canonical
 `tools=[{"type":"web_search", ...}]` declaration and `max_tool_calls`, plus
 ordinary approved Responses fields. Gateway policy, fence state, quota facts,

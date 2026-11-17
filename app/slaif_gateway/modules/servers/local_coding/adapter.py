@@ -444,7 +444,6 @@ def _json_or_none(response: httpx.Response) -> object | None:
 def _responses_event_response_payload(
     payload: Mapping[str, Any] | None,
 ) -> Mapping[str, Any] | None:
-    if not isinstance(payload, Mapping) or payload.get("type") != "response.completed":
-        return None
-    response_payload = payload.get("response")
-    return response_payload if isinstance(response_payload, Mapping) else None
+    from slaif_gateway.providers.streaming import responses_terminal_payload
+
+    return responses_terminal_payload(payload)
