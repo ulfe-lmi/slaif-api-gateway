@@ -361,7 +361,7 @@ coherent for already-supported compact requests.
   clears the rejected body, keeps the fixed code out of ``repr``/
   errors; legacy codec refusal unchanged.  No provider/DB calls.
 - New integration regression module
-  ``tests/unit/test_codex_tool_history_replay_wiring.py``: **42** tests
+  ``tests/unit/test_codex_tool_history_replay_wiring.py``: **45** tests
   covering extractor ownership law (same-name-later-namespace binding,
   explicit-namespace contradiction, unbound/duplicate denial, ID-less
   qualification both modes, completeness denial, reasoning/compaction
@@ -384,13 +384,21 @@ coherent for already-supported compact requests.
   pre-admission refusal with the precise wire codes, the empty-catalog
   and post-removal output guards, and the codec-refusal settlement
   seam (local vLLM + configured upstream + core fixed-502 marker check
-  with ``repr``/message canaries).
+  with ``repr``/message canaries), and bound-namespace materialization
+  in the provider copy (two valid namespace-less histories that later
+  converge on the same final catalog produce distinct provider bodies;
+  explicit-resolved vs previous implicit-binding parity across the
+  native and portable preparations; the prepared estimate includes the
+  materialized namespace bytes).
   Command: ``.venv/bin/python -m pytest
   -o addopts= tests/unit/test_codex_tool_history_replay_wiring.py`` —
-  42 passed.
-- Changed-component suites at commit ``ef6fe594`` (pre-integration head):
-  wiring 42 + upstream LLM adapter 57 + request policy 214 = **313
-  passed**; Codex 0162/0149 roundtrip + local vLLM suites **125 passed**.
+  45 passed.
+- Changed-component suites at the final integrated code head
+  ``8a831a2b`` (superseding the ``ef6fe594`` pre-integration run of
+  313 + 125):
+  wiring 45 + request policy 214 + upstream LLM adapter 57 = **316
+  passed**; Codex 0162/0149 roundtrip + local vLLM suites **125 passed**
+  (441 total; both runs exit 0).
   Command: ``.venv/bin/python -m pytest -o addopts= -q
   tests/unit/test_codex_tool_history_replay_wiring.py
   tests/unit/test_responses_request_policy.py
@@ -414,15 +422,60 @@ coherent for already-supported compact requests.
   ``tests/integration/test_codex_tool_history_postgres.py`` (owned-row
   HMAC route/provider denials, qualified ID-less success + forged/
   other-key/route negatives, codec settlement against real PostgreSQL,
-  profile migration resume, final isolated PG matrix) plus the relevant
-  isolated PG modules
-  ``test_codex_replay_references_postgres.py``,
-  ``test_local_coding_server_module_postgres.py``, and
-  ``test_accounting_finalization_postgres.py`` — **PENDING at the final
-  integrated head; results recorded before report publication.**
-- Full unit suite (``.venv/bin/python -m pytest tests/unit -o
-  addopts=``, once, no production DB environment) and final-head hosted
-  CI — **PENDING; recorded before report publication.**
+  profile migration resume, final isolated PG matrix): **22** cases
+  passed against the corrected source (exit 0) — A1–A5 ownership law
+  (ambiguity bound to the earlier same-name namespace, other-key and
+  wrong-route denials enforced before quota/provider — the wrong-route
+  case requires route resolution to identify the mismatch, ID-less owned
+  positive through the deferred call-id HMAC lookup, ID-less
+  unowned/other-key/wrong-route denials), B1 codec refusal across all
+  three codec modes with usage settled exactly once and the fixed 502
+  after settlement, B2 preserve passthrough settlement, B3 all five
+  owned nonempty-history success kinds (LocalCoding preserve, vLLM,
+  llama-preserve, configured native, configured portable) carrying the
+  same removed historical tool plus removal notice and second
+  current-kept update with per-codec wire identity asserted, B4 the
+  preserve-identity regression (two distinct namespace-less histories
+  produce distinct wire bodies), B5 missing key/route Codex-grant
+  negatives (400 before quota/provider, zero reservation/ledger
+  writes), and C the rev15→rev16 migration dry-run/apply/idempotency
+  with the drifted-digest negative and full preservation.
+  Focused new cases (5 success kinds + 4 missing-grant negatives +
+  preserve-wire regression): **10** passed.
+- The relevant isolated PG modules
+  ``test_codex_replay_references_postgres.py`` (2),
+  ``test_local_coding_server_module_postgres.py`` (3), and
+  ``test_accounting_finalization_postgres.py`` (6) are unchanged by
+  every 226-b commit; their **11** passes are reused from the isolated
+  matrix run at ``194f11c1`` (2 + 3 + 6 = 11, with the then-current
+  owned-module slice = 20 total) and were not re-run (agreed test
+  economy).
+- Total owned PostgreSQL qualification: **33** unique cases
+  (22 owned-module + 11 reused), no production DB, no provider calls,
+  provider HTTP mocked via ``httpx.MockTransport`` in owned cases,
+  Redis disabled there.
+- Intermediate hosted CI at code head ``f43794e0`` (CI run
+  ``43973480725``, unit job ``133671381058``, log
+  ``/tmp/slaif-226b-intermediate-unit-ci-failure.log``):
+  **8183 passed, 1 skipped, 2 failed** — both failures were stale
+  shipped-preset inventory expectations in
+  ``tests/unit/test_compatibility_presets.py`` (the fifth preset
+  ``codex-0.167.1`` shipped at ``867bc0f0`` was missing from the
+  expected set/count).  Fixed test-only at ``8a831a2b`` (expectations
+  updated; all validation/export/overwrite assertions preserved; no
+  runtime or pin changes); the fixed module then passed 86/86 locally
+  and is covered by the final full-unit run below.
+- Final full unit suite (``.venv/bin/python -m pytest tests/unit -o
+  addopts=``, once, no production DB environment) at the final
+  integrated code head: **8185 passed, 1 skipped**, exit 0 (16m20s).
+  The single skip is the optional live-plumbing test
+  ``tests/unit/test_qwen38_text_codex_candidate.py::
+  test_live_branch_uses_codex_slaif_and_numeric_loopback_plumbing`` —
+  skipped because the Codex 0.148 CLI binary is unavailable in this
+  environment; no real Codex CLI was installed or run, and the skip is
+  preserved rather than removed.
+- Final-head hosted CI at the report SELF commit — **PENDING strategic
+  verification; not claimed passed before publication.**
 
 **NOT RUN**: real private-client reproduction, real upstream inference,
 any real operator key migration.  Mocked HTTP paths are clearly
