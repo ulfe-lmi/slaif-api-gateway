@@ -97,6 +97,7 @@ from slaif_gateway.providers.streaming import (
     ResponsesStreamEventValidator,
     ResponsesStreamValidationProfile,
     format_responses_error_event,
+    is_output_limited_response,
 )
 from slaif_gateway.schemas.accounting import FinalizedAccountingResult
 from slaif_gateway.schemas.auth import AuthenticatedGatewayKey
@@ -3518,7 +3519,10 @@ def _streaming_responses_response(
                     provider_response=provider_response,
                     accounting_result=accounting_result,
                 )
-                provider_status = "success"
+                provider_status = (
+                    "incomplete" if is_output_limited_response(completed_chunk.json_body)
+                    else "success"
+                )
                 if completed_event is not None:
                     yield completed_event
                 if terminal_done_event is not None:
@@ -5527,7 +5531,9 @@ def _provider_response_from_response_stream(
 
 def _is_responses_completed_chunk(chunk: ProviderStreamChunk) -> bool:
     payload = chunk.json_body
-    return isinstance(payload, dict) and payload.get("type") == "response.completed"
+    return isinstance(payload, dict) and (
+        payload.get("type") == "response.completed" or is_output_limited_response(payload)
+    )
 
 
 class _RateLimitReservation:

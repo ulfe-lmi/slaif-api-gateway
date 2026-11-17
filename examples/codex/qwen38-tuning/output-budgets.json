@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "endpoint": "/v1/responses",
+  "default_max_output_tokens": 64000,
+  "max_output_tokens": 128000,
+  "requested_models": [
+    "qwen3.8-27b",
+    "qwen3.8-27b-V100",
+    "qwen3.8-27b-rtx3090",
+    "qwen3.8-27b-repaired",
+    "qwen3.8-27b-V100-repaired",
+    "qwen3.8-27b-rtx3090-repaired"
+  ]
+}

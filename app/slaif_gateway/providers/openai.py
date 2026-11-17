@@ -24,7 +24,9 @@ from slaif_gateway.providers.errors import (
     UnsupportedProviderEndpointError,
 )
 from slaif_gateway.providers.headers import build_provider_headers, safe_response_headers
-from slaif_gateway.providers.streaming import parse_sse_lines, with_streaming_usage_options
+from slaif_gateway.providers.streaming import (
+    parse_sse_lines, responses_terminal_payload, with_streaming_usage_options,
+)
 from slaif_gateway.schemas.providers import (
     ProviderFileUpload,
     ProviderRequest,
@@ -915,12 +917,7 @@ def _json_or_none(response: httpx.Response) -> object | None:
 
 
 def _responses_event_response_payload(payload: Mapping[str, Any] | None) -> Mapping[str, Any] | None:
-    if not isinstance(payload, Mapping) or payload.get("type") != "response.completed":
-        return None
-    response_payload = payload.get("response")
-    if not isinstance(response_payload, Mapping):
-        return None
-    return response_payload
+    return responses_terminal_payload(payload)
 
 
 def _response_path(response_id: str) -> str:

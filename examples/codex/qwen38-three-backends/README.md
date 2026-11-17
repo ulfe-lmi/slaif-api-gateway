@@ -1,5 +1,10 @@
 # Three Qwen Codex routes: illustrative configuration
 
+For Codex 0.167.1 and the current three-backend tuning examples, use
+[qwen38-tuning](../qwen38-tuning/README.md) and the
+[tuning guide](../../../docs/codex-tuning-qwen.md). The artifacts below retain
+their historical 0.162 qualification identities.
+
 This example shows how one Codex 0.162.1 client can select three independently
 configured Qwen 3.8 27B backends through a SLAIF gateway. The model names and
 context limits below come from one operator deployment. They are **examples**,

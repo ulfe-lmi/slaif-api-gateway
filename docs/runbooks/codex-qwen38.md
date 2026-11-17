@@ -1,5 +1,10 @@
 # Qwen 3.8 27B through Codex
 
+For the current 0.167.1 three-backend client templates, 64K/128K output
+budgets, and context/compaction tuning, use the
+[Codex tuning guide](../codex-tuning-qwen.md). This page retains the exact
+historical 0.162 procedure and fixture identities.
+
 > **Status:** Bounded operator procedure; Codex CLI 0.162.1
 > **Scope:** Exact Codex 0.162 client module with a Local Coding Responses backend
 

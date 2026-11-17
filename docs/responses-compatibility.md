@@ -132,6 +132,25 @@ compact input, output, or encrypted compaction content.
 
 ## Supported Endpoint
 
+### Output-limited streaming terminals
+
+Bounded non-hosted streams accept the canonical `response.incomplete` terminal
+with `status=incomplete` and `incomplete_details.reason=max_output_tokens`.
+The legacy vLLM `response.completed` event carrying that same incomplete
+status/reason is accepted too. The terminal requires bounded, coherent provider
+usage and validated output shapes. The gateway preserves partial text and the
+original terminal status/reason, settles authoritative usage first, and releases
+the terminal only after accounting and eligible replay-reference persistence.
+Incomplete tool items never receive replay references. Native codecs retain
+their argument and linkage checks; truncated invalid native tool encoding is not
+promoted into an executable call.
+
+Missing usage, malformed/foreign/out-of-order terminals, unknown reasons and
+accounting failures retain the safe failure path. Hosted web-search settlement
+is unchanged. A client may display its own output-limit notice; the gateway
+does not rewrite it as successful generation. See the
+[Qwen tuning guide](codex-tuning-qwen.md) for output/compaction examples.
+
 The first implemented endpoint is:
 
 - `POST /v1/responses`

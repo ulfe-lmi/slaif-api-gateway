@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import re
+import copy
+import hashlib
 from collections import Counter
 from collections.abc import Iterable
 from dataclasses import dataclass
@@ -38,11 +40,34 @@ RESPONSES_CODEX_STREAM_EVENT_TYPES = frozenset(
         "response.content_part.done",
         "response.output_text.done",
         "response.completed",
+        "response.incomplete",
     }
 )
 RESPONSES_PROVIDER_FAILURE_EVENT_TYPES = frozenset(
     {"response.failed", "response.incomplete", "error"}
 )
+
+
+def responses_terminal_payload(
+    payload: Mapping[str, Any] | None,
+) -> Mapping[str, Any] | None:
+    """Extract terminal usage without treating output exhaustion as success text."""
+    if not isinstance(payload, Mapping) or payload.get("type") not in {
+        "response.completed", "response.incomplete",
+    }:
+        return None
+    response = payload.get("response")
+    return response if isinstance(response, Mapping) else None
+
+
+def is_output_limited_response(payload: Mapping[str, Any] | None) -> bool:
+    """Recognize both canonical and vLLM output-limit terminal representations."""
+    response = responses_terminal_payload(payload)
+    return (
+        response is not None
+        and response.get("status") == "incomplete"
+        and response.get("incomplete_details") == {"reason": "max_output_tokens"}
+    )
 
 _IDENTIFIER_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$")
 _MAX_STREAM_DELTA_BYTES = 65_536
@@ -183,6 +208,11 @@ class ResponsesStreamEventValidator:
         self._safe_event_bytes: Counter[str] = Counter()
         self._encrypted_reasoning_bytes = 0
         self._replay_reference_candidates: list[CodexReplayStreamCandidate] = []
+        self._output_limit_terminal_received = False
+        self._progress_response_id: str | None = None
+        self._last_observed_sequence: int | None = None
+        self._incomplete_item_ids: set[str] = set()
+        self._finished_tool_fingerprints: dict[str, str] = {}
         # The evidence window is a bounded state machine input, never an unbounded
         # copy of provider events.  Payload content is discarded at the boundary.
         configured_cap = profile.web_search_max_tool_calls or 1
@@ -219,6 +249,160 @@ class ResponsesStreamEventValidator:
         return evidence
 
     def validate(self, payload: Mapping[str, Any] | None) -> bool:
+        """Keep provider status intact while validating a bounded terminal."""
+        if self._output_limit_terminal_received:
+            return False
+        if is_output_limited_response(payload):
+            assert isinstance(payload, Mapping)
+            valid = self._validate_output_limit_terminal(payload)
+            if valid:
+                self._output_limit_terminal_received = True
+                self._safe_event_counts[str(payload["type"])] += 1
+            return valid
+        if (
+            isinstance(payload, Mapping)
+            and payload.get("type") == "response.completed"
+            and self._incomplete_item_ids
+        ):
+            return False
+        original = payload
+        if (
+            isinstance(payload, Mapping)
+            and payload.get("type") == "response.completed"
+            and isinstance(payload.get("response"), Mapping)
+            and payload["response"].get("status") == "incomplete"
+        ):
+            return False
+        # Strict legacy message lifecycles use the same bounded content shape
+        # when generation stops early. Validate a private status-normalized
+        # copy; forward the untouched provider item and never grant it replay.
+        if isinstance(payload, Mapping) and payload.get("type") == "response.output_item.done":
+            item = payload.get("item")
+            if isinstance(item, Mapping) and item.get("status") == "incomplete":
+                payload = copy.deepcopy(dict(payload))
+                payload["item"]["status"] = "completed"
+        valid = self._validate_event(payload)
+        if valid and isinstance(original, Mapping):
+            if original.get("type") == "response.created":
+                response = original.get("response")
+                if isinstance(response, Mapping) and isinstance(response.get("id"), str):
+                    self._progress_response_id = response["id"]
+            sequence = original.get("sequence_number")
+            if type(sequence) is int:
+                self._last_observed_sequence = max(
+                    self._last_observed_sequence if self._last_observed_sequence is not None else -1,
+                    sequence,
+                )
+            item = original.get("item")
+            if (
+                original.get("type") == "response.output_item.done"
+                and isinstance(item, Mapping)
+                and item.get("type") in {"function_call", "custom_tool_call"}
+                and isinstance(item.get("id"), str)
+                and len(self._finished_tool_fingerprints) < MAX_CODEX_TYPED_RESPONSE_OUTPUT_ITEMS
+            ):
+                self._finished_tool_fingerprints[item["id"]] = _tool_item_fingerprint(item)
+            if (
+                original.get("type") == "response.output_item.done"
+                and isinstance(item, Mapping)
+                and item.get("status") == "incomplete"
+                and isinstance(item.get("id"), str)
+            ):
+                self._incomplete_item_ids.add(item["id"])
+                self._replay_reference_candidates = [
+                    candidate for candidate in self._replay_reference_candidates
+                    if candidate.item_id != item["id"]
+                ]
+        return valid
+
+    def _validate_output_limit_terminal(self, payload: Mapping[str, Any]) -> bool:
+        # Hosted-tool settlement has an independent authoritative evidence law.
+        if self._profile.web_search:
+            return False
+        if not _only_fields(payload, {"type", "response", "sequence_number"}):
+            return False
+        response = payload["response"]
+        envelope = dict(response)
+        if envelope.get("error") is None:
+            envelope.pop("error", None)
+        if (
+            not _bounded_identifier(response.get("id"), required=True)
+            or not _validate_codex_response_envelope(envelope)
+            or (
+                self._progress_response_id is not None
+                and response["id"] != self._progress_response_id
+            )
+            or not _optional_index(payload, "sequence_number")
+        ):
+            return False
+        sequence = payload.get("sequence_number")
+        if type(sequence) is int and (
+            self._last_observed_sequence is not None
+            and sequence <= self._last_observed_sequence
+        ):
+            return False
+        usage = response.get("usage")
+        if (
+            not isinstance(usage, Mapping)
+            or not _validate_completed_usage(
+                usage, strict_vllm_responses=self._profile.codex_reasoning_events
+            )
+            or usage["input_tokens"] + usage["output_tokens"] != usage["total_tokens"]
+        ):
+            return False
+        output = response.get("output")
+        if not isinstance(output, list) or len(output) > MAX_CODEX_TYPED_RESPONSE_OUTPUT_ITEMS:
+            return False
+        shape_validator = ResponsesStreamEventValidator(self._profile)
+        total_bytes = 0
+        for item in output:
+            try:
+                total_bytes += len(json.dumps(item, ensure_ascii=True, allow_nan=False).encode("utf-8"))
+            except (TypeError, ValueError, UnicodeError):
+                return False
+            if total_bytes > MAX_CODEX_TYPED_RESPONSE_OUTPUT_BYTES:
+                return False
+            if not isinstance(item, Mapping):
+                return False
+            if self._profile.codex_reasoning_events:
+                normalized = copy.deepcopy(dict(item))
+                if normalized.get("status") == "incomplete":
+                    normalized["status"] = "completed"
+                if not _validate_codex_completed_output_item(
+                    normalized,
+                    allow_function_call=self._profile.codex_0149_function_tool_events,
+                    function_states=self._function_done_states,
+                ):
+                    return False
+            else:
+                state = shape_validator._validate_item_shape(
+                    item, event_type="response.output_item.done"
+                )
+                if state is None:
+                    return False
+                if state.item_type in {"function_call", "custom_tool_call"}:
+                    item_id = item.get("id")
+                    if not self._profile.codex_streaming_tool_events or item_id not in self._seen_item_ids:
+                        return False
+                    active = self._active_items.get(item_id)
+                    if active is None and self._finished_tool_fingerprints.get(item_id) != _tool_item_fingerprint(item):
+                        return False
+                    if active is not None and (
+                        not _same_stream_item(active, state)
+                        or item.get("arguments" if state.item_type == "function_call" else "input")
+                        != active.delta_text
+                        or item.get("status") != "incomplete"
+                    ):
+                        return False
+        if self._profile.codex_reasoning_events:
+            if self._strict_response_id is None or not _required_index(payload, "sequence_number"):
+                return False
+            if not self._accept_strict_sequence(payload):
+                return False
+            self._strict_response_completed = True
+        return True
+
+    def _validate_event(self, payload: Mapping[str, Any] | None) -> bool:
         """Return whether one event is allowed by this request's gated profile."""
         if not isinstance(payload, Mapping):
             return False
@@ -1338,10 +1522,21 @@ def _only_fields(value: Mapping[str, Any], allowed: set[str]) -> bool:
     return not (set(value) - allowed)
 
 
+def _tool_item_fingerprint(item: Mapping[str, Any]) -> str:
+    """Transient equality commitment; no arguments/results in evidence or storage."""
+    semantic = [item.get(key) for key in (
+        "type", "namespace", "name", "call_id", "arguments", "input",
+    )]
+    return hashlib.sha256(json.dumps(semantic, ensure_ascii=True).encode("ascii")).hexdigest()
+
+
 def _bounded_utf8(value: str, max_bytes: int, *, nonempty: bool = False) -> bool:
     if nonempty and not value:
         return False
-    return len(value.encode("utf-8")) <= max_bytes
+    try:
+        return len(value.encode("utf-8")) <= max_bytes
+    except UnicodeError:
+        return False
 
 
 def _bounded_identifier(value: Any, *, required: bool) -> bool:
