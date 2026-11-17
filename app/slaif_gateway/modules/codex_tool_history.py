@@ -589,12 +589,28 @@ def codex_positional_compiled_out_positions(
     return frozenset(positions)
 
 
+def codex_standalone_text_content(content: Any) -> str | None:
+    """Decode standalone text without assigning it protocol authority."""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list) and len(content) == 1:
+        part = content[0]
+        if (
+            isinstance(part, Mapping)
+            and part.get("type") == "input_text"
+            and isinstance(part.get("text"), str)
+        ):
+            return part["text"]
+    return None
+
+
 def codex_positional_hint_positions(
     canonical_items: Sequence[Mapping[str, Any]],
 ) -> frozenset[int]:
     """Positions of the EXACT pinned incremental hint, immediately before a declaration.
 
-    The hint is a standalone developer text item whose content is exactly
+    The hint is a standalone developer text item (a string or exactly one
+    input_text part) whose content is exactly
     the pinned bundled default literal; it is declaration metadata only in
     that position.  Any other text is ordinary history and is never
     compiled out or dropped.
@@ -612,7 +628,8 @@ def codex_positional_hint_positions(
             isinstance(previous, Mapping)
             and previous.get("role") == "developer"
             and previous.get("type") in (None, "message")
-            and previous.get("content") == DEFAULT_INCREMENTAL_TOOLS_HINT
+            and codex_standalone_text_content(previous.get("content"))
+            == DEFAULT_INCREMENTAL_TOOLS_HINT
         ):
             positions.add(index - 1)
     return frozenset(positions)

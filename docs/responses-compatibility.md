@@ -532,7 +532,8 @@ active `(name, kind)` match (zero or ambiguous matches refuse). The
 gateway compiles the validated declaration metadata out of the FORWARDED
 body only — every declaration item and inert ID, every validated removal
 notice, and the exact pinned incremental hint only when it is a
-standalone developer text immediately preceding a validated declaration
+standalone developer text (a string or exactly one `input_text` part)
+immediately preceding a validated declaration
 — while
 preserving every other input item (roles, contents, IDs, relative
 order); a historical call that omits `namespace` is forwarded with its
