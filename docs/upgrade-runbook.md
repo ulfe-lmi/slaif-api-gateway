@@ -262,6 +262,15 @@ an old engine is NOT a supported upgrade: the old engine's
 single-initial-declaration law refuses the incremental history and may
 return its singleton refusals.
 
+The engine must also recognize the exact pinned incremental hint in both
+standalone text representations: a string and a one-part `input_text`
+array. Codex 0.167.1 uses the latter in real resumed histories. Leaving
+this protocol metadata in the forwarded history can trigger an instruction
+placement refusal or a prefix-only backend template error. The representation
+fix changes neither the revision-16 preset digest nor key material; it
+requires rebuilding and restarting the engine processes. Ordinary late
+developer instructions still retain their chronology and placement checks.
+
 Exact scoped sequence (synthetic planning example; run the literal
 commands with the operator's real key UUIDs and trusted file paths):
 

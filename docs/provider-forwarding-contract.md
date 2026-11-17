@@ -198,7 +198,8 @@ clears that optional field rather than reviving an older one). The
 validated declaration metadata is compiled out of the FORWARDED body
 only: every `additional_tools` item and its inert protocol ID, every
 validated removal notice, and the exact pinned upstream incremental hint
-ONLY when it is a standalone developer text immediately preceding a
+ONLY when it is a standalone developer text (a string or exactly one
+`input_text` part) immediately preceding a
 validated declaration. Every other input item — ordinary messages, tool
 calls, outputs, IDs, and non-adjacent developer text — is preserved in
 order. A non-empty top-level `tools` field, missing or foreign facts, or

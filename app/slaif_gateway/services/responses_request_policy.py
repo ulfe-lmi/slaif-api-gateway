@@ -70,6 +70,7 @@ from slaif_gateway.modules.codex_tool_history import (
     CodexToolRemovalEvent,
     analyze_codex_tool_history,
     codex_positional_hint_positions,
+    codex_standalone_text_content,
     parse_codex_removal_notice,
 )
 from slaif_gateway.services.input_token_estimation import canonical_json_bytes
@@ -5179,19 +5180,8 @@ def _codex_removal_notice_text(content: Any) -> str | None:
     recognized candidate that then fails the pinned grammar is refused
     by the caller with a fixed safe error.
     """
-    if isinstance(content, str):
-        text = content
-    elif isinstance(content, list) and len(content) == 1:
-        part = content[0]
-        if (
-            isinstance(part, Mapping)
-            and part.get("type") == "input_text"
-            and isinstance(part.get("text"), str)
-        ):
-            text = part["text"]
-        else:
-            return None
-    else:
+    text = codex_standalone_text_content(content)
+    if text is None:
         return None
     if text.startswith(DEFAULT_REMOVED_NAMESPACES_HEADER) or text.startswith(
         DEFAULT_REMOVED_TOOLS_HEADER
