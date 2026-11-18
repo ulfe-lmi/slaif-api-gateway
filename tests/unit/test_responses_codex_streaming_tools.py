@@ -3756,7 +3756,7 @@ def test_replay_persistence_failure_after_accounting_suppresses_completed(monkey
             },
         },
     }
-    payloads = [tool_done, completed]
+    payloads = [{"type": "response.created", "response": {"id": "resp_1"}}, tool_done, completed]
     raw_events = [f"data: {json.dumps(payload, separators=(',', ':'))}\n\n" for payload in payloads]
 
     class FakeAdapter:
@@ -3831,6 +3831,7 @@ def test_replay_persistence_failure_after_accounting_suppresses_completed(monkey
     forwarded = asyncio.run(collect())
     assert forwarded[0] == raw_events[0]
     assert raw_events[1] not in forwarded
+    assert raw_events[2] not in forwarded
     assert "responses_codex_replay_persistence_failed" in forwarded[-1]
     assert timeline == [
         "accounting:record",

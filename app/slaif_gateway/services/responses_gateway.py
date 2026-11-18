@@ -99,6 +99,10 @@ from slaif_gateway.providers.streaming import (
     format_responses_error_event,
     is_output_limited_response,
 )
+from slaif_gateway.services.responses_replay_delivery import (
+    ReplayDeliveryBufferFull,
+    ResponsesReplayDeliveryBuffer,
+)
 from slaif_gateway.schemas.accounting import FinalizedAccountingResult
 from slaif_gateway.schemas.auth import AuthenticatedGatewayKey
 from slaif_gateway.schemas.external_tool_fence import (
@@ -3218,6 +3222,14 @@ def _streaming_responses_response(
         stream_started = False
         failure_response_id: str | None = None
         last_sequence = -1
+        accounting_finalized = False
+        profile = stream_validation_profile or ResponsesStreamValidationProfile()
+        replay_delivery = ResponsesReplayDeliveryBuffer(
+            enabled=profile.codex_streaming_tool_events or profile.codex_encrypted_reasoning_replay,
+            encrypted_reasoning=profile.codex_encrypted_reasoning_replay,
+            max_bytes=settings.CODEX_REPLAY_STREAM_BUFFER_MAX_BYTES,
+        )
+        last_keepalive = time.monotonic()
 
         def _note_stream_diagnostic(**fields: object) -> None:
             # Pure best-effort observation: merge bounded, content-free
@@ -3400,6 +3412,22 @@ def _streaming_responses_response(
                         request_id=request_id,
                     )
                     return
+                try:
+                    held = replay_delivery.hold(payload, chunk.raw_sse_event)
+                except ReplayDeliveryBufferFull:
+                    raise ProviderError(
+                        "Pending Codex replay output exceeded the configured delivery buffer.",
+                        provider=route.provider,
+                        error_code="responses_codex_replay_delivery_buffer_exceeded",
+                    ) from None
+                if held:
+                    # SSE comments carry no item IDs or client state. Keep active
+                    # generations visible to idle timers while their tail is held.
+                    if time.monotonic() - last_keepalive >= settings.CODEX_REPLAY_STREAM_KEEPALIVE_SECONDS:
+                        stream_started = True
+                        last_keepalive = time.monotonic()
+                        yield ": keep-alive\n\n"
+                    continue
                 stream_started = True
                 yield chunk.raw_sse_event
 
@@ -3482,6 +3510,21 @@ def _streaming_responses_response(
                             request=request,
                         )
                     raise
+                accounting_finalized = True
+                if replay_delivery.incomplete_item:
+                    # Output exhaustion can finish billing without finishing a
+                    # tool call. Such an item must never reach client history.
+                    provider_status = "incomplete"
+                    code = "responses_codex_replay_item_incomplete"
+                    _note_stream_diagnostic(
+                        stream_outcome="stream_failure", source="responses_stream_failure",
+                        error_code=code,
+                    )
+                    yield _failure(
+                        message="Provider did not complete a replayable item; retry this request.",
+                        code=code, request_id=request_id,
+                    )
+                    return
                 replay_reference_candidates = (
                     stream_event_validator.take_replay_reference_candidates()
                 )
@@ -3523,6 +3566,9 @@ def _streaming_responses_response(
                     "incomplete" if is_output_limited_response(completed_chunk.json_body)
                     else "success"
                 )
+                for buffered_event in replay_delivery.release():
+                    stream_started = True
+                    yield buffered_event
                 if completed_event is not None:
                     yield completed_event
                 if terminal_done_event is not None:
@@ -3573,7 +3619,11 @@ def _streaming_responses_response(
         except (asyncio.CancelledError, GeneratorExit):
             _note_stream_diagnostic(stream_outcome="cancelled")
             with anyio.CancelScope(shield=True):
-                if external_web_search_admission is not None:
+                if accounting_finalized:
+                    # Delivery can disconnect after the durable commit. Never
+                    # replace authoritative settled usage with an interruption.
+                    pass
+                elif external_web_search_admission is not None:
                     await _place_external_web_search_hold(
                         reservation=reservation,
                         authenticated_key=authenticated_key,
@@ -3709,6 +3759,7 @@ def _streaming_responses_response(
             else:
                 raise
         finally:
+            replay_delivery.clear()
             with anyio.CancelScope(shield=True):
                 heartbeat_stop.set()
                 if heartbeat_task is not None:

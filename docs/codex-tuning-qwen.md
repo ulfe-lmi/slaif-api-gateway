@@ -279,7 +279,11 @@ defines the canonical event.
 | 429 | estimated reservation, token/request window, concurrent requests and wait policy |
 | output-limit notice | provider status/reason, thinking consumption, requested/default budget |
 | generic stream failure | unsupported event, malformed tool encoding, missing usage or transport failure |
-| replay-reference unavailable | durable reference ownership/TTL and correct key/provider/route; preserve the database during upgrades |
+| replay-reference unavailable | durable ownership/TTL and key/provider/route; an older failed stream may have left orphaned history—rewind before that turn; preserve the database during upgrades |
 
 Use content-free diagnostics first. Do not log bearer keys, tool contents,
 images or whole conversations to tune these controls.
+
+For Codex event delivery, see the [replay delivery barrier settings](configuration.md#codex-replay-delivery-barrier).
+Tool events wait for accounting and replay commit; this may delay their display
+until generation finishes. This change does not increase model token limits.

@@ -1246,6 +1246,23 @@ the existing typed error event remains the fallback. Failures never create a
 successful `response.completed`, `[DONE]`, or committed replay references.
 Client disconnects close the producer and run existing shielded cleanup.
 
+For gated Codex replay, tool lifecycle events and the following event tail are
+held in memory until accounting and HMAC replay ownership commit. Reasoning
+lifecycle events use the same barrier when encrypted replay is enabled.
+Provider errors, missing/invalid terminal usage, cancellation, and persistence
+failure discard the uncommitted tail; no completed replay item is delivered
+without its durable authorization. The original order and event payloads are
+preserved on success. Earlier text and text-only streams remain incremental.
+State-free SSE comments keep active buffered generations observable.
+
+An output-limited terminal with completed tools remains an accounted partial
+response. An unfinished replayable item instead produces
+`responses_codex_replay_item_incomplete` after actual-usage settlement, without
+exposing that item. A disconnect after commit does not settle usage twice.
+See [delivery buffer configuration](configuration.md#codex-replay-delivery-barrier).
+Existing orphaned history requires rewinding before the failed turn; this
+change does not fabricate ownership records or broaden replay acceptance.
+
 The native-vLLM transport requires complete function-call arguments to be JSON
 objects. Invalid, duplicate-key, nonfinite, scalar or truncated arguments are
 rejected before marking a call complete or replaying it upstream. Malformed
