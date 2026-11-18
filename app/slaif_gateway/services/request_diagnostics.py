@@ -228,6 +228,9 @@ _REQUIRED_ERROR_CODES = frozenset(
         "responses_stream_provider_failure",
         "streaming_live_burn_limit_exceeded",
         "responses_stream_usage_missing",
+        "responses_codex_replay_delivery_buffer_exceeded",
+        "responses_codex_replay_item_incomplete",
+        "vllm_tool_protocol_invalid",
         "client_disconnected",
         # quota / rate
         "quota_limit_exceeded",

@@ -263,6 +263,10 @@ class Settings(BaseSettings):
     CODEX_ABSOLUTE_MAX_INPUT_TOKENS: int = 1050000
     CODEX_ABSOLUTE_MAX_OUTPUT_TOKENS: int = 128000
     CODEX_REPLAY_REFERENCE_TTL_SECONDS: int = Field(default=31536000, ge=1, le=31536000)
+    CODEX_REPLAY_STREAM_BUFFER_MAX_BYTES: int = Field(
+        default=67108864, ge=1024, le=268435456,
+    )
+    CODEX_REPLAY_STREAM_KEEPALIVE_SECONDS: int = Field(default=15, ge=1, le=60)
     # Operator-only Codex 0.162 compatibility profile DATA file override.
     # Empty uses the packaged default profile.  When set, the file is
     # validated exactly once at process bootstrap and any failure refuses

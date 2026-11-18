@@ -177,7 +177,8 @@ Core invariants:
   supplies final usage, the gateway finalizes PostgreSQL accounting first,
   verifies the same finalized key/request ledger row, then writes operator-expiring (365-day default)
   HMAC-only item/call ownership references before releasing the held
-  `response.completed`. Reference-persistence failure emits safe failure and
+  `response.completed` and the buffered replay-bearing event tail. No tool
+  lifecycle item is delivered before that durable commit. Reference-persistence failure emits safe failure and
   suppresses normal completion without releasing or reversing charged usage.
   Missing usage, malformed/error events, and disconnects create no usable
   replay reference. Reference rows are control metadata, never billing truth.
@@ -188,7 +189,10 @@ Core invariants:
   the original status/reason and partial output. This is finalized HTTP usage,
   not a claim that generation completed. Completed validated replay candidates
   retain the same post-settlement ownership checks; unfinished items create
-  none. Missing usage, malformed output or failed settlement retains the
+  none. An unfinished replayable item is withheld with a safe stream failure
+  after authoritative settlement, rather than delivered without ownership.
+  Delivery disconnects after commit do not finalize or charge a second time.
+  Missing usage, malformed output or failed settlement retains the
   existing failure/reconciliation path. Hosted web-search settlement is unchanged.
 - Fully gated Codex admission replaces only the injected ordinary 1,024 output
   default with the strict route default (32,768 in the qualification profile),

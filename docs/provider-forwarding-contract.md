@@ -603,6 +603,14 @@ Responses-specific rules for the current foundation:
   `codex_encrypted_reasoning_replay` and `codex_request_envelope` on both the
   key and route. Client replay cannot be combined with
   `previous_response_id` or conversation state;
+- gated Codex replay-bearing lifecycle events and their following SSE tail
+  remain behind a bounded memory-only delivery barrier until authoritative
+  PostgreSQL accounting and HMAC reference persistence commit. Failed streams
+  discard the tail rather than exposing unauthorized client history. Success
+  preserves payloads and order; ordinary text streams remain incremental.
+  Incomplete replayable items are withheld after actual-usage settlement.
+  Delivery disconnects after commit do not settle or charge again. See the
+  [buffer settings](configuration.md#codex-replay-delivery-barrier);
 - non-streaming `conversation` is forwarded only after the ID resolves to an
   active local conversation reference owned by the authenticated gateway key,
   the route advertises `capabilities.responses.conversations=true`, and

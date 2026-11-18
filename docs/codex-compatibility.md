@@ -857,3 +857,15 @@ install them. No database migration is needed. Upgrade key pins explicitly;
 see the [Qwen runbook](runbooks/codex-qwen38.md),
 [clean client examples](../examples/codex/qwen38-27b/README.md), and
 [bounded verification record](verification/codex-qwen38-live-smoke.md).
+
+### Replay delivery after a failed stream
+
+The gateway holds replay-bearing lifecycle events and their following SSE
+tail until accounting and HMAC ownership have committed. This prevents a
+fresh conversation from retaining a completed tool item from a response that
+later fails. Successful streams retain the exact event order; text-only
+responses continue streaming. Pending content is bounded in memory and never
+spooled to disk. Actual usage remains authoritative; disconnects after commit
+do not settle twice. See [configuration](configuration.md#codex-replay-delivery-barrier)
+for memory/keepalive controls, incomplete-tool behavior, and recovery of
+pre-existing orphaned history. No profile pin or key rotation is required.

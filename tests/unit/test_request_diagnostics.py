@@ -681,3 +681,18 @@ def test_route_max_rejection_does_not_claim_operator_ceiling() -> None:
     assert facts is not None
     assert facts["limits"]["max_output_tokens"] == 128_000
     assert "absolute_max_output_tokens" not in facts["limits"]
+
+
+@pytest.mark.parametrize("code", [
+    "vllm_tool_protocol_invalid",
+    "responses_codex_replay_delivery_buffer_exceeded",
+    "responses_codex_replay_item_incomplete",
+])
+def test_replay_delivery_failure_codes_are_observable_without_content(settings, code):
+    record = build_diagnostic_record(_base_facts(
+        source="responses_stream_failure", stream_outcome="stream_failure",
+        error_code=code,
+    ), settings=settings)
+    assert record.error_code == code
+    assert record.source == "responses_stream_failure"
+    assert record.positions is None and record.counts is None

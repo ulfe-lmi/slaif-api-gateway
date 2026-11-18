@@ -2030,3 +2030,38 @@ An operator extending existing references must audit the action, preserve their
 original creation time, key ownership, route and ledger linkage, and choose an
 expiry no later than the original creation time plus the new retention period.
 Do not blindly extend from the time of the update.
+
+### Codex replay delivery barrier
+
+For gated Codex streams, the first tool-item event (or reasoning-item event
+when encrypted replay is enabled) starts an in-memory delivery barrier. All
+subsequent provider events stay in order behind it until authoritative usage
+is finalized and the validated same-key replay references commit. Text before
+the barrier and text-only responses continue streaming immediately. Pending
+content is never written to files, logs, metrics, or database columns.
+
+`CODEX_REPLAY_STREAM_BUFFER_MAX_BYTES` bounds the queued UTF-8 SSE bytes **per
+request**: default 67,108,864 (64 MiB), minimum 1,024, maximum 268,435,456
+(256 MiB). Budget this memory together with concurrent requests. An overflow
+fails with `responses_codex_replay_delivery_buffer_exceeded`, discards the
+uncommitted tail, and follows existing interrupted-usage accounting. This is
+an operational memory budget, independent of model token/context limits.
+
+`CODEX_REPLAY_STREAM_KEEPALIVE_SECONDS` defaults to 15 (range 1–60). While
+buffered provider events arrive, the gateway periodically sends SSE comments
+with no identifiers or client state. It cannot promise heartbeats during
+silence from an upstream transport. Both settings require process restarts. The standard production Compose API
+service forwards these two settings from its Compose environment or `.env`
+file; custom deployments must include them in the API environment.
+
+A valid output-limited response with a completed tool call still finalizes
+and releases its original events. An incomplete replayable item is withheld
+with `responses_codex_replay_item_incomplete` after actual usage finalization;
+it receives no replay authorization. A disconnect during delivery after
+commit never charges or finalizes the same request again.
+
+This requires no schema migration, key rotation, or client-profile pin change.
+It prevents new orphaned client history. It cannot reconstruct references
+already missing from older failed streams: rewind that session before the
+failed turn, or transfer a summary into a fresh conversation. Do not authorize
+unknown history or manufacture replay rows as a recovery shortcut.
