@@ -35,6 +35,8 @@ and do not override current contracts or merged code.
   request-envelope slice.
 - [Codex tuning with three Qwen backends](codex-tuning-qwen.md) — client
   templates, context/compaction headroom, output budgets, adapters and diagnostics.
+- [V100 / llama.cpp instruction-order runbook](runbooks/qwen-v100-llama-cpp.md) —
+  backend template, developer-role normalization, route selectors and rollback.
 - [Provider forwarding contract](provider-forwarding-contract.md) — headers,
   bodies, endpoints, credential replacement.
 - [Pricing catalog and bounded overrun](pricing-catalog.md) — pricing

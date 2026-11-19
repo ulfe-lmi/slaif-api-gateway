@@ -47,6 +47,15 @@ This is an explicit operator compatibility choice for a prefix-only template,
 not a claim that arbitrary histories are semantically identical after
 reordering. Use `preserve` for backends that accept the original order.
 
+For Qwen/V100 deployments, use the
+[llama.cpp template and gateway runbook](runbooks/qwen-v100-llama-cpp.md).
+After verifying the backend accepts late instructions, select
+`responses-passthrough-v1` on both original and repaired routes. The gateway
+preserves the supplied roles; some llama.cpp builds normalize developer to
+system before rendering. That existing backend normalization is distinct from
+moving instructions through history. The packaged prefix-only profile remains
+available but can reject lifecycle requests with late instructions.
+
 ## Inspect and select a profile
 
 The read-only command prints packaged data and exact selectors without a
