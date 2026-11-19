@@ -2062,3 +2062,14 @@ security boundary:
 
 No schema migration, no key-policy migration, no new RBAC model, and no
 dependency or accounting change accompany this surface.
+
+
+### Visible reasoning versus replay authority
+
+Policy-validated visible reasoning with absent, null, or accepted empty
+`encrypted_content` is ordinary metered input, even when it carries an `id`.
+It creates no opaque replay authority and requires no encrypted-reference
+lookup. Both replay extraction modes use this boundary. Nonempty encrypted
+reasoning and actual tool/compaction references still require the existing
+same-key ownership and route/provider binding; this distinction does not
+allow unknown opaque references or tools to bypass verification.

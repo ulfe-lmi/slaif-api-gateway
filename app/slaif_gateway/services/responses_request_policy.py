@@ -4805,8 +4805,9 @@ def _codex_positional_replay_candidates(
                 )
             continue
         if item_type == "reasoning":
-            # Empty ciphertext is visible context, never an opaque replay reference.
-            if item.get("encrypted_content") == "":
+            # Missing, null and empty ciphertext are validated visible context,
+            # not opaque replay authority. Streaming never persists HMACs for them.
+            if item.get("encrypted_content") in (None, ""):
                 continue
             item_id = item.get("id")
             if isinstance(item_id, str):
@@ -4927,8 +4928,9 @@ def codex_replay_request_candidates(
                 )
             continue
         if item_type == "reasoning":
-            # Empty ciphertext is visible context, never an opaque replay reference.
-            if item.get("encrypted_content") == "":
+            # Missing, null and empty ciphertext are validated visible context,
+            # not opaque replay authority. Streaming never persists HMACs for them.
+            if item.get("encrypted_content") in (None, ""):
                 continue
             item_id = item.get("id")
             if isinstance(item_id, str):
