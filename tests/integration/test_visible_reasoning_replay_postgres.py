@@ -112,19 +112,17 @@ async def test_visible_reasoning_with_owned_tool_keeps_exact_ownership_checks(
         route_id=route.id,
         upstream_model=route.upstream_model,
     )
-    # Existing tool ownership, route binding and nonempty encrypted authority
-    # remain mandatory; visible context cannot turn any of these into a bypass.
+    # Tool ownership remains mandatory; owned plain tool history is portable.
+    # Visible context cannot authorize unknown tools or opaque reasoning.
     with pytest.raises(CodexReplayReferenceError) as wrong_key:
         await service.verify_owned_replay(candidates=candidates, gateway_key_id=other_key.id)
     assert wrong_key.value.error_code == "responses_codex_replay_reference_not_found"
-    with pytest.raises(CodexReplayReferenceError) as wrong_route:
-        service.verify_route_compatibility(
-            authorization,
-            provider=route.provider,
-            route_id=uuid.uuid4(),
-            upstream_model=route.upstream_model,
-        )
-    assert wrong_route.value.error_code == "responses_codex_replay_route_mismatch"
+    service.verify_route_compatibility(
+        authorization,
+        provider="another-provider",
+        route_id=uuid.uuid4(),
+        upstream_model="another-model",
+    )
     visible["encrypted_content"] = "synthetic-unowned-ciphertext"
     opaque = codex_replay_request_candidates(body, require_call_completeness=True, **kwargs)
     assert len(opaque) == 2 and opaque[0].item_kind == "reasoning"

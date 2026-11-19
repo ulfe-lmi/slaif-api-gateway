@@ -1205,7 +1205,10 @@ Codex replay pairs each result with one preceding call by call ID and kind.
 The native transport already supports multiple calls in one response; replay
 therefore accepts call-call-result-result ordering, including results completing
 in reverse order. Existing input caps, taxonomy validation, independent gates,
-HMAC same-key/same-route ownership and accounting remain enforced. The current
+HMAC same-key ownership, exact call/tool identity and accounting remain
+enforced. Verified client function/custom-tool history can cross model routes;
+opaque reasoning/compaction retains its provider/route/model binding. The
+destination still requires its normal permissions, capabilities and admission. The current
 parallel-generation preference does not invalidate prior parallel history.
 No history is reordered, repaired, dropped or synthesized.
 

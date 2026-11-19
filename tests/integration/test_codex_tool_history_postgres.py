@@ -792,12 +792,12 @@ async def test_group_a_other_key_reference_denied_before_route(
 
 
 @pytest.mark.asyncio
-async def test_group_a_wrong_route_denied_before_redis_quota_and_provider(
+async def test_group_a_owned_tool_on_another_route_reaches_normal_quota_admission(
     async_test_session: AsyncSession,
     rev16_client_module: object,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Owned references must match the SELECTED route; a different route denies."""
+    """Owned tool history can select another route without authorizing execution."""
     session = async_test_session
     settings = _replay_settings()
     suffix = uuid.uuid4().hex[:12]
@@ -828,7 +828,7 @@ async def test_group_a_wrong_route_denied_before_redis_quota_and_provider(
         "_resolve_responses_route",
         _gate_route_resolver(_local_coding_route(uuid.uuid4())),  # not the owned route
     )
-    for name in ("_reserve_redis_rate_limit", "_reserve_responses_quota"):
+    for name in ("_reserve_responses_quota",):
         monkeypatch.setattr(
             responses_gateway, name, _deny_before_ownership_sentinel(timeline, name)
         )
@@ -838,22 +838,23 @@ async def test_group_a_wrong_route_denied_before_redis_quota_and_provider(
         _deny_before_ownership_sentinel(timeline, "get_provider_adapter"),
     )
 
-    with pytest.raises(OpenAICompatibleError) as exc_info:
+    with pytest.raises(AssertionError, match="_reserve_responses_quota"):
         await handle_response_create(
             payload=ResponsesCreateRequest.model_validate(body),
             authenticated_key=auth_key,
             settings=settings,
         )
 
-    assert exc_info.value.code == "responses_codex_replay_route_mismatch"
-    assert timeline == []
+    assert timeline == ["_reserve_responses_quota"]
 
 
+@pytest.mark.parametrize("route_changed", [False, True])
 @pytest.mark.asyncio
 async def test_group_a_idless_owned_candidate_passes_deferred_verification(
     async_test_session: AsyncSession,
     rev16_client_module: object,
     monkeypatch: pytest.MonkeyPatch,
+    route_changed: bool,
 ) -> None:
     """An ID-less call owned by the key passes deferred call-id verification.
 
@@ -896,7 +897,7 @@ async def test_group_a_idless_owned_candidate_passes_deferred_verification(
     monkeypatch.setattr(
         responses_gateway,
         "_resolve_responses_route",
-        _gate_route_resolver(_local_coding_route(owned_route.id)),
+        _gate_route_resolver(_local_coding_route(uuid.uuid4() if route_changed else owned_route.id)),
     )
     monkeypatch.setattr(
         responses_gateway,
@@ -921,7 +922,7 @@ async def test_group_a_idless_owned_candidate_passes_deferred_verification(
     assert timeline == ["_reserve_responses_quota"]
 
 
-@pytest.mark.parametrize("mode", ["unowned", "other-key", "wrong-route"])
+@pytest.mark.parametrize("mode", ["unowned", "other-key"])
 @pytest.mark.asyncio
 async def test_group_a_idless_negatives_denied_before_quota_and_provider(
     async_test_session: AsyncSession,
@@ -929,7 +930,7 @@ async def test_group_a_idless_negatives_denied_before_quota_and_provider(
     monkeypatch: pytest.MonkeyPatch,
     mode: str,
 ) -> None:
-    """ID-less deferred verification denies unowned, other-key, and wrong-route.
+    """ID-less deferred verification still denies unowned and other-key calls.
 
     The call omits its item id, so only the deferred call-id HMAC lookup on
     real PostgreSQL rows can authorize it.  Every denial variant must land
@@ -982,11 +983,7 @@ async def test_group_a_idless_negatives_denied_before_quota_and_provider(
         probe_route_id = forger_route.id
         expected_code = "responses_codex_replay_reference_not_found"
     else:
-        key, _owned_route = await _seed_owned_reference(
-            session, settings=settings, suffix=suffix
-        )
-        probe_route_id = uuid.uuid4()  # a different route than the owned one
-        expected_code = "responses_codex_replay_route_mismatch"
+        raise AssertionError("Unexpected ownership-negative mode")
 
     auth_key = _auth_key(key)
     _assert_key_route_consistency(auth_key, "local-coding")
@@ -1346,13 +1343,15 @@ async def _seed_owned_history_world(
     settings: Settings,
     provider: str,
     allowed_capabilities: tuple[str, ...],
+    historical_other_route: bool = False,
 ) -> tuple[object, object]:
     """Seed the consistent rev-16 world for the owned-history workflow.
 
     The public model the body requests is the one the seeded key allows, the
     selected route serves it from the allowed provider, complete synthetic EUR
     pricing exists for quota admission, and the exact historical identity
-    (fc-1 / call-1 / functions.read) is HMAC-owned by the key on that route.
+    (fc-1 / call-1 / functions.read) is HMAC-owned by the key. The historical
+    reference can optionally originate on a different provider/model route.
     """
     owner, cohort, key = await _seed_key(
         session,
@@ -1386,8 +1385,17 @@ async def _seed_owned_history_world(
             tool_name="read",
         ),
     )
+    source_route = route
+    if historical_other_route:
+        source_route = await ModelRoutesRepository(session).create_model_route(
+            requested_model="historical-model-" + uuid.uuid4().hex,
+            provider="historical-provider",
+            upstream_model="historical-upstream",
+            endpoint="/v1/responses",
+        )
     persisted = await _seed_replay_refs(
-        session, settings=settings, key=key, ledger=ledger, candidates=candidates, route=route, now=now
+        session, settings=settings, key=key, ledger=ledger, candidates=candidates,
+        route=source_route, now=now,
     )
     assert persisted == 1
     return key, route
@@ -1402,6 +1410,14 @@ async def _seed_owned_history_world(
 # historical-call namespace on the provider wire (explicit for preserve
 # transports, absent because codecs carry the identity in the wire name).
 _SUCCESS_KINDS = {
+    "configured-preserve-order": SimpleNamespace(
+        provider="synthetic-preserve-order",
+        profile_id="responses-passthrough-v1",
+        adapter="upstream",
+        removed_name="read",
+        kept_name="kept",
+        namespace="functions",
+    ),
     "local-preserve": SimpleNamespace(
         provider="local-coding",
         profile_id=None,
@@ -1485,12 +1501,14 @@ def _route_probe(route_id: uuid.UUID, provider: str, capabilities: dict):
 
 
 @pytest.mark.parametrize("kind", sorted(_SUCCESS_KINDS))
+@pytest.mark.parametrize("historical_other_route", [False, True])
 @pytest.mark.asyncio
 async def test_group_b_owned_history_success_settles_through_real_workflow(
     async_test_session: AsyncSession,
     rev16_client_module: object,
     monkeypatch: pytest.MonkeyPatch,
     kind: str,
+    historical_other_route: bool,
 ) -> None:
     """Every adapter family replays the same removed owned history.
 
@@ -1514,6 +1532,7 @@ async def test_group_b_owned_history_success_settles_through_real_workflow(
         settings=settings,
         provider=spec.provider,
         allowed_capabilities=_ALL_CODEX_CAPS,
+        historical_other_route=historical_other_route,
     )
     auth_key = _auth_key(key)
     _assert_key_route_consistency(auth_key, spec.provider)
@@ -1578,6 +1597,13 @@ async def test_group_b_owned_history_success_settles_through_real_workflow(
     body["model"] = "synthetic-codex-model"
     body["store"] = False
     body["input"] = _success_items()
+    if kind == "configured-preserve-order":
+        # Codex's retained-summary/late-instruction shape after local compaction.
+        body["input"] = [
+            user("retained synthetic summary"),
+            {"role": "developer", "content": [{"type": "input_text", "text": "late instruction"}]},
+            *body["input"],
+        ]
 
     response = await handle_response_create(
         payload=ResponsesCreateRequest.model_validate(body),
@@ -1594,6 +1620,9 @@ async def test_group_b_owned_history_success_settles_through_real_workflow(
     wire = captured["request_json"]
     input_items = wire.get("input")
     assert isinstance(input_items, list)
+    if kind == "configured-preserve-order":
+        assert input_items[0]["role"] == "user"
+        assert input_items[1]["role"] == "developer"
     hist_calls = [
         item
         for item in input_items
@@ -1668,7 +1697,7 @@ async def test_group_b_missing_codex_grant_denied_before_quota_and_provider(
     ``enforce_responses_route_capabilities`` gate inside the (route-selection
     only) resolver.  Both denials precede quota reservation, provider
     selection, and any ledger or reservation write.  The world is otherwise
-    valid: the historical identity is HMAC-owned on the selected route.
+    valid: the historical identity is HMAC-owned on a different provider/model route.
     """
     session = async_test_session
     settings = _group_b_settings()
@@ -1691,6 +1720,7 @@ async def test_group_b_missing_codex_grant_denied_before_quota_and_provider(
         settings=settings,
         provider=provider,
         allowed_capabilities=allowed_capabilities,
+        historical_other_route=True,
     )
     auth_key = _auth_key(key)
     _assert_key_route_consistency(auth_key, provider)
@@ -2033,3 +2063,62 @@ async def test_preserve_wire_bodies_distinct_for_distinct_validated_namespaces(
     # Distinct validated identities must give distinct preserve wire bodies.
     assert captured_bodies[0] != captured_bodies[1]
     await client.aclose()
+
+
+@pytest.mark.parametrize("denial", ["model", "provider"])
+@pytest.mark.asyncio
+async def test_cross_route_tool_history_cannot_bypass_destination_key_permissions(
+    async_test_session: AsyncSession,
+    rev16_client_module: object,
+    monkeypatch: pytest.MonkeyPatch,
+    denial: str,
+) -> None:
+    from dataclasses import replace
+
+    from slaif_gateway.db.repositories.provider_configs import ProviderConfigsRepository
+
+    session = async_test_session
+    settings = _group_b_settings()
+    key, route = await _seed_owned_history_world(
+        session, settings=settings, provider="local-coding",
+        allowed_capabilities=_ALL_CODEX_CAPS, historical_other_route=True,
+    )
+    route.capabilities = {**_LOCAL_CODING_STATIC_CAPS, "responses": dict(_CODEX_RESPONSES_CAPS)}
+    await ProviderConfigsRepository(session).create_provider_config(
+        provider=route.provider, display_name="Synthetic destination",
+        base_url="http://127.0.0.1:18031/v1", api_key_env_var="SYNTHETIC_SERVICE_TOKEN",
+    )
+    await session.flush()
+    auth_key = _auth_key(key)
+    auth_key = replace(
+        auth_key,
+        allowed_models=("some-other-model",) if denial == "model" else auth_key.allowed_models,
+        allowed_providers=("historical-provider",) if denial == "provider" else auth_key.allowed_providers,
+    )
+    timeline = []
+    original_verify = responses_gateway._verify_owned_codex_replay_references
+
+    async def verify(**kwargs):
+        result = await original_verify(**kwargs)
+        timeline.append("ownership")
+        return result
+
+    async def db_session(request=None):
+        yield session
+
+    monkeypatch.setattr(responses_gateway, "_get_db_session_after_auth_header_check", db_session)
+    monkeypatch.setattr(responses_gateway, "_verify_owned_codex_replay_references", verify)
+    for name in ("_reserve_redis_rate_limit", "_reserve_responses_quota", "get_provider_adapter"):
+        monkeypatch.setattr(responses_gateway, name, _deny_before_ownership_sentinel(timeline, name))
+    body = _group_b_body()
+    body["input"] = _success_items()
+    before = await _group_b_settlement_facts(session, key.id)
+    with pytest.raises(OpenAICompatibleError) as exc:
+        await handle_response_create(
+            payload=ResponsesCreateRequest.model_validate(body),
+            authenticated_key=auth_key, settings=settings,
+        )
+    assert exc.value.status_code == 403
+    assert exc.value.code == f"{denial}_not_allowed_for_key"
+    assert timeline == ["ownership"]
+    assert await _group_b_settlement_facts(session, key.id) == before

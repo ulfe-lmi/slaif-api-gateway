@@ -71,9 +71,10 @@ transient. `encrypted_content: null` is not encrypted replay; a non-null
 encrypted value still requires the existing independently gated ID-bound path.
 For function/custom tool continuations in that same pair, an absent item ID
 does not weaken ownership: the mandatory call ID must resolve to exactly one
-active same-key HMAC reference with matching tool and route/provider/model
-facts. Wrong, expired, duplicate, cross-key, or cross-route references fail
-closed; a present wrong item ID never downgrades to call-ID-only lookup.
+active same-key HMAC reference with matching kind, call and tool identity.
+Verified plain tool history is portable across route/provider/model changes;
+opaque reasoning/compaction retains those source bindings. Wrong, expired,
+duplicate or cross-key references fail closed; a present wrong item ID never downgrades to call-ID-only lookup.
 Module version `4` adds only a request-derived name set for exact top-level
 zero-argument function declarations. The pair-local stream validator uses it
 to accept the provider's empty-string added-to-completed closure without
@@ -753,7 +754,9 @@ default-off and policy-first:
   safe denial — a validated call can never be silently omitted from
   ownership verification. The facts carry naming only; the gateway still
   resolves every candidate through the existing same-key item/call-ID
-  HMAC and provider/route/model/kind checks before any side effect. The
+  HMAC and exact kind/tool identity checks before any side effect. Verified
+  client-tool history is portable; provider/route/model checks remain for
+  opaque reasoning/compaction, with ordinary destination policy still enforced. The
   ID-less call form is qualified only for this mode (or the existing
   0.149 path) AND only when the selected profile spec declares
   `allow_idless_tool_call_replay`; an unowned ID-less call is never
@@ -993,8 +996,10 @@ function call / `functions.exec` custom call with one immediately adjacent
 matching result. Pinned Code Mode custom output may use its bounded exact
 `input_text` part list; other content arrays remain denied. Replay is rejected
 before Redis, pricing, quota, or provider access unless every referenced item
-has an active same-key HMAC row, and provider/route/model/name compatibility is
-checked after route selection but before those later side effects. Raw IDs are
+has an active same-key HMAC row with exact kind/call/tool identity. Plain
+client-tool history can move between permitted routes; opaque reasoning and
+compaction additionally require provider/route/model compatibility after
+selection and before those later side effects. Raw IDs are
 domain-separated and HMACed with the existing versioned key material; missing
 HMAC key material fails closed. Rows store no encrypted content, summary,
 arguments, results, prompts, bodies, or raw/digest identifiers and expire after
@@ -2070,6 +2075,7 @@ Policy-validated visible reasoning with absent, null, or accepted empty
 `encrypted_content` is ordinary metered input, even when it carries an `id`.
 It creates no opaque replay authority and requires no encrypted-reference
 lookup. Both replay extraction modes use this boundary. Nonempty encrypted
-reasoning and actual tool/compaction references still require the existing
-same-key ownership and route/provider binding; this distinction does not
+reasoning and actual tool/compaction references still require same-key
+ownership. Verified plain client-tool history is portable, while opaque
+reasoning/compaction retains its route/provider/model binding; this distinction does not
 allow unknown opaque references or tools to bypass verification.

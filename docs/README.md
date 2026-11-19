@@ -35,6 +35,8 @@ and do not override current contracts or merged code.
   request-envelope slice.
 - [Codex tuning with three Qwen backends](codex-tuning-qwen.md) — client
   templates, context/compaction headroom, output budgets, adapters and diagnostics.
+- [Changing models in Codex](codex-model-switching.md) — portable verified
+  client-tool history, destination checks and opaque-state restrictions.
 - [Provider forwarding contract](provider-forwarding-contract.md) — headers,
   bodies, endpoints, credential replacement.
 - [Pricing catalog and bounded overrun](pricing-catalog.md) — pricing

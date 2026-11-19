@@ -22,6 +22,7 @@ CODEX_REPLAY_REFERENCE_TTL = timedelta(days=365)
 CODEX_REPLAY_ITEM_KINDS = frozenset(
     {"reasoning", "function_call", "custom_tool_call", "compaction"}
 )
+_PORTABLE_TOOL_HISTORY_KINDS = frozenset({"function_call", "custom_tool_call"})
 _MAX_ACTIVE_HMAC_VERSIONS = 8
 _IDENTIFIER_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$")
 
@@ -229,25 +230,38 @@ class CodexReplayService:
         compatible_route_ids: frozenset[uuid.UUID] = frozenset(),
         allow_compact_endpoint_route_compatibility: bool = False,
     ) -> None:
-        """Fail closed unless every owned reference matches the selected route."""
+        """Keep opaque state route-bound; verified client tool history is portable.
+
+        Ownership, kind, call linkage and tool identity have already been
+        checked by verify_owned_replay. Client-executed tool history contains
+        no provider-side state to retrieve. Its source route remains recorded
+        for provenance, but does not authorize or restrict the destination:
+        normal destination key policy, capabilities and admission still apply.
+        Encrypted reasoning and compaction retain their existing route scope.
+        """
 
         if any(
-            reference.provider != provider
-            or (
-                reference.route_id != route_id
-                and not (
-                    (
-                        reference.item_kind == "compaction"
-                        or allow_compact_endpoint_route_compatibility
+            reference.item_kind not in _PORTABLE_TOOL_HISTORY_KINDS
+            and (
+                reference.provider != provider
+                or (
+                    reference.route_id != route_id
+                    and not (
+                        (
+                            reference.item_kind == "compaction"
+                            or allow_compact_endpoint_route_compatibility
+                        )
+                        and reference.route_id in compatible_route_ids
                     )
-                    and reference.route_id in compatible_route_ids
                 )
+                or reference.upstream_model != upstream_model
             )
-            or reference.upstream_model != upstream_model
             for reference in authorization.references
         ):
             raise CodexReplayReferenceError(
-                "Codex replay references are not valid for this model route.",
+                "Opaque Codex reasoning or compaction replay references are not valid "
+                "for this model route. Use their original route or provide portable "
+                "visible history instead.",
                 error_code="responses_codex_replay_route_mismatch",
             )
 
