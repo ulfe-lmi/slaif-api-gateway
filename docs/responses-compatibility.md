@@ -1311,3 +1311,20 @@ output-token parameter and reserves its configured compact default, capped
 at applicable maxima, rather than the create-route maximum. Malformed values,
 input/context limits, capabilities and final provider-usage accounting are
 unchanged. No key rotation, schema migration, or preset-pin change is required.
+
+
+### Visible reasoning is not an opaque replay reference
+
+A policy-validated reasoning item whose `encrypted_content` is absent, null,
+or an accepted empty string is visible conversation content. An optional `id`
+does not turn it into an opaque reference. Both legacy and positional-history
+candidate extraction therefore exclude these items from HMAC ownership lookup,
+consistent with the streaming path, which never persists encrypted-replay
+references for visible reasoning. The existing content shape, size, capability,
+and input-accounting checks still apply.
+
+Nonempty encrypted reasoning, compaction, and tool-call references retain their
+existing ownership and route checks. This classification repair can unblock a
+conversation rejected solely because visible reasoning was misclassified; it
+cannot recover genuinely missing encrypted or tool references. No schema,
+key rotation, compatibility-profile migration, or history editing is required.

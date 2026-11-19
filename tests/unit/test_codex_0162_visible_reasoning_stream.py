@@ -146,7 +146,9 @@ def test_visible_done_does_not_bypass_encrypted_or_shape_checks(mutation):
     assert not validator.validate(event)
 
 
-def test_empty_ciphertext_visible_continuation_has_no_encrypted_replay_authority():
+@pytest.mark.parametrize("ciphertext_form", ["missing", "null", "empty"])
+@pytest.mark.parametrize("positional", [False, True])
+def test_visible_continuation_has_no_encrypted_replay_authority(ciphertext_form, positional):
     from slaif_gateway.config import Settings
     from slaif_gateway.services.responses_request_policy import (
         ResponsesRequestPolicy,
@@ -169,6 +171,11 @@ def test_empty_ciphertext_visible_continuation_has_no_encrypted_replay_authority
         ],
     }
 
+    if ciphertext_form == "missing":
+        del body["input"][0]["encrypted_content"]
+    elif ciphertext_form == "null":
+        body["input"][0]["encrypted_content"] = None
+
     def apply(selected):
         return ResponsesRequestPolicy(Settings(), client_spec=selected).apply(
             body,
@@ -178,9 +185,12 @@ def test_empty_ciphertext_visible_continuation_has_no_encrypted_replay_authority
 
     result = apply(spec).effective_body
     assert result["input"][0] == body["input"][0]
-    assert codex_replay_request_candidates(result) == ()
-    with pytest.raises(ResponsesRequestPolicyError):
-        apply(replace(spec, allow_empty_visible_reasoning=False))
+    assert codex_replay_request_candidates(
+        result, codex_tool_call_bindings={} if positional else None
+    ) == ()
+    if ciphertext_form == "empty":
+        with pytest.raises(ResponsesRequestPolicyError):
+            apply(replace(spec, allow_empty_visible_reasoning=False))
     body["input"][0]["content"] = [{"type": "image", "text": "synthetic"}]
     with pytest.raises(ResponsesRequestPolicyError):
         apply(spec)
