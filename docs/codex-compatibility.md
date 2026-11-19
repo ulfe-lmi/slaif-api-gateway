@@ -681,8 +681,9 @@ enable `codex_compaction` plus all four earlier Codex capabilities. The request
 is rebuilt from the exact pinned compact fields and history, and all prior
 HMAC ownership is verified before side effects. Because the pinned V1 request
 omits `max_output_tokens`, SLAIF also omits that upstream field while reserving
-the validated route maximum (128,000 for the qualification profile) as output
-exposure for context, quota, pricing, and safe evidence. The provider must
+the configured compact endpoint default (12,000 by default), capped at
+applicable maxima, as output exposure for context, quota, pricing, and safe
+evidence. The create-route maximum is not a compact reservation default. The provider must
 return one bounded opaque compaction item and supported final usage in a strict
 top-level envelope containing only required `output`/`usage` and optional safe
 `id`, `object`, and `created_at`. After PostgreSQL accounting, SLAIF persists
@@ -869,3 +870,13 @@ spooled to disk. Actual usage remains authoritative; disconnects after commit
 do not settle twice. See [configuration](configuration.md#codex-replay-delivery-barrier)
 for memory/keepalive controls, incomplete-tool behavior, and recovery of
 pre-existing orphaned history. No profile pin or key rotation is required.
+
+### Effective requested output budgets
+
+A valid explicit output budget below the gateway ceiling is never raised to a
+route default or maximum. Larger values are clipped down to the lower of the
+route/operator ceilings, and that effective wire budget is used for admission
+pricing and quota. Defaults apply only to omitted/null create limits. Compact
+continues to omit the unsupported output field and uses its endpoint-specific
+configured default internally instead of reserving the route maximum. These
+shared policy changes do not add client syntax or require pin migration.

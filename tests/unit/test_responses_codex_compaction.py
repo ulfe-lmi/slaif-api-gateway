@@ -953,7 +953,7 @@ def _install_compact_handler_mocks(
 
 
 @pytest.mark.asyncio
-async def test_compact_handler_reserves_route_max_and_orders_success_after_hmac(
+async def test_compact_handler_reserves_compact_default_and_orders_success_after_hmac(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     timeline: list[str] = []
@@ -969,8 +969,8 @@ async def test_compact_handler_reserves_route_max_and_orders_success_after_hmac(
     )
     assert response.status_code == 200
     policy_result = captured["policy_result"]
-    assert policy_result.requested_output_tokens == 128_000
-    assert policy_result.effective_output_tokens == 128_000
+    assert policy_result.requested_output_tokens == Settings().RESPONSES_COMPACT_DEFAULT_MAX_OUTPUT_TOKENS
+    assert policy_result.effective_output_tokens == Settings().RESPONSES_COMPACT_DEFAULT_MAX_OUTPUT_TOKENS
     assert "max_output_tokens" not in policy_result.effective_body
     assert "max_output_tokens" not in captured["provider_body"]
     assert timeline == ["accounting", "hmac", "metrics", "release:false"]

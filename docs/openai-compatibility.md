@@ -340,7 +340,7 @@ every top-level Chat Completions field through a fail-closed registry.
 | --- | --- |
 | `model` | Supported; route resolution later replaces it upstream with the resolved model |
 | `messages` | Supported for string content and text content parts within configured count/byte caps; prompts/messages are not stored. User-message `image_url` parts are supported only when route metadata sets `chat_image_inputs=true`; user-message inline `file` parts are supported only when route metadata sets `chat_file_inputs=true`; user-message `input_audio` parts are supported only when route metadata sets `chat_audio_inputs=true` |
-| `max_tokens` / `max_completion_tokens` | Gateway-mutated policy fields; validated, defaulted when absent, and rejected when ambiguous or over hard limits |
+| `max_tokens` / `max_completion_tokens` | Gateway-mutated policy fields; validated, defaulted when absent, clipped down above hard limits, and rejected when ambiguous or malformed |
 | `stream` / `stream_options` | Supported; streaming forces `stream_options.include_usage=true` |
 | `tools` with `type=function` | Supported local/client-side tool intent within configured count/name/description/schema caps; schemas are forwarded and counted for input estimation |
 | `tools` with `type=custom` | Supported only as local/client-side custom tool-call intent when the resolved route explicitly sets `chat_custom_tools=true`; SLAIF does not execute custom tools or police downstream application behavior. Custom tool definitions, format, and grammar are bounded, forwarded, and counted as ordinary input material |
@@ -570,7 +570,7 @@ One request remains one reservation and one usage-ledger event.
 | --- | --- | --- |
 | `model` | Replaced upstream with the resolved route `upstream_model` | Allows aliases and provider-specific model names while keeping client-facing model IDs stable |
 | `max_completion_tokens` | Injected from `DEFAULT_MAX_OUTPUT_TOKENS` when both output-token fields are absent | Hard quota requires a bounded maximum output |
-| `max_tokens` / `max_completion_tokens` | Rejected when both are present with different values; rejected when non-positive or over `HARD_MAX_OUTPUT_TOKENS` | Avoid ambiguous quota estimation and enforce hard output caps |
+| `max_tokens` / `max_completion_tokens` | Rejected when both are present with different values; rejected when non-positive/malformed; valid values above `HARD_MAX_OUTPUT_TOKENS` are clipped to that ceiling | Avoid ambiguous quota estimation and enforce hard output caps |
 | `stream_options.include_usage` | Forced to `true` for streaming requests, preserving other `stream_options` keys | Streaming accounting requires final provider usage metadata |
 | Gateway-internal fields | Not sent upstream | Internal accounting, routing, and quota metadata never belongs in the provider body |
 
@@ -850,3 +850,14 @@ Temporary per-window request/token limits and concurrent-request limits retain
 `rate_limit_error` and their specific codes. Waiting for a rate window does
 not replenish a total quota; an operator must extend or reset it. Client
 retry and presentation behavior remains client-specific.
+
+### Effective output budget
+
+A supplied positive output-token limit is preserved below the gateway ceiling
+and clipped down above it. Defaults are injected only when omitted/null.
+Pricing and quota reserve that same effective output budget, plus estimated
+input; Chat multiplies output exposure by `n`. This applies to both Chat
+aliases, ordinary/gated Codex Responses create and numeric Realtime admission
+limits. Compact retains its no-output-field protocol and reserves its own
+configured compact default internally. These controls do not alter actual
+provider usage finalization or imply a larger backend context.

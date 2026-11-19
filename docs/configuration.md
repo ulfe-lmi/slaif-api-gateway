@@ -548,7 +548,7 @@ this bootstrap command.
 
 - `DEFAULT_MAX_OUTPUT_TOKENS` is injected when a supported request omits output
   token controls.
-- `HARD_MAX_OUTPUT_TOKENS` rejects requests above the configured maximum output.
+- `HARD_MAX_OUTPUT_TOKENS` clips valid positive output requests above the configured maximum; explicit smaller values are preserved. Pricing and quota reserve the clipped value, not the original larger request or the default.
 - `HARD_MAX_INPUT_TOKENS` rejects requests whose estimated input is too large.
   For Chat Completions, this estimate includes message content plus
   conservative serialized-size estimates for provider-forwarded non-message
@@ -2065,3 +2065,25 @@ It prevents new orphaned client history. It cannot reconstruct references
 already missing from older failed streams: rewind that session before the
 failed turn, or transfer a summary into a fresh conversation. Do not authorize
 unknown history or manufacture replay rows as a recovery shortcut.
+
+### Output token clipping and reservation
+
+Chat `max_tokens`/`max_completion_tokens`, Responses `max_output_tokens`, and
+numeric Realtime `session.max_output_tokens` follow one rule: preserve a valid
+positive requested value below the applicable maximum, otherwise clip it down
+to that maximum. Omitted controls (and null where supported) use the configured endpoint or route
+default, capped at the maximum. The output component of accounting reservation
+is exactly this effective forwarded budget. For Chat `n > 1`, reserve that
+budget for each choice, in addition to estimated input.
+
+Both Chat aliases are independently validated; conflicting original values
+remain errors even if both would clip to the same number. Non-positive,
+non-integer and boolean values remain invalid; Realtime `"inf"` remains
+unsupported. Codex create uses the lower of route and operator output maxima.
+Codex and ordinary compact reserve their own configured compact default,
+capped at the applicable maximum, and never add an unsupported output field
+upstream. Existing configured defaults and maxima do not change in this update.
+
+This policy does not enlarge a backend context window. A legitimately injected
+default can still exceed the remaining backend capacity; configure client
+compaction and defaults together as described in [Qwen tuning](codex-tuning-qwen.md).

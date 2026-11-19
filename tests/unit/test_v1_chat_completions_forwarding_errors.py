@@ -25,7 +25,7 @@ from slaif_gateway.schemas.providers import ProviderResponse
 from slaif_gateway.schemas.quota import QuotaReservationResult
 from slaif_gateway.schemas.routing import RouteResolutionResult
 from slaif_gateway.services.accounting_errors import ReservationFinalizationError, UsageMissingError
-from slaif_gateway.services.policy_errors import OutputTokenLimitExceededError
+from slaif_gateway.services.policy_errors import InvalidOutputTokenLimitError
 from slaif_gateway.services.pricing_errors import PricingRuleNotFoundError
 from slaif_gateway.services.quota_errors import QuotaLimitExceededError
 from slaif_gateway.services.routing_errors import ModelNotFoundError
@@ -366,9 +366,9 @@ def test_error_order_before_provider(monkeypatch) -> None:
 
     app = create_app(Settings(OPENAI_UPSTREAM_API_KEY="unused"))
     state = _wire_pipeline(monkeypatch, app)
-    response = TestClient(app).post("/v1/chat/completions", json=_chat_request(max_tokens=999999))
+    response = TestClient(app).post("/v1/chat/completions", json=_chat_request(max_tokens=0))
     assert response.status_code == 400
-    assert response.json()["error"]["code"] == OutputTokenLimitExceededError.error_code
+    assert response.json()["error"]["code"] == InvalidOutputTokenLimitError.error_code
     assert state["route_calls"] == []
 
     app = create_app(Settings(OPENAI_UPSTREAM_API_KEY="unused"))

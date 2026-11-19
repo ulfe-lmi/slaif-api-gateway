@@ -197,13 +197,14 @@ Core invariants:
 - Fully gated Codex admission replaces only the injected ordinary 1,024 output
   default with the strict route default (32,768 in the qualification profile),
   then enforces route/operator output and context bounds before Redis, pricing,
-  quota, or provider work. Ordinary non-Codex admission remains unchanged.
-  Gated V1 compact is the deliberate exception: because the pinned client does
-  not send `max_output_tokens`, SLAIF keeps that field absent upstream but uses
-  the validated route maximum (128,000 in the qualification profile) as the
-  effective/requested output exposure for context checks, reservation, pricing,
-  and safe admission evidence. Ordinary compact and ordinary Responses retain
-  their existing defaults.
+  quota, or provider work. Ordinary non-Codex requests keep their own defaults.
+  Explicit valid output budgets are clipped down to the applicable route and
+  operator maxima; smaller requests are never inflated to the default. The
+  forwarded limit is the output component used for pricing and reservation.
+  Gated V1 compact keeps the unsupported `max_output_tokens` field absent
+  upstream and reserves its endpoint-specific configured compact default,
+  capped at applicable maxima, rather than the create-route default or maximum.
+  Ordinary compact and ordinary Responses retain their own configured defaults.
   The 1,050,000 context and 128,000 output qualification ceilings are configured
   model data, not hardcoded universal limits.
 - Codex pricing partitions provider input into cached reads, cache writes, and
@@ -488,3 +489,21 @@ Temporary per-window request/token limits and concurrent-request limits retain
 `rate_limit_error` and their specific codes. Waiting for a rate window does
 not replenish a total quota; an operator must extend or reset it. Client
 retry and presentation behavior remains client-specific.
+
+### Requested, effective, and reserved output budgets
+
+For Chat Completions, Responses create, and numeric Realtime admission limits,
+a valid positive client limit below the applicable maximum is forwarded and
+reserved unchanged. A larger limit is clipped to the maximum, and that same
+clipped budget is reserved. Defaults apply only to omitted controls (and null where supported);
+they never replace an explicit smaller limit. Original requested values remain
+available in Chat/Responses policy facts; cost, quota and rate admission use
+the effective value. Chat choice counts multiply the per-choice effective
+budget: `estimated input + n * effective output per choice`.
+
+Pricing uses the applicable input/output rates for those same components.
+Finalization always uses actual provider usage and releases unused quota
+reservation. Realtime admission remains admission-only accounting, not actual
+session metering. `/responses/compact` has no supported public output-limit
+field and uses its own compact default internally, capped at applicable
+maxima. Input/context guards and non-token resource limits are unchanged.

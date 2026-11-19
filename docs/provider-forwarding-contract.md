@@ -506,13 +506,15 @@ Responses-specific rules for the current foundation:
   still rejected, and raw output IDs never enter persistence or safe evidence;
 - a fully gated Codex request requires strict top-level route `codex_limits`
   metadata. After route resolution, SLAIF replaces only the injected ordinary
-  output default with the route default, then rejects output above route or
-  operator maximum and rejects estimated input plus output above context before
+  output default with the route default, then clips a valid explicit/default
+  output budget to route/operator maxima and rejects estimated input plus that
+  effective output above context before
   Redis, pricing, quota, or provider work. The qualification profile's 32,768
   default and 1,050,000/128,000 limits are configured model data, not universal
   facts; ordinary Responses remains at 1,024. Gated pinned V1 compact is the
   explicit exception: it preserves an absent upstream `max_output_tokens` field
-  while using the validated route maximum as its effective/requested exposure;
+  while using its endpoint-specific compact default, capped at applicable
+  maxima, as its effective reservation exposure;
 - one Codex `additional_tools` input item is reconstructed only when both the
   key and route independently enable both `codex_request_envelope` and
   `codex_client_tools`. Its canonical shape is `role=developer` with exactly
@@ -1229,3 +1231,13 @@ promotion requires restart and audited active-key pin migration, without key
 rotation or quota changes. See the
 [preset contract](client-compatibility-presets.md#codex-01670-declaration-compatibility)
 and [bounded verification](verification/2026-11-10-codex-0167.md).
+
+### Output-budget normalization
+
+For valid numeric Chat, Responses-create and Realtime admission controls,
+forward the requested limit unchanged when within the applicable ceiling;
+clip larger requests to that ceiling. Only omitted limits (and null where supported) use defaults.
+The forwarded effective budget drives output pricing and reservation (times
+Chat choice count where applicable). Invalid values and conflicting Chat
+aliases remain denied. Compact accepts no public output field; its configured
+endpoint default is an internal reservation, not a new provider parameter.

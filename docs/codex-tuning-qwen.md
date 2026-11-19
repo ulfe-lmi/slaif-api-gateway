@@ -69,7 +69,7 @@ An existing 85,000-token compaction trigger on RTX3090 is unsuitable for a
 64,000 default output allowance. Plan client rollout alongside the route change.
 For a request near the 128,000 maximum on V100/A100, compact earlier or explicitly
 use a smaller output budget. A remote `/responses/compact` call has its own
-output-reservation policy; it reserves the route maximum. These templates use
+output-reservation policy; it reserves the configured compact default, capped at applicable maxima. These templates use
 local compaction and leave `remote_compaction_v2=false`.
 
 ## Install a profile that actually selects Qwen
@@ -159,8 +159,8 @@ quotas. Existing client files are not rewritten by a route update.
 
 | Gateway control | Purpose |
 | --- | --- |
-| route `codex_limits.default_max_output_tokens` | injected allowance when the client omitted one |
-| route `codex_limits.max_output_tokens` | ceiling for an explicit request; remote compact reserves this value |
+| route `codex_limits.default_max_output_tokens` | injected and reserved only when the client omitted a limit; smaller explicit requests are preserved |
+| route `codex_limits.max_output_tokens` | ceiling for explicit create requests; larger requests are clipped down |
 | route `codex_limits.context_window_tokens` | admission estimate ceiling; input estimate plus output allowance must fit |
 | `CODEX_ABSOLUTE_MAX_OUTPUT_TOKENS` | operator ceiling; currently 128,000 by default |
 | `CODEX_ABSOLUTE_MAX_INPUT_TOKENS` | separate operator input ceiling |

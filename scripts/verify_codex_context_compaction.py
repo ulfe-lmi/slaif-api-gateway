@@ -339,13 +339,12 @@ def _validate_captured_compact_policy(body: dict[str, Any]) -> bool:
             route_capabilities=CODEX_ROUTE_CAPABILITIES,
             settings=Settings(),
             include_output_field=False,
-            reserve_route_max_output=True,
         )
     except RequestPolicyError as exc:
         raise VerificationError("Captured V1 compact request failed gateway policy.") from exc
     if (
-        policy_result.effective_output_tokens != 128_000
-        or policy_result.requested_output_tokens != 128_000
+        policy_result.effective_output_tokens != Settings().RESPONSES_COMPACT_DEFAULT_MAX_OUTPUT_TOKENS
+        or policy_result.requested_output_tokens != Settings().RESPONSES_COMPACT_DEFAULT_MAX_OUTPUT_TOKENS
         or "max_output_tokens" in policy_result.effective_body
     ):
         raise VerificationError("Captured V1 compact request used unsafe gateway exposure.")

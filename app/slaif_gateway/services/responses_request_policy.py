@@ -458,7 +458,7 @@ class ResponsesRequestPolicy:
                 "responses_conversation_streaming_not_supported",
                 "Streaming Responses with conversation is not enabled by this gateway.",
             )
-        output_tokens, injected_default = self._resolve_output_token_limit(
+        requested_output_tokens, output_tokens, injected_default = self._resolve_output_token_limit(
             effective_body,
             hard_max=(
                 self._settings.CODEX_ABSOLUTE_MAX_OUTPUT_TOKENS
@@ -509,7 +509,7 @@ class ResponsesRequestPolicy:
         effective_body.update(request_extensions)
         return ResponsesPolicyResult(
             effective_body=effective_body,
-            requested_output_tokens=output_tokens,
+            requested_output_tokens=requested_output_tokens,
             effective_output_tokens=output_tokens,
             estimated_input_tokens=estimated_input_tokens,
             estimated_message_input_tokens=max(
@@ -684,16 +684,12 @@ class ResponsesRequestPolicy:
             if codex_requested
             else self._settings.RESPONSES_COMPACT_HARD_MAX_OUTPUT_TOKENS
         )
-        if output_tokens > compact_output_ceiling:
-            _raise(
-                "max_output_tokens",
-                "output_token_limit_exceeded",
-                "Responses compact output reservation exceeds the configured hard maximum.",
-            )
+        requested_output_tokens = output_tokens
+        output_tokens = min(output_tokens, compact_output_ceiling)
 
         return ResponsesPolicyResult(
             effective_body=effective_body,
-            requested_output_tokens=output_tokens,
+            requested_output_tokens=requested_output_tokens,
             effective_output_tokens=output_tokens,
             estimated_input_tokens=estimated_input_tokens,
             estimated_message_input_tokens=max(
@@ -4479,11 +4475,14 @@ class ResponsesRequestPolicy:
         body: dict[str, Any],
         *,
         hard_max: int | None = None,
-    ) -> tuple[int, bool]:
+    ) -> tuple[int, int, bool]:
         value = body.get("max_output_tokens")
+        effective_hard_max = hard_max or self._settings.HARD_MAX_OUTPUT_TOKENS
         if value is None:
-            body["max_output_tokens"] = self._settings.DEFAULT_MAX_OUTPUT_TOKENS
-            return self._settings.DEFAULT_MAX_OUTPUT_TOKENS, True
+            default = self._settings.DEFAULT_MAX_OUTPUT_TOKENS
+            effective = min(default, effective_hard_max)
+            body["max_output_tokens"] = effective
+            return default, effective, True
         if isinstance(value, bool) or not isinstance(value, int):
             _raise(
                 "max_output_tokens",
@@ -4496,14 +4495,9 @@ class ResponsesRequestPolicy:
                 "invalid_output_token_limit",
                 "The 'max_output_tokens' field must be a positive integer.",
             )
-        effective_hard_max = hard_max or self._settings.HARD_MAX_OUTPUT_TOKENS
-        if value > effective_hard_max:
-            _raise(
-                "max_output_tokens",
-                "output_token_limit_exceeded",
-                "The 'max_output_tokens' field exceeds the configured hard maximum.",
-            )
-        return value, False
+        effective = min(value, effective_hard_max)
+        body["max_output_tokens"] = effective
+        return value, effective, False
 
     def _estimate_input_tokens(
         self,
@@ -4569,7 +4563,6 @@ def apply_codex_route_limits(
     route_capabilities: Mapping[str, object] | None,
     settings: Settings,
     include_output_field: bool = True,
-    reserve_route_max_output: bool = False,
 ) -> ResponsesPolicyResult:
     """Finalize fully gated Codex limits after route resolution and before side effects."""
 
@@ -4579,14 +4572,12 @@ def apply_codex_route_limits(
     def _limit_facts(
         *,
         output_tokens_value: int | None = None,
-        operator_output_ceiling: int | None = None,
     ) -> dict[str, object]:
         # Typed, bounded, content-free decision facts for the diagnostics
         # facility only (never part of the public error).  Actual estimate /
-        # allowance / context values and the configured ceilings.  When the
-        # operator output ceiling is the rejecting ceiling it is retained
-        # under its own finite key (the route max alone would misattribute
-        # the rejection); no token re-estimation, no decision change.
+        # allowance / context values and the configured ceilings. Output
+        # allowance is already clipped; context/input rejections report that
+        # effective exposure, never the larger original client request.
         facts: dict[str, object] = {
             "source": "responses_route_limits",
             "estimated_input_tokens": policy_result.estimated_input_tokens,
@@ -4597,45 +4588,23 @@ def apply_codex_route_limits(
                 "context_window_tokens": limits.context_window_tokens,
             },
         }
-        if operator_output_ceiling is not None:
-            facts["limits"]["absolute_max_output_tokens"] = operator_output_ceiling
         if output_tokens_value is not None:
             facts["output_allowance_tokens"] = output_tokens_value
         return facts
 
-    if limits.default_max_output_tokens > settings.CODEX_ABSOLUTE_MAX_OUTPUT_TOKENS:
-        _raise(
-            "model",
-            "responses_codex_limits_invalid",
-            "The route Codex output default exceeds the operator ceiling.",
-            diagnostics=_limit_facts(
-                output_tokens_value=limits.default_max_output_tokens,
-                operator_output_ceiling=settings.CODEX_ABSOLUTE_MAX_OUTPUT_TOKENS,
-            ),
-        )
-    if reserve_route_max_output:
-        output_tokens = limits.max_output_tokens
-    elif policy_result.injected_default_output_tokens:
-        output_tokens = limits.default_max_output_tokens
-    else:
-        output_tokens = policy_result.requested_output_tokens
-    if output_tokens > limits.max_output_tokens:
-        _raise(
-            "max_output_tokens",
-            "output_token_limit_exceeded",
-            "The Codex output limit exceeds the selected model route maximum.",
-            diagnostics=_limit_facts(output_tokens_value=output_tokens),
-        )
-    if output_tokens > settings.CODEX_ABSOLUTE_MAX_OUTPUT_TOKENS:
-        _raise(
-            "max_output_tokens",
-            "output_token_limit_exceeded",
-            "The Codex output limit exceeds the configured operator maximum.",
-            diagnostics=_limit_facts(
-                output_tokens_value=output_tokens,
-                operator_output_ceiling=settings.CODEX_ABSOLUTE_MAX_OUTPUT_TOKENS,
-            ),
-        )
+    # Preserve a client-provided budget even when it is below the default.
+    # Compact has no public output field: keep its endpoint-specific default,
+    # rather than substituting the create-route default or the route maximum.
+    requested_output_tokens = (
+        limits.default_max_output_tokens
+        if policy_result.injected_default_output_tokens and include_output_field
+        else policy_result.requested_output_tokens
+    )
+    output_tokens = min(
+        requested_output_tokens,
+        limits.max_output_tokens,
+        settings.CODEX_ABSOLUTE_MAX_OUTPUT_TOKENS,
+    )
     if policy_result.estimated_input_tokens > settings.CODEX_ABSOLUTE_MAX_INPUT_TOKENS:
         _raise(
             "input",
@@ -4659,7 +4628,7 @@ def apply_codex_route_limits(
     return policy_result.model_copy(
         update={
             "effective_body": effective_body,
-            "requested_output_tokens": output_tokens,
+            "requested_output_tokens": requested_output_tokens,
             "effective_output_tokens": output_tokens,
             "codex_context_window_tokens": limits.context_window_tokens,
             "codex_limits_applied": True,

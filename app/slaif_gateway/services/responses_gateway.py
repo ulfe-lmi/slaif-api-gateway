@@ -1027,7 +1027,6 @@ async def handle_response_compact(
                 route_capabilities=route.capabilities,
                 settings=settings,
                 include_output_field=False,
-                reserve_route_max_output=True,
             )
         except RequestPolicyError as exc:
             raise openai_error_from_request_policy_error(exc) from exc
@@ -1082,7 +1081,6 @@ async def handle_response_compact(
                     route_capabilities=new_route.capabilities,
                     settings=settings,
                     include_output_field=False,
-                    reserve_route_max_output=True,
                 )
             except RequestPolicyError as exc:
                 raise openai_error_from_request_policy_error(exc) from exc

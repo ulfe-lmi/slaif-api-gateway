@@ -91,7 +91,7 @@ def test_ordinary_responses_keeps_legacy_default() -> None:
     assert result.codex_limits_applied is False
 
 
-def test_codex_compact_reserves_route_maximum_without_forwarding_output_field() -> None:
+def test_codex_compact_reserves_endpoint_default_without_forwarding_output_field() -> None:
     compact = _policy(Settings()).apply_compact(
         {
             "model": "gpt-5.6-sol",
@@ -105,20 +105,18 @@ def test_codex_compact_reserves_route_maximum_without_forwarding_output_field() 
         route_capabilities=_route_capabilities(),
         settings=Settings(),
         include_output_field=False,
-        reserve_route_max_output=True,
     )
-    assert final.requested_output_tokens == 128_000
-    assert final.effective_output_tokens == 128_000
+    assert final.requested_output_tokens == 12_000
+    assert final.effective_output_tokens == 12_000
     assert "max_output_tokens" not in final.effective_body
 
     with pytest.raises(Exception) as context_exc:
         apply_codex_route_limits(
-            compact.model_copy(update={"estimated_input_tokens": 922_001}),
+            compact.model_copy(update={"estimated_input_tokens": 1_038_001}),
             route_capabilities=_route_capabilities(),
             settings=Settings(),
             include_output_field=False,
-            reserve_route_max_output=True,
-        )
+            )
     assert getattr(context_exc.value, "error_code", None) == (
         "responses_codex_context_window_exceeded"
     )
@@ -165,20 +163,19 @@ def test_codex_limits_reject_missing_unknown_and_non_integer_metadata(
     assert getattr(exc_info.value, "error_code", None) == "responses_codex_limits_invalid"
 
 
-def test_codex_output_and_context_edges_are_not_clamped() -> None:
+def test_codex_output_is_clipped_and_context_edges_remain_enforced() -> None:
     exact = apply_codex_route_limits(
         _codex_policy(max_output_tokens=128_000),
         route_capabilities=_route_capabilities(),
         settings=Settings(),
     )
     assert exact.effective_output_tokens == 128_000
-    with pytest.raises(Exception) as max_exc:
-        apply_codex_route_limits(
-            _codex_policy(max_output_tokens=128_001),
-            route_capabilities=_route_capabilities(),
-            settings=Settings(),
-        )
-    assert getattr(max_exc.value, "error_code", None) == "output_token_limit_exceeded"
+    clipped = apply_codex_route_limits(
+        _codex_policy(max_output_tokens=128_001),
+        route_capabilities=_route_capabilities(), settings=Settings(),
+    )
+    assert clipped.requested_output_tokens == 128_001
+    assert clipped.effective_output_tokens == clipped.effective_body["max_output_tokens"] == 128_000
 
     edge = _codex_policy(max_output_tokens=128_000).model_copy(
         update={"estimated_input_tokens": 922_000}

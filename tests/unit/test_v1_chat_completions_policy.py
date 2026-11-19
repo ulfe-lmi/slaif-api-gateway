@@ -274,44 +274,36 @@ def test_missing_messages_returns_openai_shaped_invalid_request_error(monkeypatc
     assert response.json()["error"]["type"] == "invalid_request_error"
 
 
-def test_excessive_max_tokens_returns_openai_shaped_invalid_request_error(monkeypatch) -> None:
+def test_excessive_max_tokens_is_clipped_before_forwarding(monkeypatch) -> None:
     app = create_app()
     _wire_auth_and_db(monkeypatch, app)
-
-    client = TestClient(app)
-    response = client.post(
-        "/v1/chat/completions",
-        json={
-            "model": "gpt-4.1-mini",
-            "messages": [{"role": "user", "content": "hello"}],
-            "max_tokens": 999999,
-        },
-    )
-
-    assert response.status_code == 400
-    assert response.json()["error"]["type"] == "invalid_request_error"
-    assert response.json()["error"]["code"] == "output_token_limit_exceeded"
+    import slaif_gateway.services.chat_completion_gateway as main_module
+    async def resolve(self, requested_model, authenticated_key):
+        return _route_result(requested_model)
+    monkeypatch.setattr(main_module.RouteResolutionService, "resolve_model", resolve)
+    _wire_successful_pricing(monkeypatch)
+    _wire_successful_forwarding(monkeypatch)
+    response = TestClient(app).post("/v1/chat/completions", json={
+        "model": "gpt-4.1-mini", "messages": [{"role": "user", "content": "hello"}],
+        "max_tokens": 999999,
+    })
+    assert response.status_code == 200
 
 
-def test_excessive_max_completion_tokens_returns_openai_shaped_invalid_request_error(
-    monkeypatch,
-) -> None:
+def test_excessive_max_completion_tokens_is_clipped_before_forwarding(monkeypatch) -> None:
     app = create_app()
     _wire_auth_and_db(monkeypatch, app)
-
-    client = TestClient(app)
-    response = client.post(
-        "/v1/chat/completions",
-        json={
-            "model": "gpt-4.1-mini",
-            "messages": [{"role": "user", "content": "hello"}],
-            "max_completion_tokens": 999999,
-        },
-    )
-
-    assert response.status_code == 400
-    assert response.json()["error"]["type"] == "invalid_request_error"
-    assert response.json()["error"]["code"] == "output_token_limit_exceeded"
+    import slaif_gateway.services.chat_completion_gateway as main_module
+    async def resolve(self, requested_model, authenticated_key):
+        return _route_result(requested_model)
+    monkeypatch.setattr(main_module.RouteResolutionService, "resolve_model", resolve)
+    _wire_successful_pricing(monkeypatch)
+    _wire_successful_forwarding(monkeypatch)
+    response = TestClient(app).post("/v1/chat/completions", json={
+        "model": "gpt-4.1-mini", "messages": [{"role": "user", "content": "hello"}],
+        "max_completion_tokens": 999999,
+    })
+    assert response.status_code == 200
 
 
 def test_excessive_estimated_input_returns_openai_shaped_invalid_request_error(monkeypatch) -> None:
