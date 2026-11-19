@@ -14,7 +14,7 @@ are retained. Source provenance in existing reference rows is unchanged.
 There is no schema, key-pin or compatibility-profile migration. The operator
 procedure and restrictions are in [model switching](../codex-model-switching.md).
 
-## Final local verification
+## Initial local verification
 
 | Check | Result |
 | --- | --- |
@@ -75,3 +75,21 @@ checkout or production files. The new switch E2E case failed at B with
 `responses_codex_replay_route_mismatch`, as expected. With the candidate method,
 the full six-case E2E file passed. This isolates the route-binding regression;
 it is not a live-provider or full Codex qualification claim.
+
+## CI follow-up
+
+CI on the initial PR head found that this verification page, added after the
+local unit run, was not reachable from the documentation navigation. That
+failed both documentation hygiene and its unit assertion. The model-switching
+guide now links this record, and the actual documentation checker and its
+13 unit cases pass.
+
+The full integration run also exposed a separate installed-CLI test defect:
+a randomly generated public key ID began with `-` and was passed as an option.
+The driver now puts `--json` before `--` and the identifier after it, and the
+fixture includes a deterministic leading-dash public ID. This changes only the
+test invocation and synthetic seed shape, not production key generation or CLI
+parsing. The standard option-separator usage is documented in the
+[CLI reference](../cli-reference.md).
+The focused installed-wheel lookup/paging test passed against its owned
+PostgreSQL fixture, including that forced leading-dash ID (67.1 seconds).

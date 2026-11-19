@@ -9,6 +9,8 @@ This change applies to gateway replay authorization. It does not add a client
 module/server pairing or make every backend understand every tool or media
 format. Use the [Codex compatibility boundary](codex-compatibility.md) and
 [Responses contract](responses-compatibility.md) for supported shapes.
+The [dated verification record](verification/2026-11-19-codex-model-switching.md)
+separates the local regression evidence from live-provider qualification.
 
 ## What moves and what stays bound
 
