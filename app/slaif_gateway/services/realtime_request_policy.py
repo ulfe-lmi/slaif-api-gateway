@@ -365,12 +365,7 @@ def _normalize_max_output_tokens(value: object, *, settings: Settings) -> int:
             "Realtime max_output_tokens must be positive.",
             param="session.max_output_tokens",
         )
-    if value > settings.REALTIME_MAX_OUTPUT_TOKENS:
-        raise RealtimeInputLimitExceededError(
-            "Realtime max_output_tokens exceeds the configured gateway limit.",
-            param="session.max_output_tokens",
-        )
-    return value
+    return min(value, settings.REALTIME_MAX_OUTPUT_TOKENS)
 
 
 def _csv_set(raw_value: str) -> set[str]:

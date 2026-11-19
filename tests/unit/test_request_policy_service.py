@@ -17,7 +17,6 @@ from slaif_gateway.services.policy_errors import (
     AmbiguousOutputTokenLimitError,
     InputTokenLimitExceededError,
     InvalidOutputTokenLimitError,
-    OutputTokenLimitExceededError,
     RequestPolicyError,
 )
 from slaif_gateway.services.request_policy import ChatCompletionRequestPolicy
@@ -121,17 +120,14 @@ def test_non_positive_output_limit_fails(value: int) -> None:
         )
 
 
-def test_output_limit_above_hard_max_fails() -> None:
-    policy = ChatCompletionRequestPolicy(_settings())
-
-    with pytest.raises(OutputTokenLimitExceededError):
-        policy.apply(
-            {
-                "model": "gpt-4.1-mini",
-                "messages": [{"role": "user", "content": "hello"}],
-                "max_completion_tokens": 41,
-            }
-        )
+def test_output_limit_above_hard_max_is_clipped_without_losing_requested_value() -> None:
+    result = ChatCompletionRequestPolicy(_settings()).apply({
+        "model": "gpt-4.1-mini", "messages": [{"role": "user", "content": "hello"}],
+        "max_completion_tokens": 41,
+    })
+    assert result.requested_output_tokens == 41
+    assert result.effective_output_tokens == 40
+    assert result.effective_body["max_completion_tokens"] == 40
 
 
 @pytest.mark.parametrize("value", ["20", True])

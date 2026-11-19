@@ -20,7 +20,7 @@ from slaif_gateway.schemas.pricing import (
 from slaif_gateway.schemas.providers import ProviderResponse, ProviderUsage
 from slaif_gateway.schemas.quota import QuotaReservationResult
 from slaif_gateway.schemas.routing import RouteResolutionResult
-from slaif_gateway.services.policy_errors import OutputTokenLimitExceededError
+from slaif_gateway.services.policy_errors import InvalidOutputTokenLimitError
 from slaif_gateway.services.pricing_errors import PricingRuleNotFoundError
 from slaif_gateway.services.quota_errors import QuotaLimitExceededError
 from slaif_gateway.services.routing_errors import ModelNotFoundError
@@ -598,12 +598,12 @@ def test_policy_error_happens_before_route_pricing_or_quota(monkeypatch) -> None
         json={
             "model": "classroom-cheap",
             "messages": [{"role": "user", "content": "hello"}],
-            "max_tokens": 999999,
+            "max_tokens": 0,
         },
     )
 
     assert response.status_code == 400
-    assert response.json()["error"]["code"] == OutputTokenLimitExceededError.error_code
+    assert response.json()["error"]["code"] == InvalidOutputTokenLimitError.error_code
     assert route_calls == []
     assert pricing_calls == []
     assert quota_calls == []

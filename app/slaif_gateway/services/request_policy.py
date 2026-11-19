@@ -26,7 +26,6 @@ from slaif_gateway.services.policy_errors import (
     InvalidOutputTokenLimitError,
     InvalidRequestBodyError,
     InvalidStreamOptionsError,
-    OutputTokenLimitExceededError,
 )
 
 
@@ -101,29 +100,30 @@ class ChatCompletionRequestPolicy:
         )
 
     def _resolve_output_token_limit(self, body: dict[str, Any]) -> tuple[int, int, bool]:
-        max_tokens = body.get("max_tokens")
-        max_completion_tokens = body.get("max_completion_tokens")
-
-        if max_tokens is not None and max_completion_tokens is not None:
-            if max_tokens != max_completion_tokens:
-                raise AmbiguousOutputTokenLimitError(
-                    "Request must not set both 'max_tokens' and 'max_completion_tokens' with "
-                    "different values.",
-                    param="max_completion_tokens",
-                )
-
-        if max_completion_tokens is not None:
-            limit = self._validate_output_token_value(
-                max_completion_tokens,
+        # Validate both aliases before comparing or clipping: equal clipped
+        # values must not hide conflicting original fields (or a bool alias).
+        supplied = {
+            name: self._validate_output_token_value(body[name], param=name)
+            for name in ("max_tokens", "max_completion_tokens")
+            if body.get(name) is not None
+        }
+        if len(supplied) == 2 and len(set(supplied.values())) != 1:
+            raise AmbiguousOutputTokenLimitError(
+                "Request must not set both 'max_tokens' and 'max_completion_tokens' with "
+                "different values.",
                 param="max_completion_tokens",
             )
-            return limit, limit, False
+        if supplied:
+            requested = next(iter(supplied.values()))
+            effective = min(requested, self._settings.HARD_MAX_OUTPUT_TOKENS)
+            for name in supplied:
+                body[name] = effective
+            return requested, effective, False
 
-        if max_tokens is not None:
-            limit = self._validate_output_token_value(max_tokens, param="max_tokens")
-            return limit, limit, False
-
-        default_limit = self._settings.DEFAULT_MAX_OUTPUT_TOKENS
+        default_limit = min(
+            self._settings.DEFAULT_MAX_OUTPUT_TOKENS,
+            self._settings.HARD_MAX_OUTPUT_TOKENS,
+        )
         body["max_completion_tokens"] = default_limit
         return default_limit, default_limit, True
 
@@ -180,15 +180,6 @@ class ChatCompletionRequestPolicy:
         if value <= 0:
             raise InvalidOutputTokenLimitError(
                 f"The '{param}' field must be a positive integer.",
-                param=param,
-            )
-
-        if value > self._settings.HARD_MAX_OUTPUT_TOKENS:
-            raise OutputTokenLimitExceededError(
-                (
-                    f"The '{param}' field exceeds the configured hard maximum "
-                    f"({self._settings.HARD_MAX_OUTPUT_TOKENS})."
-                ),
                 param=param,
             )
 

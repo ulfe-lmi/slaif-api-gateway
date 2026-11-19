@@ -322,11 +322,11 @@ denied. Raw output IDs are transient provider input and never enter safe
 evidence or persistence.
 
 The pinned V1 compact request does not carry `max_output_tokens`. SLAIF keeps
-that field absent in the provider request while using the validated Codex route
-maximum (128,000 for the qualification profile) as effective/requested output
+that field absent in the provider request while using the configured compact
+endpoint default (12,000 by default), capped at applicable maxima, as output
 exposure for context admission, quota reservation, pricing, and safe evidence.
-This exception changes neither ordinary compact's configured default nor
-ordinary Responses output-default behavior.
+It does not substitute the create-route default or maximum. Ordinary Responses
+continues to use its configured create default when the client omits a limit.
 
 The Codex provider response must contain supported final usage and exactly one
 opaque `compaction` item with a safe ID and non-empty capped encrypted content.
@@ -1298,3 +1298,16 @@ promotion requires restart and audited active-key pin migration, without key
 rotation or quota changes. See the
 [preset contract](client-compatibility-presets.md#codex-01670-declaration-compatibility)
 and [bounded verification](verification/2026-11-10-codex-0167.md).
+
+### Output-limit clipping and matching reservations
+
+Responses create preserves smaller explicit `max_output_tokens`, clips larger
+positive values to the applicable gateway ceiling, and injects a configured
+default only for omitted/null values. Gated Codex uses the lower of route and
+operator maxima. Pricing, rate admission, context checks and quota reservation
+use the effective forwarded output budget. The original client request remains
+in policy facts, not as a larger charge or reservation. Compact accepts no
+output-token parameter and reserves its configured compact default, capped
+at applicable maxima, rather than the create-route maximum. Malformed values,
+input/context limits, capabilities and final provider-usage accounting are
+unchanged. No key rotation, schema migration, or preset-pin change is required.

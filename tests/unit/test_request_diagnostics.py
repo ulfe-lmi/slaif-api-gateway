@@ -617,70 +617,37 @@ def _codex_policy_result(
     )
 
 
-def test_operator_output_ceiling_recorded_when_it_is_the_rejecting_ceiling() -> None:
-    from slaif_gateway.services.responses_request_policy import (
-        ResponsesRequestPolicyError,
-        apply_codex_route_limits,
+def test_operator_output_ceiling_clips_without_rejecting_valid_request() -> None:
+    from slaif_gateway.services.responses_request_policy import apply_codex_route_limits
+    result = apply_codex_route_limits(
+        _codex_policy_result(max_output_tokens=120_000),
+        route_capabilities=_codex_route_capabilities(),
+        settings=Settings(CODEX_ABSOLUTE_MAX_OUTPUT_TOKENS=100_000),
     )
-
-    settings = Settings(CODEX_ABSOLUTE_MAX_OUTPUT_TOKENS=100_000)
-    # route max is 128_000, request asks 120_000: within the route max but
-    # beyond the operator ceiling, so the operator ceiling rejects.
-    with pytest.raises(ResponsesRequestPolicyError) as excinfo:
-        apply_codex_route_limits(
-            _codex_policy_result(max_output_tokens=120_000),
-            route_capabilities=_codex_route_capabilities(),
-            settings=settings,
-        )
-    facts = excinfo.value.diagnostics_facts
-    assert facts is not None
-    # the distinct operator ceiling is retained under its own finite key,
-    # alongside the (non-rejecting) route max
-    assert facts["limits"]["max_output_tokens"] == 128_000
-    assert facts["limits"]["absolute_max_output_tokens"] == 100_000
+    assert result.requested_output_tokens == 120_000
+    assert result.effective_output_tokens == result.effective_body["max_output_tokens"] == 100_000
 
 
-def test_route_default_beyond_operator_ceiling_records_operator_ceiling() -> None:
-    from slaif_gateway.services.responses_request_policy import (
-        ResponsesRequestPolicyError,
-        apply_codex_route_limits,
+def test_route_default_beyond_operator_ceiling_is_clipped() -> None:
+    from slaif_gateway.services.responses_request_policy import apply_codex_route_limits
+    result = apply_codex_route_limits(
+        _codex_policy_result(),
+        route_capabilities=_codex_route_capabilities(default_max_output_tokens=40_000),
+        settings=Settings(CODEX_ABSOLUTE_MAX_OUTPUT_TOKENS=30_000),
     )
-
-    settings = Settings(CODEX_ABSOLUTE_MAX_OUTPUT_TOKENS=30_000)
-    with pytest.raises(ResponsesRequestPolicyError) as excinfo:
-        apply_codex_route_limits(
-            _codex_policy_result(),
-            route_capabilities=_codex_route_capabilities(default_max_output_tokens=40_000),
-            settings=settings,
-        )
-    facts = excinfo.value.diagnostics_facts
-    assert facts is not None
-    assert facts["limits"]["absolute_max_output_tokens"] == 30_000
-    assert facts["limits"]["max_output_tokens"] == 128_000
+    assert result.injected_default_output_tokens
+    assert result.effective_output_tokens == result.effective_body["max_output_tokens"] == 30_000
 
 
-def test_route_max_rejection_does_not_claim_operator_ceiling() -> None:
-    from slaif_gateway.services.responses_request_policy import (
-        ResponsesRequestPolicyError,
-        apply_codex_route_limits,
-    )
-
+def test_route_ceiling_clips_below_the_operator_ceiling() -> None:
+    from slaif_gateway.services.responses_request_policy import apply_codex_route_limits
     settings = Settings(CODEX_ABSOLUTE_MAX_OUTPUT_TOKENS=200_000)
-    # request beyond the route max (128_000) but below the operator ceiling:
-    # the route max is the rejecting ceiling, so no operator-ceiling fact.
-    # The policy itself must be built with the higher ceiling so it does not
-    # reject first.
-    policy_result = _codex_policy_result(settings, max_output_tokens=150_000)
-    with pytest.raises(ResponsesRequestPolicyError) as excinfo:
-        apply_codex_route_limits(
-            policy_result,
-            route_capabilities=_codex_route_capabilities(),
-            settings=settings,
-        )
-    facts = excinfo.value.diagnostics_facts
-    assert facts is not None
-    assert facts["limits"]["max_output_tokens"] == 128_000
-    assert "absolute_max_output_tokens" not in facts["limits"]
+    result = apply_codex_route_limits(
+        _codex_policy_result(settings, max_output_tokens=150_000),
+        route_capabilities=_codex_route_capabilities(), settings=settings,
+    )
+    assert result.requested_output_tokens == 150_000
+    assert result.effective_output_tokens == result.effective_body["max_output_tokens"] == 128_000
 
 
 @pytest.mark.parametrize("code", [

@@ -315,24 +315,21 @@ def test_missing_model_returns_shape_error_before_route_or_pricing(monkeypatch) 
     assert pricing_calls == []
 
 
-def test_excessive_max_tokens_returns_policy_error_before_route_or_pricing(monkeypatch) -> None:
+def test_excessive_max_tokens_is_clipped_then_reaches_route_and_pricing(monkeypatch) -> None:
     route_calls, pricing_calls = _wire_counting_route_and_pricing(monkeypatch)
+    import slaif_gateway.services.chat_completion_gateway as main_module
+    async def capture(self, **kwargs):
+        return _valid_capture()
+    monkeypatch.setattr(main_module.PricingService, "capture_pricing_and_fx", capture)
     app = create_app()
     _wire_auth_and_db(monkeypatch, app)
-
-    response = TestClient(app).post(
-        "/v1/chat/completions",
-        json={
-            "model": "classroom-cheap",
-            "messages": [{"role": "user", "content": "hello"}],
-            "max_tokens": 999999,
-        },
-    )
-
-    assert response.status_code == 400
-    assert response.json()["error"]["code"] == "output_token_limit_exceeded"
-    assert route_calls == []
-    assert pricing_calls == []
+    _wire_successful_forwarding(monkeypatch)
+    response = TestClient(app).post("/v1/chat/completions", json={
+        "model": "classroom-cheap", "messages": [{"role": "user", "content": "hello"}],
+        "max_tokens": 999999,
+    })
+    assert response.status_code == 200
+    assert route_calls and pricing_calls
 
 
 def test_unsupported_model_returns_route_error_before_pricing(monkeypatch) -> None:
@@ -346,7 +343,7 @@ def test_unsupported_model_returns_route_error_before_pricing(monkeypatch) -> No
         _ = (self, requested_model, authenticated_key)
         raise ModelNotFoundError()
 
-    async def _fake_estimate_chat_completion_cost(self, *, route, policy, endpoint="chat.completions", at=None):
+    async def _fake_estimate_chat_completion_cost(self, *, route, policy, endpoint="chat.completions", at=None, pricing=None, fx=None):
         _ = (self, route, policy, endpoint, at)
         pricing_calls.append("called")
         return object()
@@ -380,7 +377,7 @@ def _wire_counting_route_and_pricing(monkeypatch) -> tuple[list[str], list[str]]
         route_calls.append(requested_model)
         return _route_result(requested_model)
 
-    async def _fake_estimate_chat_completion_cost(self, *, route, policy, endpoint="chat.completions", at=None):
+    async def _fake_estimate_chat_completion_cost(self, *, route, policy, endpoint="chat.completions", at=None, pricing=None, fx=None):
         _ = (self, policy, endpoint, at)
         pricing_calls.append(route.requested_model)
         return object()

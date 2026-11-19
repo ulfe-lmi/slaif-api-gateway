@@ -1129,7 +1129,7 @@ HARD_MAX_INPUT_TOKENS=128000
 Rules:
 
 - If the client omits output-token controls (`max_tokens`, `max_completion_tokens`, or `max_output_tokens`, depending on endpoint), the gateway must inject a safe configured default before forwarding.
-- If the client requests more than the configured hard limit, reject with an OpenAI-shaped error. Do not silently clamp unless explicitly documented later.
+- For a valid positive client output limit, forward and reserve the smaller of that request and the applicable gateway maximum. Never replace a smaller explicit limit with a default or maximum. If omitted, inject and reserve the applicable configured default, capped at the gateway maximum. Invalid values and conflicting Chat token aliases still return OpenAI-shaped errors.
 - If the request body exceeds the configured input-token limit, reject before forwarding.
 - Quota reservation must be based on the effective request after gateway policy is applied.
 - Endpoint-specific names must be handled carefully: Chat Completions may use `max_tokens` or `max_completion_tokens`; Responses may use `max_output_tokens`.
