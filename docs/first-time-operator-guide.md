@@ -500,6 +500,68 @@ whichever catalog model the key allows. If `data` is empty, use the
 ["No Models Are Visible"](#no-models-are-visible) troubleshooting checklist
 below.
 
+### Optional: Bind A Key To A Native Chat Client Profile
+
+The gateway ships two bounded, data-driven Chat client profiles for
+agentic CLI clients: `hermes-0.22.5-chat-v1` (Hermes 0.22.5) and
+`opencode-1.19.3-chat-v1` (OpenCode 1.19.3). Both speak the standard
+`/v1/chat/completions` wire. Binding a key to a profile is optional: keys
+without a pin keep the default `openai-default` Chat behavior, and the
+standard OpenAI client works unchanged.
+
+A profile pin is a strict `{id, version, fixture_sha256}` object stored in
+the key policy under `chat_client_module`. An absent field preserves the
+current binding, an explicit `null` clears only the Chat binding, and any
+malformed, unknown, or stale pin fails closed before admission.
+
+Bind a key to the Hermes profile:
+
+```bash
+cat > /tmp/hermes-chat-pin.json <<'JSON'
+{
+  "chat_client_module": {
+    "id": "hermes-0.22.5-chat-v1",
+    "version": 2,
+    "fixture_sha256": "c5e34d46270280d7e08639c01c28065380a2a80843c1114ac1f1ad2a2744d327"
+  }
+}
+JSON
+
+run-cli slaif-gateway keys policy-update <key-id> \
+  --policy-file /tmp/hermes-chat-pin.json \
+  --reason "Bind key to Hermes 0.22.5 Chat client profile"
+```
+
+For OpenCode 1.19.3, use `id` `opencode-1.19.3-chat-v1`, `version` `1`,
+and `fixture_sha256`
+`2bd4f2599456892bb5d5119a85c9ffe9525796c1aa934ad46b49ce34d18f0e14`.
+
+Inspect and export the binding:
+
+```bash
+run-cli slaif-gateway keys policy-show <key-id>
+run-cli slaif-gateway keys policy-effective <key-id>
+run-cli slaif-gateway keys policy-export <key-id>
+```
+
+Upgrading a profile (for example a new DATA revision with a new fixture
+digest) is an operator action: re-pin the key to the new
+`{id, version, fixture_sha256}` and restart API, worker, and scheduler.
+There is no automatic profile upgrade, rotation, or migration command. To
+roll back, clear the pin:
+
+```bash
+echo '{"chat_client_module": null}' > /tmp/clear-chat-pin.json
+
+run-cli slaif-gateway keys policy-update <key-id> \
+  --policy-file /tmp/clear-chat-pin.json \
+  --reason "Clear Chat client profile pin"
+```
+
+The key returns to `openai-default` behavior. These profiles are
+candidate dossiers: the protected live gate is `not_run`, and no
+production live inference is recorded for them.
+
 ## Real-Provider Smoke Test
 
 This step requires a real `OPENAI_UPSTREAM_API_KEY` in `.env` (applied with
