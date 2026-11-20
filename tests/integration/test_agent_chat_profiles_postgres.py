@@ -22,12 +22,14 @@ import uuid
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
+import httpx
 import pytest
-from sqlalchemy import text
+from fastapi.testclient import TestClient
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from slaif_gateway.config import Settings
-from slaif_gateway.db.models import GatewayKey
+from slaif_gateway.db.models import GatewayKey, QuotaReservation, UsageLedger
 from slaif_gateway.db.repositories.audit import AuditRepository
 from slaif_gateway.db.repositories.cohorts import CohortsRepository
 from slaif_gateway.db.repositories.institutions import InstitutionsRepository
@@ -37,6 +39,7 @@ from slaif_gateway.db.repositories.owners import OwnersRepository
 from slaif_gateway.db.repositories.pricing import PricingRulesRepository
 from slaif_gateway.db.repositories.provider_configs import ProviderConfigsRepository
 from slaif_gateway.db.repositories.routing import ModelRoutesRepository
+from slaif_gateway.main import create_app
 from slaif_gateway.modules.clients.agent_chat import (
     agent_chat_profile_metadata,
     bootstrap_agent_chat_client_modules,
@@ -64,6 +67,14 @@ TEST_MODEL = "gpt-227-agent-chat-profile"
 TEST_HMAC_SECRET = "test-hmac-secret-for-agent-chat-profile-1234567890"
 TEST_ADMIN_SECRET = "test-admin-secret-for-agent-chat-profile-1234567890"
 TEST_ONE_TIME_SECRET_KEY = "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY"
+
+# Runtime dispatch (round 3) requires a provider of the existing
+# "openai_compatible" kind: the seed "openai" provider is the NATIVE
+# built-in slug and is intentionally NOT a qualified Chat pair. Never
+# widen the pair registry or mock the gate away to make these pass.
+RUNTIME_MODEL = "gpt-227-agent-chat-runtime"
+HERMES227_SVC_KEY_ENV = "HERMES227_SVC_KEY"
+FAKE_COMPATIBLE_UPSTREAM_KEY = "fake-227-hermes-compatible-upstream-key"
 
 _SEED_CACHE: dict[str, dict[str, uuid.UUID]] = {}
 
@@ -641,3 +652,280 @@ async def test_chat_pin_rotation_preserves_persisted_pin_and_existing_audits(
                 assert canary not in blob
     finally:
         await engine.dispose()
+
+
+# ---------------------------------------------------------------------------
+# Round 3: runtime dispatch and PostgreSQL accounting over real HTTP
+# ---------------------------------------------------------------------------
+
+
+async def _seed_runtime_route(database_url: str, suffix: str) -> tuple[str, str]:
+    """Unique openai_compatible provider + explicit Chat route + pricing.
+
+    Returns (provider_slug, base_url); the base_url is the respx target.
+    The provider slug is unique per invocation, so the route/model pair is
+    owned by the calling test.
+    """
+    engine = create_async_engine(database_url, future=True)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    now = datetime.now(UTC)
+    try:
+        async with factory() as session:
+            async with session.begin():
+                providers = ProviderConfigsRepository(session)
+                provider_slug = f"227compat-{suffix}"
+                assert await providers.get_provider_config_by_provider(
+                    provider_slug
+                ) is None
+                base_url = f"https://svc-227-{suffix}.example/v1"
+                await providers.create_provider_config(
+                    provider=provider_slug,
+                    display_name=f"227 Hermes-compatible service {suffix}",
+                    kind="openai_compatible",
+                    base_url=base_url,
+                    api_key_env_var=HERMES227_SVC_KEY_ENV,
+                    enabled=True,
+                    timeout_seconds=300,
+                    max_retries=0,
+                    notes="227 agent Chat profile runtime test provider",
+                )
+                await ModelRoutesRepository(session).create_model_route(
+                    requested_model=RUNTIME_MODEL,
+                    provider=provider_slug,
+                    upstream_model=RUNTIME_MODEL,
+                    match_type="exact",
+                    endpoint=CHAT_ENDPOINT,
+                    priority=1,
+                    visible_in_models=True,
+                    supports_streaming=False,
+                    notes="227 agent Chat profile runtime test route",
+                )
+                await PricingRulesRepository(session).create_pricing_rule(
+                    provider=provider_slug,
+                    upstream_model=RUNTIME_MODEL,
+                    endpoint=CHAT_ENDPOINT,
+                    valid_from=now - timedelta(days=1),
+                    currency="EUR",
+                    input_price_per_1m=Decimal("1.000000000"),
+                    output_price_per_1m=Decimal("1.000000000"),
+                    request_price=Decimal("0.000000000"),
+                    notes="227 agent Chat profile runtime test pricing",
+                )
+    finally:
+        await engine.dispose()
+    return provider_slug, base_url
+
+
+def _runtime_settings(database_url: str) -> Settings:
+    return Settings(
+        APP_ENV="test",
+        DATABASE_URL=database_url,
+        TOKEN_HMAC_SECRET_V1=TEST_HMAC_SECRET,
+        ADMIN_SESSION_SECRET=TEST_ADMIN_SECRET,
+        ONE_TIME_SECRET_ENCRYPTION_KEY=TEST_ONE_TIME_SECRET_KEY,
+        HARD_MAX_INPUT_TOKENS=10_000,
+        DEFAULT_MAX_OUTPUT_TOKENS=100,
+    )
+
+
+async def _runtime_state(database_url: str, gateway_key_id: uuid.UUID):
+    """(GatewayKey, reservations desc, ledgers desc) through a fresh session."""
+    engine = create_async_engine(database_url, future=True)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    try:
+        async with factory() as session:
+            reservations = (
+                await session.execute(
+                    select(QuotaReservation)
+                    .where(QuotaReservation.gateway_key_id == gateway_key_id)
+                    .order_by(QuotaReservation.created_at.desc())
+                )
+            ).scalars().all()
+            ledgers = (
+                await session.execute(
+                    select(UsageLedger)
+                    .where(UsageLedger.gateway_key_id == gateway_key_id)
+                    .order_by(UsageLedger.created_at.desc())
+                )
+            ).scalars().all()
+            gateway_key = await session.get(GatewayKey, gateway_key_id)
+            return gateway_key, reservations, ledgers
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_chat_pin_runtime_hermes_success_finalizes_pg_usage(
+    migrated_postgres_url: str,
+    respx_mock,
+    monkeypatch,
+) -> None:
+    """Authenticated current Hermes pin dispatches and finalizes on PG.
+
+    Real TestClient HTTP + real PostgreSQL: the finite pair gate passes
+    for the unique openai_compatible provider (never the native 'openai'
+    seed), the Hermes profile decodes xhigh + the local read_file
+    declaration, the body reaches the mocked generic upstream with the
+    substituted fake provider key, and PostgreSQL accounting ends with
+    exactly one finalized reservation/ledger and zero pending counters.
+    """
+    seed = await _seed(migrated_postgres_url)
+    suffix = uuid.uuid4().hex[:12]
+    provider_slug, base_url = await _seed_runtime_route(migrated_postgres_url, suffix)
+    assert provider_slug not in {"openai", "openrouter"}
+    hermes_pin = _module_pin(HERMES_MODULE_ID)
+    now = datetime.now(UTC)
+
+    engine = create_async_engine(migrated_postgres_url, future=True)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    try:
+        async with factory() as session:
+            service = _service(session)
+            created = await service.create_gateway_key(
+                CreateGatewayKeyInput(
+                    owner_id=seed["owner_id"],
+                    cohort_id=seed["cohort_id"],
+                    valid_from=now - timedelta(minutes=5),
+                    valid_until=now + timedelta(days=1),
+                    cost_limit_eur=Decimal("10.000000000"),
+                    token_limit_total=100_000,
+                    request_limit_total=100,
+                    allowed_models=[RUNTIME_MODEL],
+                    allowed_endpoints=[CHAT_ENDPOINT],
+                    note="227 agent Chat profile runtime success key",
+                    chat_client_module=hermes_pin,
+                )
+            )
+            await session.commit()
+            plaintext_key = created.plaintext_key
+            key_id = created.gateway_key_id
+    finally:
+        await engine.dispose()
+
+    request_body = {
+        "model": RUNTIME_MODEL,
+        "messages": [{"role": "user", "content": "Read the log file."}],
+        "reasoning_effort": "xhigh",
+        "stream": False,
+        "tools": [
+            {
+                "type": "function",
+                "function": {
+                    "name": "read_file",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"path": {"type": "string"}},
+                        "required": ["path"],
+                    },
+                },
+            }
+        ],
+    }
+
+    monkeypatch.setenv(HERMES227_SVC_KEY_ENV, FAKE_COMPATIBLE_UPSTREAM_KEY)
+    upstream = respx_mock.post(f"{base_url}/chat/completions").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl_227_hermes",
+                "object": "chat.completion",
+                "model": RUNTIME_MODEL,
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {"role": "assistant", "content": "Done."},
+                        "finish_reason": "stop",
+                    }
+                ],
+                "usage": {
+                    "prompt_tokens": 5,
+                    "completion_tokens": 6,
+                    "total_tokens": 11,
+                },
+            },
+            headers={"x-request-id": "upstream-227-hermes"},
+        )
+    )
+
+    app = create_app(_runtime_settings(migrated_postgres_url))
+    with TestClient(app) as client:
+        response = client.post(
+            CHAT_ENDPOINT,
+            headers={"Authorization": f"Bearer {plaintext_key}"},
+            json=request_body,
+        )
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["id"] == "chatcmpl_227_hermes"
+    assert body["choices"][0]["message"]["content"] == "Done."
+    assert body["usage"]["total_tokens"] == 11
+
+    # Exact forwarding through the profile-decoded canonical body.
+    assert len(upstream.calls) == 1
+    upstream_body = json.loads(upstream.calls[0].request.content)
+    assert upstream_body["model"] == RUNTIME_MODEL
+    assert upstream_body["messages"] == request_body["messages"]
+    assert upstream_body["tools"] == request_body["tools"]
+    assert upstream_body["reasoning_effort"] == "xhigh"
+    upstream_headers = {
+        name.lower(): value for name, value in upstream.calls[0].request.headers.items()
+    }
+    assert upstream_headers.get("authorization") == (
+        f"Bearer {FAKE_COMPATIBLE_UPSTREAM_KEY}"
+    )
+    raw_upstream = upstream.calls[0].request.content.decode("utf-8", "replace")
+    assert plaintext_key not in raw_upstream
+    assert "sk-slaif-" not in raw_upstream
+
+    # PostgreSQL accounting: exactly one terminal reservation + ledger row,
+    # zero pending reservations, correct actual usage.
+    gateway_key, reservations, ledgers = await _runtime_state(
+        migrated_postgres_url, key_id
+    )
+    assert len(reservations) == 1
+    assert len(ledgers) == 1
+    reservation, ledger = reservations[0], ledgers[0]
+    assert reservation.status == "finalized"
+    assert reservation.reserved_tokens > 0
+    assert gateway_key.tokens_reserved_total == 0
+    assert gateway_key.requests_reserved_total == 0
+    assert gateway_key.cost_reserved_eur == Decimal("0")
+    assert gateway_key.tokens_used_total == 11
+    assert gateway_key.requests_used_total == 1
+    # 5 input + 6 output tokens at 1.00 EUR/1M each = 0.000011 EUR actual.
+    assert gateway_key.cost_used_eur == Decimal("0.000011")
+    assert ledger.accounting_status == "finalized"
+    assert ledger.prompt_tokens == 5
+    assert ledger.completion_tokens == 6
+    assert ledger.total_tokens == 11
+
+    # The persisted pin survives dispatch; no secrets in the persisted set.
+    assert (gateway_key.metadata_json or {}).get("chat_client_module") == hermes_pin
+    db_payload = json.dumps(
+        {
+            "gateway_key": {
+                "public_key_id": gateway_key.public_key_id,
+                "key_hint": gateway_key.key_hint,
+                "token_hash": gateway_key.token_hash,
+                "metadata": gateway_key.metadata_json,
+            },
+            "reservation": {
+                "request_id": reservation.request_id,
+                "requested_model": reservation.requested_model,
+                "status": reservation.status,
+            },
+            "ledger": {
+                "usage_raw": ledger.usage_raw,
+                "response_metadata": ledger.response_metadata,
+                "error_message": ledger.error_message,
+            },
+        },
+        sort_keys=True,
+        default=str,
+    )
+    assert FAKE_COMPATIBLE_UPSTREAM_KEY not in db_payload
+    assert plaintext_key not in db_payload
+    # Note: the persisted ``key_hint`` intentionally retains the public key
+    # prefix, so the ``sk-slaif-`` prefix absence is NOT asserted on the
+    # persisted set; exact full-key and provider-secret absence are.
