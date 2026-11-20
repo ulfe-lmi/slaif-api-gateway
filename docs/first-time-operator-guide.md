@@ -500,6 +500,118 @@ whichever catalog model the key allows. If `data` is empty, use the
 ["No Models Are Visible"](#no-models-are-visible) troubleshooting checklist
 below.
 
+### Optional: Bind A Key To A Native Chat Client Profile
+
+The gateway ships two bounded, data-driven Chat client profiles for
+agentic CLI clients: `hermes-0.22.5-chat-v1` (Hermes 0.22.5) and
+`opencode-1.19.3-chat-v1` (OpenCode 1.19.3). Both speak the standard
+`/v1/chat/completions` wire. Binding a key to a profile is optional: keys
+without a pin keep the default `openai-default` Chat behavior, and the
+standard OpenAI client works unchanged.
+
+A profile pin is a strict `{id, version, fixture_sha256}` object with
+string values, stored in the key policy under `chat_client_module`. A
+policy file must be a top-level `schema_version` 1 key-configuration
+document; an omitted field preserves the current binding, an explicit
+`null` clears only the Chat binding, and malformed, unknown, or stale
+pins - including a numeric `version` - fail closed before admission.
+
+Bind a key to the Hermes profile. `run-cli` mounts only the current
+working directory into `/workspace`, so keep the policy file in the
+current directory:
+
+```bash
+cat > ./hermes-chat-pin.json <<'JSON'
+{
+  "schema_version": 1,
+  "chat_client_module": {
+    "id": "hermes-0.22.5-chat-v1",
+    "version": "2",
+    "fixture_sha256": "c5e34d46270280d7e08639c01c28065380a2a80843c1114ac1f1ad2a2744d327"
+  }
+}
+JSON
+
+run-cli slaif-gateway keys policy update <key-id> \
+  --policy-file ./hermes-chat-pin.json \
+  --reason "Bind key to Hermes 0.22.5 Chat client profile"
+```
+
+For OpenCode 1.19.3, use `id` `opencode-1.19.3-chat-v1`, `version`
+`"1"`, and `fixture_sha256`
+`2bd4f2599456892bb5d5119a85c9ffe9525796c1aa934ad46b49ce34d18f0e14`.
+
+Inspect the binding. Only `keys policy export` renders the stored
+`chat_client_module` pin (or `null`); `keys policy show` and `keys policy
+effective` do not display the Chat pin:
+
+```bash
+run-cli slaif-gateway keys policy export <key-id>
+```
+
+The OpenCode profile additionally requires two operator environment
+values in `.env` (applied with `./scripts/docker-refresh.sh
+--env-only`); global defaults are unchanged (both default to `4096`):
+
+```bash
+CHAT_MAX_TOOL_DESCRIPTION_BYTES=8192
+HARD_MAX_OUTPUT_TOKENS=32768
+```
+
+Upgrading a profile is a DATA revision, not an automatic event. Profile
+DATA is baked into the image, and each process loads ONE identity per
+module id from it; a pin resolves only when its `fixture_sha256` matches
+the deployed revision, so a digest mismatch fails that key closed. A
+data-only revision therefore does NOT require a new code/package/image:
+bind-mount a reviewed JSON read-only at the exact packaged profile paths
+on api, worker, and scheduler, recreate the services, and re-pin each key
+to the new `{id, version, fixture_sha256}`. A full image/package upgrade
+is an alternative, not a requirement. The policy file you pass to `keys
+policy update` (in the `run-cli` workspace) is a SEPARATE mount from the
+profile DATA file, so keeping it in the working directory preserves only
+the pin document, not the baked profile DATA. There is no automatic
+profile upgrade, rotation, or migration command. See the [upgrade
+runbook](upgrade-runbook.md#hermesopencode-chat-client-profile-upgrade-and-rollback-227-a)
+for the exact data-only, image, and rollback steps.
+
+Rollback is a full revision restore, not just a re-pin: each process
+loads exactly ONE identity per module id from its packaged DATA, so the
+previous pin only resolves once the matching previous trusted
+revision (the previous image, or the previous reviewed profile DATA at
+the packaged paths) is deployed to API, worker, and scheduler (and the
+CLI that applies the pin, which bootstraps the same registry). Deploy
+that revision, recreate/restart, and only then apply the exact previous
+`{id, version, fixture_sha256}` with the matching CLI. While a key's
+pin digest and the deployed DATA digest mismatch, requests for that key
+fail closed. A previous revision must itself be reviewed and
+qualified; the gateway makes no automatic compatibility promise.
+
+Clearing the pin is a *deliberate* disable, not a rollback: after
+`null`, the key returns to `openai-default` Chat validation, and a
+client tuned to a profile's widened envelope (for example Hermes
+`xhigh` reasoning effort) may fail default validation until the pin is
+restored:
+
+```bash
+cat > ./clear-chat-pin.json <<'JSON'
+{
+  "schema_version": 1,
+  "chat_client_module": null
+}
+JSON
+
+run-cli slaif-gateway keys policy update <key-id> \
+  --policy-file ./clear-chat-pin.json \
+  --reason "Deliberately clear Chat client profile pin"
+```
+
+These profiles are candidate dossiers: see
+[agentic-clients/hermes-0.22.5-chat-v1.md](agentic-clients/hermes-0.22.5-chat-v1.md)
+and
+[agentic-clients/opencode-1.19.3-chat-v1.md](agentic-clients/opencode-1.19.3-chat-v1.md).
+The protected live gate is `not_run`, and no production live inference
+is recorded for them.
+
 ## Real-Provider Smoke Test
 
 This step requires a real `OPENAI_UPSTREAM_API_KEY` in `.env` (applied with

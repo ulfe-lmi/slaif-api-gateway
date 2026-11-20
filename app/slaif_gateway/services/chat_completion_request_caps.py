@@ -11,6 +11,7 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from slaif_gateway.config import Settings
+from slaif_gateway.modules.clients.agent_chat import AgentChatProfileSpec
 from slaif_gateway.services.input_token_estimation import canonical_json_bytes
 from slaif_gateway.services.policy_errors import RequestPolicyError
 
@@ -44,16 +45,24 @@ def enforce_chat_completion_request_caps(
     payload: Mapping[str, Any],
     *,
     settings: Settings,
+    chat_client_spec: AgentChatProfileSpec | None = None,
 ) -> None:
     """Validate currently supported Chat Completions fields before forwarding.
 
     Error messages intentionally name only fields and limits. They never include
     raw messages, schemas, metadata values, tool arguments, or request bodies.
+
+    ``chat_client_spec`` carries the reviewed profile of one SELECTED Chat
+    client module (None for the default OpenAI dialect). Only the
+    reasoning-effort vocabulary is profile-aware; every other cap remains
+    the deployment-wide default.
     """
 
     _validate_model(payload.get("model"))
     _validate_messages(payload.get("messages"), settings=settings)
-    _validate_scalar_controls(payload, settings=settings)
+    _validate_scalar_controls(
+        payload, settings=settings, chat_client_spec=chat_client_spec
+    )
     _validate_audio_output(payload, settings=settings)
     _validate_stop(payload.get("stop"), settings=settings)
     _validate_user(payload.get("user"), settings=settings)
@@ -984,7 +993,12 @@ def _count_audio_input_parts(content: Any) -> int:
     )
 
 
-def _validate_scalar_controls(payload: Mapping[str, Any], *, settings: Settings) -> None:
+def _validate_scalar_controls(
+    payload: Mapping[str, Any],
+    *,
+    settings: Settings,
+    chat_client_spec: AgentChatProfileSpec | None = None,
+) -> None:
     _validate_number_range(
         payload.get("temperature"),
         param="temperature",
@@ -1053,12 +1067,31 @@ def _validate_scalar_controls(payload: Mapping[str, Any], *, settings: Settings)
 
     reasoning_effort = payload.get("reasoning_effort")
     if reasoning_effort is not None:
-        if not isinstance(reasoning_effort, str) or reasoning_effort not in _REASONING_EFFORT_VALUES:
-            _raise(
-                "reasoning_effort",
-                "chat_field_value_out_of_range",
-                "The 'reasoning_effort' field must be one of: minimal, low, medium, high.",
-            )
+        if chat_client_spec is None:
+            # Default OpenAI dialect: the fixed ordinary vocabulary.
+            if (
+                not isinstance(reasoning_effort, str)
+                or reasoning_effort not in _REASONING_EFFORT_VALUES
+            ):
+                _raise(
+                    "reasoning_effort",
+                    "chat_field_value_out_of_range",
+                    "The 'reasoning_effort' field must be one of: minimal, low, medium, high.",
+                )
+        else:
+            # Selected profile: only the profile's reviewed efforts are
+            # enabled (e.g. xhigh for the saved Hermes profile). Safe fixed
+            # message: the profile's vocabulary is never echoed.
+            if (
+                not isinstance(reasoning_effort, str)
+                or reasoning_effort not in chat_client_spec.reasoning_efforts
+            ):
+                _raise(
+                    "reasoning_effort",
+                    "chat_field_value_out_of_range",
+                    "The 'reasoning_effort' field value is not enabled by the "
+                    "selected client profile.",
+                )
 
 
 def _validate_number_range(

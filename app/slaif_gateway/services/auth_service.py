@@ -160,6 +160,7 @@ class GatewayAuthService:
         rate_limit_metadata: dict[str, object] = {}
         lazy_throttling_policy = None
         responses_policy: dict[str, object] | None = None
+        chat_client_module: object = None
         chat_streaming_live_burn_policy = default_chat_streaming_live_burn_policy()
         responses_streaming_live_burn_policy = default_responses_streaming_live_burn_policy()
         external_tool_policy = strict_key_policy()
@@ -189,6 +190,21 @@ class GatewayAuthService:
                     drop_content_keys=True,
                 )
                 responses_policy = sanitized_policy if isinstance(sanitized_policy, dict) else None
+            # Chat pin projection: the EXACT stored value is projected,
+            # never repaired. Sanitization is deliberately NOT applied:
+            # dropping unknown/content-shaped fields could turn a
+            # malformed present pin into a VALID one, and an invalid
+            # present value must stay invalid (fail closed at the
+            # resolver) instead of being repaired or defaulted. A well-
+            # formed dict pin is copied shallowly so the auth context
+            # never aliases the stored metadata; a present non-dict value
+            # is passed through as-is for the resolver to deny.
+            raw_chat_client_module = gateway_key.metadata_json.get("chat_client_module")
+            if raw_chat_client_module is not None:
+                if isinstance(raw_chat_client_module, dict):
+                    chat_client_module = dict(raw_chat_client_module)
+                else:
+                    chat_client_module = raw_chat_client_module
             try:
                 chat_streaming_live_burn_policy = chat_streaming_live_burn_policy_from_metadata(
                     gateway_key.metadata_json,
@@ -261,6 +277,7 @@ class GatewayAuthService:
             },
             lazy_throttling=lazy_throttling_policy,
             responses_policy=responses_policy,
+            chat_client_module=chat_client_module,
             chat_streaming_live_burn_policy=chat_streaming_live_burn_policy.to_metadata(),
             responses_streaming_live_burn_policy=(
                 responses_streaming_live_burn_policy.to_metadata()

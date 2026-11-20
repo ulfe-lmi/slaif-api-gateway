@@ -437,6 +437,60 @@ MCP/connectors, provider-side authorization, connector IDs, server URLs,
 approval flows, and background/provider-state lifecycle features by default.
 Calibration keys are not participant keys.
 
+### Agent Chat Client Profile Boundary (preprotected)
+
+Agent-harness Chat profiles (Hermes Agent 0.22.5, OpenCode 1.19.3) are served
+by a shared neutral Chat profile engine with thin statically shipped
+bindings; profile identity, tool vocabulary, reasoning-effort values, and
+bounds ship as trusted validated DATA under `modules/clients/profiles/`, not
+as source tool-name inventories. Selection is made ONLY from the optional
+server-authenticated key metadata tuple `metadata_json.chat_client_module`,
+which must be exactly `{id, version, fixture_sha256}` with string values. An
+absent pin keeps the existing `openai-default` Chat behavior unchanged, and a
+present explicit `null` clears only the Chat binding during key
+configuration updates. A present pin that is malformed, unknown (including
+Responses-only modules), stale, or digest-mismatched fails closed before
+Chat admission with `400 invalid_request_error`
+(`chat_client_module_metadata_invalid`, `chat_client_module_fixture_mismatch`,
+or `unsupported_client_module`); it never degrades to the default dialect
+and
+never affects the Responses endpoint, whose `responses_policy.client_module`
+pin remains Responses-scoped. Headers, User-Agent strings, model names, and
+client-request metadata never select or widen a profile. Errors name the
+module/field problem safely and carry no raw request, profile, or provider
+content.
+
+The initial entries are `hermes-0.22.5-chat-v1` (profile DATA revision 2)
+and `opencode-1.19.3-chat-v1` (profile DATA revision 1); canonical fixture
+digests are recorded in the "Chat client profile selection" section of
+[module-architecture.md](module-architecture.md). Tool names in the profile
+vocabulary are client-local function declarations: they grant no hosted,
+routing, pricing, or execution authority, consistent with the local-tool
+policy above. Client-supplied history is forwarded under the ordinary
+client-trust model: per-profile assistant reasoning fields
+(`reasoning`, `reasoning_content`) are shape-checked and preserved exactly in
+the forwarded body, and no Responses HMAC, item-ID, or cross-request snapshot
+mechanism is imported. Same-request tool call/result linkage is positional
+and exact (pending, consumed once, all resolved; duplicate, reused, unlinked,
+or unresolved linkage fails closed), historical tool names are not
+revalidated against the current request's `tools` (client lazy discovery),
+and a named-function `tool_choice` must name a current same-request
+declaration (the `auto`/`none`/`required` strings are also allowed).
+`reasoning_effort` must be a member of the selected profile's effort
+vocabulary (Hermes: `minimal`, `low`, `medium`, `high`, `xhigh`, `none`;
+OpenCode: `minimal`, `low`, `medium`, `high`, `xhigh`); other values fail
+closed with `agent_chat_reasoning_effort_not_allowed`.
+
+Chat profiles pair only with explicit, finite, Chat-capable generic
+candidate server pairs; the signed Local Coding server module remains a
+Responses-only transport and cannot serve Chat. Both profiles are
+preprotected candidates: the protected live-qualification gate is `not_run`,
+nothing in the profile DATA grants live qualification, the profiles change
+no default request-capture behavior, and this boundary creates no schema,
+key-rotation, deployment, or live-qualification claim. Native observations
+and limitations are recorded in the agentic-client dossier
+([Hermes 0.22.5](agentic-clients/hermes-0.22.5-chat-v1.md)).
+
 ## Admin OpenAI Assisted Proposal Boundary
 
 OpenAI-assisted catalog proposal generation is an admin-only operator workflow,

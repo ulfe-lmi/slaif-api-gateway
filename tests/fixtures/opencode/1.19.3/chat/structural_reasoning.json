@@ -1,0 +1,16 @@
+{
+  "variant": "reasoning_content_delta_handling",
+  "config_variant": "denied-web-baseline",
+  "request_side": {
+    "reasoning_requested_via": "top-level reasoning_effort (observed xhigh)",
+    "note": "no include/encrypted_content slice on the Chat path (that is the Responses path, objective 228 scope)"
+  },
+  "response_side": {
+    "delta_field_observed": "choices[0].delta.reasoning_content (string)",
+    "accepted_without_error": true,
+    "surface_default_run": "no reasoning part surfaced (silently dropped from the JSON event stream)",
+    "surface_with_thinking_flag": "exactly one reasoning part surfaced before the text part",
+    "step_finish_reasoning_tokens": "reflects the usage chunk (0 when the fake reports none)"
+  },
+  "privacy": { "raw_content_retained": false, "provider_call_performed": false }
+}

@@ -9,6 +9,14 @@ from decimal import Decimal
 import pytest
 
 from slaif_gateway.config import Settings
+from slaif_gateway.modules.clients.agent_chat import (
+    AgentChatModuleSelectionError,
+    agent_chat_profile_metadata,
+    get_agent_chat_client_module,
+)
+from slaif_gateway.modules.clients.hermes_0225_chat import (
+    HERMES_0225_CHAT_CLIENT_MODULE_ID,
+)
 from slaif_gateway.schemas.keys import CreateGatewayKeyInput
 from slaif_gateway.services.key_errors import (
     InvalidGatewayKeyLimitsError,
@@ -524,3 +532,39 @@ async def test_create_gateway_key_lazy_policy_honors_operator_ceilings() -> None
             )
         )
     assert len(keys_repo.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_create_gateway_key_validates_chat_pin_before_any_write() -> None:
+    canonical = agent_chat_profile_metadata(
+        get_agent_chat_client_module(HERMES_0225_CHAT_CLIENT_MODULE_ID)
+    )
+    stale = {**canonical, "version": "999"}
+    unknown = {**canonical, "id": "acme-9.9.9-chat-v1"}
+    for bad_pin in (
+        "not-a-pin",
+        [canonical["id"], canonical["version"], canonical["fixture_sha256"]],
+        stale,
+        unknown,
+        {**canonical, "extra": "x"},
+        {**canonical, "version": 2},
+        {k: v for k, v in canonical.items() if k != "fixture_sha256"},
+    ):
+        service, keys_repo, one_time_repo, audit_repo = _make_service()
+        with pytest.raises(AgentChatModuleSelectionError):
+            await service.create_gateway_key(
+                _base_create_payload(chat_client_module=bad_pin)
+            )
+        # The strict authoring validator must fail BEFORE any key record,
+        # one-time secret, or audit mutation.
+        assert keys_repo.calls == []
+        assert one_time_repo.calls == []
+        assert audit_repo.calls == []
+
+    # A pin resolving to a currently registered module stores the
+    # registry's canonical tuple verbatim.
+    service, keys_repo, _, _ = _make_service()
+    await service.create_gateway_key(
+        _base_create_payload(chat_client_module=dict(canonical))
+    )
+    assert keys_repo.calls[0]["metadata_json"]["chat_client_module"] == canonical

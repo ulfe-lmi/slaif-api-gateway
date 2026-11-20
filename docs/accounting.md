@@ -394,6 +394,26 @@ must not store or render streamed chunks, prompts, completions, tool arguments,
 media payloads, raw request bodies, raw response bodies, secrets, or raw
 metadata JSON for the live-burn section. Prometheus live-burn counters remain
 future work.
+
+### Agent Chat Profile estimate and settlement coverage
+
+A request served under a preprotected agent Chat profile uses the same
+admission-time estimation and PostgreSQL settlement boundaries as ordinary
+Chat Completions. Input token estimation and cost pre-reservation cover all
+material retained in the forwarded body: client-supplied messages (including
+the per-profile assistant reasoning fields), tool declarations and their
+serialized schemas, in-request tool call arguments and results, and any
+other retained serialized object/list fields. The profile adds no new
+billing category, pricing row, or ledger column, and provider final
+usage/cost remains authoritative when available. Failed provider responses
+release the pending reservation and create a failed usage ledger row. A
+stream that ends before final usage (client disconnect, provider/network
+error, or an intentional live-burn interruption) is finalized as estimated
+interrupted accounting when it has positive estimated output; with no
+estimated output the pending reservation is released and a failed ledger row
+is created (zero charged). The profile pin changes none of these
+boundaries.
+
 ## External-tool accounting holds
 
 The bounded OpenAI Responses web-search runtime uses the existing PostgreSQL

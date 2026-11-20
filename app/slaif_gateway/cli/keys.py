@@ -42,6 +42,7 @@ from slaif_gateway.db.repositories.owners import OwnersRepository
 from slaif_gateway.db.repositories.routing import ModelRoutesRepository
 from slaif_gateway.db.session import get_sessionmaker
 from slaif_gateway.modules.clients.codex_0162 import bootstrap_codex_compatibility_profile
+from slaif_gateway.modules.clients.agent_chat import bootstrap_agent_chat_client_modules
 from slaif_gateway.modules.codex_profile_data import CodexProfileDataError
 from slaif_gateway.schemas.keys import (
     ActivateGatewayKeyInput,
@@ -161,16 +162,20 @@ class EmailDeliveryMode(str, Enum):
 
 
 def _bootstrap_codex_profile(settings: Settings) -> None:
-    """Bootstrap the configured Codex profile before R4 pin authoring.
+    """Bootstrap the statically shipped client modules before pin authoring.
 
-    Idempotent for same-config initialization; an invalid configured file
-    fails closed with a fixed safe message instead of falling back to the
-    packaged default.
+    Installs the configured Codex compatibility profile and imports the
+    statically shipped Chat harness bindings so the finite registries are
+    populated for CLI pin authoring/inspection without relying on test
+    import order. Idempotent for same-config initialization; an invalid
+    configured Codex file fails closed with a fixed safe message instead of
+    falling back to the packaged default.
     """
     try:
         bootstrap_codex_compatibility_profile(settings.CODEX_COMPATIBILITY_PROFILE_FILE)
     except CodexProfileDataError as exc:
         raise CliKeyError(exc.safe_message) from exc
+    bootstrap_agent_chat_client_modules()
 
 
 @dataclass(frozen=True, slots=True)

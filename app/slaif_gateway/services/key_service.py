@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import json
 import re
 import uuid
@@ -51,6 +52,12 @@ from slaif_gateway.services.key_policy_configuration import (
     request_policy_group_values,
     UNBOUND,
     stored_module_binding,
+)
+from slaif_gateway.modules.clients.agent_chat import (
+    AgentChatModuleSelectionError,
+    agent_chat_profile_metadata,
+    canonicalize_chat_client_module_pin,
+    resolve_chat_client_module,
 )
 from slaif_gateway.services.external_tool_policy_contract import (
     EXTERNAL_TOOL_FENCED,
@@ -144,6 +151,8 @@ class _PreparedKeyConfigurationUpdate:
     resulting_live_burn: "ChatStreamingLiveBurnPolicy | None"
     external_requested: bool
     resulting_external: ExternalToolKeyPolicy
+    chat_requested: bool
+    resulting_chat: "dict[str, str] | None"
 
 
 # Bounded storage scale of gateway_keys.cost_limit_eur (Numeric(18, 9)).
@@ -229,6 +238,15 @@ class KeyService:
         chat_live_burn_policy = self._validate_chat_streaming_live_burn_policy(
             payload.chat_streaming_live_burn_policy
         )
+        # Strict authoring validation at the SERVICE boundary: the create
+        # DTO is a plain dataclass, so a direct service call may carry a
+        # malformed, unknown, or stale Chat pin even though the CLI/schema
+        # builders validate it. The service must fail closed before any
+        # key record, one-time secret, or audit mutation; builder-side
+        # validation is not a trust boundary.
+        chat_client_module = canonicalize_chat_client_module_pin(
+            payload.chat_client_module
+        )
         if is_trusted_calibration_key(
             key_purpose=key_purpose,
             capability_policy_mode=capability_policy_mode,
@@ -269,6 +287,10 @@ class KeyService:
                 metadata_json,
                 external_tool_policy,
             )
+        metadata_json = self._metadata_with_chat_client_module(
+            metadata_json,
+            chat_client_module,
+        )
         gateway_key = await self._gateway_keys_repository.create_gateway_key_record(
             public_key_id=generated.public_key_id,
             key_prefix=active_prefix,
@@ -939,6 +961,10 @@ class KeyService:
             metadata = self._metadata_with_external_tool_policy(
                 metadata, prepared.resulting_external
             )
+        if prepared.chat_requested:
+            metadata = self._metadata_with_chat_client_module(
+                metadata, prepared.resulting_chat
+            )
 
         if metadata != raw_metadata:
             updated = await self._gateway_keys_repository.update_gateway_key_metadata(
@@ -1141,6 +1167,21 @@ class KeyService:
                 cost_limit_eur=resulting_cost,
             )
 
+        # Optional Chat client-module pin: omission preserves the stored
+        # state, explicit null clears ONLY the Chat binding, and a present
+        # object must be the complete strict {id, version, fixture_sha256}
+        # tuple resolving to the CURRENTLY registered profile (no
+        # auto-upgrade, default fallback, or force-accept). Unlike the
+        # Responses client-module migration law, an existing stored Chat
+        # pin - including a stale or malformed one - may be replaced or
+        # cleared here; the OLD pin is never resolved first.
+        chat_requested = config.has("chat_client_module")
+        resulting_chat: dict[str, str] | None = None
+        if chat_requested and config.chat_client_module is not None:
+            resulting_chat = canonicalize_chat_client_module_pin(
+                config.chat_client_module
+            )
+
         return _PreparedKeyConfigurationUpdate(
             cleaned_reason=cleaned_reason,
             quotas_requested=quotas_requested,
@@ -1160,6 +1201,8 @@ class KeyService:
             resulting_live_burn=resulting_live_burn,
             external_requested=external_requested,
             resulting_external=resulting_external,
+            chat_requested=chat_requested,
+            resulting_chat=resulting_chat,
         )
 
     async def project_key_configuration_update(
@@ -1230,6 +1273,7 @@ class KeyService:
             lazy_raw=raw_metadata.get("lazy_throttling_policy"),
             live_burn_raw=raw_metadata.get(CHAT_STREAMING_LIVE_BURN_METADATA_KEY),
             external_raw=raw_metadata.get("external_tool_policy"),
+            chat_raw=raw_metadata.get("chat_client_module"),
             cost_limit_eur=gateway_key.cost_limit_eur,
             token_limit_total=gateway_key.token_limit_total,
             request_limit_total=gateway_key.request_limit_total,
@@ -1293,6 +1337,10 @@ class KeyService:
             metadata = self._metadata_with_external_tool_policy(
                 metadata, prepared.resulting_external
             )
+        if prepared.chat_requested:
+            metadata = self._metadata_with_chat_client_module(
+                metadata, prepared.resulting_chat
+            )
 
         cost_limit_eur = (
             prepared.resulting_cost if prepared.quotas_requested else gateway_key.cost_limit_eur
@@ -1325,6 +1373,7 @@ class KeyService:
             lazy_raw=metadata.get("lazy_throttling_policy"),
             live_burn_raw=metadata.get(CHAT_STREAMING_LIVE_BURN_METADATA_KEY),
             external_raw=metadata.get("external_tool_policy"),
+            chat_raw=metadata.get("chat_client_module"),
             cost_limit_eur=cost_limit_eur,
             token_limit_total=token_limit_total,
             request_limit_total=request_limit_total,
@@ -1369,6 +1418,7 @@ class KeyService:
         lazy_raw: object,
         live_burn_raw: object,
         external_raw: object,
+        chat_raw: object,
         cost_limit_eur: Decimal | None,
         token_limit_total: int | None,
         request_limit_total: int | None,
@@ -1478,6 +1528,26 @@ class KeyService:
                     param="external_tool_policy",
                 )
             config.external_tool_policy = parsed_external.policy.to_metadata()
+
+        if chat_raw is None:
+            config.chat_client_module = None
+        else:
+            try:
+                # The export contract requires a CURRENT authoring identity:
+                # the stored pin must strictly resolve to a currently
+                # registered Chat module (registry, version, and fixture
+                # digest). A stale or malformed stored pin is refused
+                # explicitly rather than exported as an apparently
+                # consumable document; it is repaired through the ordinary
+                # configuration update (set/replace/clear), which does NOT
+                # resolve the old pin first.
+                config.chat_client_module = canonicalize_chat_client_module_pin(
+                    chat_raw
+                )
+            except AgentChatModuleSelectionError as exc:
+                raise KeyConfigurationExportError(
+                    param="chat_client_module"
+                ) from exc
 
         config.cost_limit_eur = cost_limit_eur
         config.token_limit_total = token_limit_total
@@ -1619,11 +1689,12 @@ class KeyService:
             max_concurrent_requests=(
                 old_key.max_concurrent_requests if payload.preserve_rate_limit_policy else None
             ),
-            metadata_json=self._metadata_with_external_tool_policy(
+            metadata_json=self._metadata_preserving_chat_client_module(
+                self._metadata_with_external_tool_policy(
                 self._metadata_with_chat_streaming_live_burn_policy(
                     self._metadata_with_responses_streaming_live_burn_policy(
                         self._metadata_with_lazy_throttling_policy(
-                            (
+                                (
                                 self._metadata_with_rate_limit_window(
                                     self._metadata_with_provider_policy(
                                         self._metadata_with_responses_policy(
@@ -1642,18 +1713,20 @@ class KeyService:
                                     ),
                                     self._allowed_providers_from_key(old_key),
                                 )
-                            ),
-                            (
+                                ),
+                                (
                                 self._lazy_throttling_policy_from_key(old_key)
                                 if payload.preserve_rate_limit_policy
                                 else None
-                            ),
+                                ),
                         ),
                         default_responses_streaming_live_burn_policy(),
                     ),
                     self._chat_streaming_live_burn_policy_from_key(old_key),
                 ),
                 external_tool_policy,
+            ),
+                self._raw_chat_client_module_from_key(old_key),
             ),
             created_by_admin_user_id=payload.actor_admin_id,
             hmac_key_version=int(active_hmac_version),
@@ -2175,6 +2248,43 @@ class KeyService:
         metadata["responses_policy"] = safe_policy
         return metadata
 
+    @classmethod
+    def _metadata_with_chat_client_module(
+        cls,
+        metadata_json: dict[str, object] | None,
+        chat_client_module: dict[str, str] | None,
+    ) -> dict[str, object]:
+        metadata = dict(metadata_json or {})
+        if chat_client_module is None:
+            metadata.pop("chat_client_module", None)
+            return metadata
+        metadata["chat_client_module"] = dict(chat_client_module)
+        return metadata
+
+    @classmethod
+    def _metadata_preserving_chat_client_module(
+        cls,
+        metadata_json: dict[str, object] | None,
+        raw_pin: object,
+    ) -> dict[str, object]:
+        """Rotation-only RAW preservation of the stored Chat pin.
+
+        Rotation must never resolve, canonicalize, upgrade, or drop a
+        stored pin: a valid pin (including a stale but well-formed exact
+        tuple) carries over as-is without auto-upgrade, and a MALFORMED
+        stored pin keeps its raw fail-closed state (dispatch fails closed
+        on it) instead of being converted into the default Chat authority.
+        This helper is separate from the authoring-time
+        :meth:`_metadata_with_chat_client_module`, which only ever stores
+        a validated canonical tuple.
+        """
+        metadata = dict(metadata_json or {})
+        if raw_pin is None:
+            metadata.pop("chat_client_module", None)
+            return metadata
+        metadata["chat_client_module"] = copy.deepcopy(raw_pin)
+        return metadata
+
     @staticmethod
     def _metadata_with_external_tool_policy(
         metadata_json: dict[str, object] | None,
@@ -2265,6 +2375,11 @@ class KeyService:
         metadata = getattr(gateway_key, "metadata_json", None)
         raw_policy = metadata.get("responses_policy") if isinstance(metadata, dict) else None
         return cls._safe_responses_policy(raw_policy if isinstance(raw_policy, dict) else None)
+
+    @staticmethod
+    def _raw_chat_client_module_from_key(gateway_key: GatewayKey) -> object:
+        metadata = getattr(gateway_key, "metadata_json", None)
+        return metadata.get("chat_client_module") if isinstance(metadata, dict) else None
 
     async def _audit_gateway_key_change(
         self,
@@ -2398,6 +2513,11 @@ class KeyService:
                 if isinstance(gateway_key.metadata_json, dict)
                 else None
             ),
+            "chat_client_module": self._chat_client_module_audit_projection(
+                (gateway_key.metadata_json or {}).get("chat_client_module")
+                if isinstance(gateway_key.metadata_json, dict)
+                else None
+            ),
             "rate_limit_policy": self._rate_limit_policy_from_key(gateway_key),
             "lazy_throttling_policy": self._lazy_throttling_policy_from_key(gateway_key),
             "chat_streaming_live_burn_policy": self._chat_streaming_live_burn_policy_from_key(
@@ -2434,6 +2554,7 @@ class KeyService:
     )
     _RESPONSES_AUDIT_TOOL_TYPES: frozenset[str] = frozenset({"function", "custom"})
     _RESPONSES_AUDIT_NOTES_MAX = 1000
+    _CHAT_AUDIT_FIELDS: frozenset[str] = frozenset({"id", "version", "fixture_sha256"})
 
     @classmethod
     def _responses_policy_audit_projection(
@@ -2527,6 +2648,46 @@ class KeyService:
         if unsupported:
             projected["unsupported_fields"] = unsupported
         return projected
+
+    @classmethod
+    def _chat_client_module_audit_projection(
+        cls, raw_pin: object
+    ) -> dict[str, object] | str | None:
+        """Secret-safe allowlisted projection of the stored Chat pin.
+
+        ONLY a pin that strictly resolves to a CURRENTLY registered Chat
+        module is echoed, and then only as the registry's canonical
+        three-string identity tuple (never the stored bytes, never a
+        trimmed/repaired identity). Anything else - a stale version, an
+        unknown or Responses-only id, a malformed or non-object stored
+        pin, or a known field holding an unvalidated value (which may be
+        opaque secret material, not authoring identity) - projects to a
+        fixed ``unsupported_fields`` count or the fixed ``"unsupported"``
+        marker and never echoes a stored string. This projection never
+        raises: an unrenderable stored pin must not abort an unrelated
+        configuration update, nor block its explicit repair or clear.
+        """
+        if raw_pin is None:
+            return None
+        if not isinstance(raw_pin, dict):
+            return "unsupported"
+        try:
+            module = resolve_chat_client_module(raw_pin)
+        except AgentChatModuleSelectionError:
+            module = None
+        if module is not None:
+            return agent_chat_profile_metadata(module)
+        unsupported = 0
+        for key in sorted(set(raw_pin) - cls._CHAT_AUDIT_FIELDS):
+            unsupported += 1
+        for key in sorted(cls._CHAT_AUDIT_FIELDS):
+            value = raw_pin.get(key)
+            if not isinstance(value, str) or not value.strip():
+                unsupported += 1
+        projected: dict[str, object] = {}
+        if unsupported:
+            projected["unsupported_fields"] = unsupported
+        return projected if projected else "unsupported"
 
     @staticmethod
     def _usage_audit_values(gateway_key: GatewayKey) -> dict[str, object]:

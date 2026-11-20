@@ -40,6 +40,7 @@ class CreateGatewayKeyInput:
     external_tool_policy: dict[str, object] | None = None
     confirm_external_tool_fenced: bool = False
     note: str | None = None
+    chat_client_module: dict[str, str] | None = None
 
 
 @dataclass(frozen=True, slots=True)

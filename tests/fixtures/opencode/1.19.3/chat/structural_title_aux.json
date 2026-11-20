@@ -1,0 +1,22 @@
+{
+  "variant": "auxiliary_title_generation_traffic",
+  "config_variant": "denied-web-baseline",
+  "trigger": "run without an explicit title",
+  "aux_request": {
+    "top_level_field_count": 7,
+    "fields_absent_vs_main": ["tools", "tool_choice"],
+    "fields_present": ["model", "max_tokens", "store", "reasoning_effort", "messages", "stream", "stream_options"],
+    "max_tokens": 32000,
+    "stream": true,
+    "stream_options": { "include_usage": true },
+    "messages": [
+      { "role": "system", "content_type": "string", "byte_length_class": "~2096 title-agent prompt" },
+      { "role": "user", "content_type": "string", "byte_length_class": "~40 (session title context)" },
+      { "role": "user", "content_type": "string", "byte_length_class": "equals the turn prompt length" }
+    ]
+  },
+  "ordering": "aux request may precede the main request of the same turn",
+  "explicit_title_suppresses": true,
+  "classification_rule": "tool-less request with no tool result message is auxiliary in every scenario; it must not consume the main turn counter",
+  "privacy": { "raw_content_retained": false, "provider_call_performed": false }
+}

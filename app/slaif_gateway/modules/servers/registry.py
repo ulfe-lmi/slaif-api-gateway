@@ -153,6 +153,13 @@ CLIENT_SERVER_COMPATIBILITY = frozenset(
         ClientServerPair("codex-0.162-responses-v1", LOCAL_CODING_SERVER_MODULE_ID),
         ClientServerPair("codex-0.162-responses-v1", VLLM_SERVER_MODULE_ID),
         ClientServerPair("codex-0.162-responses-v1", UPSTREAM_LLM_MODULE_ID),
+        # 227-a: reviewed Chat-profile candidate pairs. Only the generic
+        # openai-compatible transport is qualified for the shipped Chat
+        # profiles this round; every other server (including the signed
+        # Responses-only LocalCoding variants and native provider modules)
+        # stays denied for selected Chat profiles.
+        ClientServerPair("hermes-0.22.5-chat-v1", OPENAI_COMPATIBLE_SERVER_MODULE_ID),
+        ClientServerPair("opencode-1.19.3-chat-v1", OPENAI_COMPATIBLE_SERVER_MODULE_ID),
     }
 )
 

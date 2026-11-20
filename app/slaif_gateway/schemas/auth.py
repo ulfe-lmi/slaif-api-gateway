@@ -36,6 +36,12 @@ class AuthenticatedGatewayKey:
     cost_reserved_eur: Decimal = Decimal("0")
     tokens_reserved_total: int = 0
     responses_policy: dict[str, object] | None = None
+    #: Chat client-module pin from server-side key metadata ONLY.
+    #: ``None`` (absent) keeps the existing default Chat behavior; a
+    #: well-formed ``{id, version, fixture_sha256}`` pin selects one
+    #: statically registered Chat client module; any other present value is
+    #: preserved as-is so selection fails closed (never silent default).
+    chat_client_module: object = None
     chat_streaming_live_burn_policy: dict[str, object] | None = None
     responses_streaming_live_burn_policy: dict[str, object] | None = None
     key_purpose: str = "standard"

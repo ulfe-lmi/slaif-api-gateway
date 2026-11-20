@@ -1286,6 +1286,78 @@ def test_scalar_field_validation_rejects_invalid_values(
     assert exc_info.value.param == field
 
 
+# ----------------------------------------------------------------------
+# 227-a: selected Chat profile reasoning-effort facts (default-preserving)
+# ----------------------------------------------------------------------
+
+
+def _xhigh_body(effort: str = "xhigh") -> dict[str, object]:
+    return {
+        "model": "synthetic-model",
+        "messages": [{"role": "user", "content": "synthetic"}],
+        "reasoning_effort": effort,
+    }
+
+
+class TestSelectedProfileReasoningEffort:
+    def test_default_policy_still_rejects_xhigh(self) -> None:
+        policy = ChatCompletionRequestPolicy(_settings(HARD_MAX_INPUT_TOKENS=5000))
+        with pytest.raises(RequestPolicyError) as exc_info:
+            policy.apply(_xhigh_body())
+        assert exc_info.value.error_code == "chat_field_value_out_of_range"
+        assert exc_info.value.param == "reasoning_effort"
+
+    @pytest.mark.parametrize("module_id", ["hermes-0.22.5-chat-v1", "opencode-1.19.3-chat-v1"])
+    def test_selected_profile_spec_accepts_xhigh(self, module_id) -> None:
+        from slaif_gateway.modules.clients.agent_chat import (
+            bootstrap_agent_chat_client_modules,
+            get_agent_chat_client_module,
+        )
+
+        bootstrap_agent_chat_client_modules()
+        module = get_agent_chat_client_module(module_id)
+        policy = ChatCompletionRequestPolicy(
+            _settings(HARD_MAX_INPUT_TOKENS=5000),
+            chat_client_spec=module.policy_spec,
+        )
+        result = policy.apply(_xhigh_body())
+        assert result.effective_body["reasoning_effort"] == "xhigh"
+
+    @pytest.mark.parametrize("effort", ["minimal", "low", "medium", "high"])
+    def test_selected_profile_spec_keeps_ordinary_efforts(self, effort) -> None:
+        from slaif_gateway.modules.clients.agent_chat import (
+            bootstrap_agent_chat_client_modules,
+            get_agent_chat_client_module,
+        )
+
+        bootstrap_agent_chat_client_modules()
+        module = get_agent_chat_client_module("hermes-0.22.5-chat-v1")
+        policy = ChatCompletionRequestPolicy(
+            _settings(HARD_MAX_INPUT_TOKENS=5000),
+            chat_client_spec=module.policy_spec,
+        )
+        result = policy.apply(_xhigh_body(effort))
+        assert result.effective_body["reasoning_effort"] == effort
+
+    @pytest.mark.parametrize("effort", ["ultra", "", "XHIGH", 5])
+    def test_selected_profile_spec_rejects_unreviewed_efforts(self, effort) -> None:
+        from slaif_gateway.modules.clients.agent_chat import (
+            bootstrap_agent_chat_client_modules,
+            get_agent_chat_client_module,
+        )
+
+        bootstrap_agent_chat_client_modules()
+        module = get_agent_chat_client_module("hermes-0.22.5-chat-v1")
+        policy = ChatCompletionRequestPolicy(
+            _settings(HARD_MAX_INPUT_TOKENS=5000),
+            chat_client_spec=module.policy_spec,
+        )
+        with pytest.raises(RequestPolicyError) as exc_info:
+            policy.apply(_xhigh_body(effort))
+        assert exc_info.value.error_code == "chat_field_value_out_of_range"
+        assert exc_info.value.param == "reasoning_effort"
+        # Safe fixed message: the profile vocabulary is never echoed.
+        assert "xhigh" not in str(exc_info.value)
 @pytest.mark.parametrize("value", [-101, 101, True, "1"])
 def test_logit_bias_values_are_validated_without_echoing_values(value: object) -> None:
     policy = ChatCompletionRequestPolicy(_settings(HARD_MAX_INPUT_TOKENS=5000))

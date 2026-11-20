@@ -7,6 +7,7 @@ from collections.abc import Mapping
 from typing import Any
 
 from slaif_gateway.config import Settings
+from slaif_gateway.modules.clients.agent_chat import AgentChatProfileSpec
 from slaif_gateway.schemas.policy import ChatCompletionPolicyResult
 from slaif_gateway.services.chat_completion_field_policy import (
     enforce_chat_completion_field_policy,
@@ -32,8 +33,16 @@ from slaif_gateway.services.policy_errors import (
 class ChatCompletionRequestPolicy:
     """Apply output/input guardrails before any provider forwarding logic."""
 
-    def __init__(self, settings: Settings) -> None:
+    def __init__(
+        self,
+        settings: Settings,
+        *,
+        chat_client_spec: AgentChatProfileSpec | None = None,
+    ) -> None:
         self._settings = settings
+        # Reviewed profile of one SELECTED Chat client module; None keeps
+        # the default Chat dialect caps exactly as before.
+        self._chat_client_spec = chat_client_spec
 
     def apply(
         self,
@@ -47,7 +56,11 @@ class ChatCompletionRequestPolicy:
             effective_body,
             capability_policy_mode=capability_policy_mode,
         )
-        enforce_chat_completion_request_caps(effective_body, settings=self._settings)
+        enforce_chat_completion_request_caps(
+            effective_body,
+            settings=self._settings,
+            chat_client_spec=self._chat_client_spec,
+        )
         effective_choice_count = self._validate_choice_count(effective_body.get("n"))
         messages = self._validate_messages(effective_body.get("messages"))
 

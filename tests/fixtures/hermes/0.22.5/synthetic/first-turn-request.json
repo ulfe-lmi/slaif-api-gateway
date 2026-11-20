@@ -1,0 +1,24 @@
+{
+  "label": "synthetic_counterpart",
+  "description": "Synthetic executable counterpart of the captured native Hermes 0.22.5 first-turn structure. Dummy content only; not a native capture and not real client evidence.",
+  "request": {
+    "model": "synthetic-model",
+    "reasoning_effort": "xhigh",
+    "stream": true,
+    "stream_options": {"include_usage": true},
+    "messages": [
+      {"role": "system", "content": "synthetic system prompt"},
+      {"role": "user", "content": "synthetic user prompt"}
+    ],
+    "tools": [
+      {"type": "function", "function": {"name": "patch", "description": "synthetic", "parameters": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]}}},
+      {"type": "function", "function": {"name": "read_file", "description": "synthetic", "parameters": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]}}},
+      {"type": "function", "function": {"name": "search_files", "parameters": {"type": "object", "properties": {"pattern": {"type": "string"}}}}},
+      {"type": "function", "function": {"name": "terminal", "parameters": {"type": "object", "properties": {"command": {"type": "string"}}}}},
+      {"type": "function", "function": {"name": "write_file", "parameters": {"type": "object", "properties": {"path": {"type": "string"}, "content": {"type": "string"}}}}},
+      {"type": "function", "function": {"name": "tool_search", "parameters": {"type": "object", "properties": {"query": {"type": "string"}}}}},
+      {"type": "function", "function": {"name": "tool_describe", "parameters": {"type": "object", "properties": {"names": {"type": "array", "items": {"type": "string"}}}}}},
+      {"type": "function", "function": {"name": "tool_call", "parameters": {"type": "object", "properties": {"name": {"type": "string"}, "arguments": {"type": "object"}}}}}
+    ]
+  }
+}
