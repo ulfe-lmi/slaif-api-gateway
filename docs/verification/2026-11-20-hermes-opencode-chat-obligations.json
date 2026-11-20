@@ -5,8 +5,6 @@
   "status_reason": "Two test_oap_governance.py assertions fail against the activated 227-a order's format (title line and PR-mode declaration line). The activated order was not edited, the validator was not weakened; canonical 227-b AMEND_EXISTING_PR on the same PR will correct the order format. No source/runtime change or unit/native rerun is required for that resolution.",
   "branch": "oap/227-hermes-opencode-chat",
   "base": "0940d8a28f3a413d2a2cc6f4962c0efcafd71e13",
-  "implementation_head_sha": "5c2bacf83578f5a23b6e9700656e8bfd26dc373c",
-  "report_publication_commit": "SELF (this report's sole report-only commit, sole parent = implementation head, sole diff = the report)",
   "activated_order": {
     "path": "oap/orders/227-a-hermes-opencode-chat-preprotected.md",
     "sha256": "4d24d84bef3b7c7d2f1a4b4f70e380dc84debf95da726c8a922735dcadd0f546",
@@ -19,7 +17,6 @@
     "edited_during_round": false
   },
   "source": {
-    "tree_sha_at_head": "recorded in the implementation git tree at 5c2bacf8",
     "changed_services_vs_base": [
       "auth (services/auth_service.py, schemas/auth.py)",
       "chat orchestration (services/chat_completion_gateway.py, services/chat_completion_request_caps.py)",
@@ -34,7 +31,10 @@
       "quota/accounting foundations",
       "redis foundations",
       "provider-forwarding contract/repository foundations"
-    ]
+    ],
+    "tested_implementation_head_sha": "5c2bacf83578f5a23b6e9700656e8bfd26dc373c",
+    "tested_implementation_head_tree_sha": "430aae04aaa2f4dbaf4ff529623d022ff3a09278",
+    "tested_implementation_head_app_slaif_gateway_tree_sha": "0ab1e80ad89a6578b17b0bfcaa99fa5e8ccab21e"
   },
   "fixture_and_data_digests": {
     "hermes_profile_raw_file_sha256": "ecd9aa5d5474a140ba0b4969f539bba526d7366296d116e1a6acb956476aba58",
@@ -90,16 +90,26 @@
         "a5edb7ab": "2 passed (runtime success parameterized Hermes+OpenCode; Hermes parameter reruns 9fe29e23 case)",
         "fd086c95": "13 passed (pre-upstream denial battery + absent-pin default)",
         "c9434f6f": "2 passed (stream success finalizes PG usage, one case executed per profile)",
-        "7821f944": "2 passed (provider-error release paths, Hermes-only parameters)",
-        "e645b381": "3 passed (client disconnect + request-quota 429 + stream provider-error release)",
-        "e3e97918": "2 passed (disconnect hardening; supersedes earlier disconnect case from e645b381)",
+        "7821f944": "2 passed (provider-error release paths: HTTP 500 non-stream and HTTP 500 stream; both Hermes-only parameters currently; no OpenCode parameters exist yet)",
+        "e645b381": "3 passed (client disconnect: 2 executions, one per profile Hermes/OpenCode; request-quota 429: 1)",
+        "e3e97918": "2 passed (disconnect hardening: strengthened test_chat_pin_client_disconnect_proves_actual_cancellation re-executed for the same 2 profile parameters, superseding the 2 older disconnect executions from e645b381)",
         "e6e166c2": "8 passed (model/endpoint/provider/streaming policy denials, 4 cases x 2 profile parameters)"
       },
       "proves": "PG/HTTP reservation->finalization, release on provider error, estimated finalization on client disconnect after partial output, 429 request-quota denial, pre-upstream denials",
-      "does_not_prove": ["R4 held-slot revalidation (unit fake-slot only)", "real Redis behavior (rate-limit seams mocked)"]
+      "does_not_prove": [
+        "R4 held-slot revalidation (unit fake-slot only)",
+        "real Redis behavior (rate-limit seams mocked)",
+        "HTTP 500 release paths for OpenCode (both release tests are Hermes-only currently)"
+      ]
     },
     "native_loopback_reused_not_rerun": {
-      "hermes": ["loop7 (7 POSTs)", "timeout4 (11 POSTs, outer watchdog CLI -15 @120s)", "error3 (11 POSTs, 68 error lines)", "multi1 (3 POSTs, 2 read_file call/result pairs)", "entry-final-positive (3 POSTs/2 calls/CLI 0/verified cleanup/hash-only receipt)"],
+      "hermes": [
+        "loop7 (7 POSTs)",
+        "timeout4 (11 POSTs, outer watchdog CLI -15 @120s)",
+        "error3 (11 POSTs, 68 error lines)",
+        "multi1 (3 POSTs, 2 read_file call/result pairs)",
+        "entry-final-positive (3 POSTs/2 calls/CLI 0/verified cleanup/hash-only receipt)"
+      ],
       "opencode": "structural captures in tests/fixtures/opencode/1.19.3/chat/ (title/aux, session identity, text stream, reasoning, tool loop, multi-call, compaction)"
     },
     "static": {
@@ -107,7 +117,10 @@
       "whitespace": "git diff --check clean"
     },
     "governance": {
-      "other_governance_files": ["tests/unit/test_agentic_client_integration_governance.py", "tests/unit/test_provider_governance.py"],
+      "other_governance_files": [
+        "tests/unit/test_agentic_client_integration_governance.py",
+        "tests/unit/test_provider_governance.py"
+      ],
       "other_governance_result": "5 passed, exit 0",
       "oap_governance_file": "tests/unit/test_oap_governance.py",
       "oap_governance_result": "2 failed, 8 passed, exit 1",
@@ -117,7 +130,8 @@
       ],
       "cause": "activated 227-a order format (title line; prose PR-mode declaration), not a code or test regression",
       "resolution": "canonical 227-b AMEND_EXISTING_PR on the same PR corrects the order format; no source/runtime change or rerun"
-    }
+    },
+    "coverage_note": "This manifest is an evidence INDEX linking executed receipts to identity/digest facts. It is NOT yet the required per-obligation verified test-node-ID mapping; that mapping (and the concrete protected live test plan with actual target and numeric ceilings) remains a declared gap for the canonical 227-b round."
   },
   "honesty_disclosures": [
     "historical secondary full-unit run (Python 3.13) failed one named OpenRouter audio test; aggregate counts and causality unknown; no fix made, no full matrix rerun claimed",
@@ -126,15 +140,27 @@
   ],
   "preprotected": {
     "missing": [
-      "governance:227-a-order-format (2 test_oap_governance failures against the immutable activated order; to resolve via canonical 227-b AMEND_EXISTING_PR on the same PR)"
+      "governance:227-a-order-format (2 test_oap_governance failures against the activated 227-a order format: title line and PR-mode declaration line; to resolve via canonical 227-b AMEND_EXISTING_PR on the same PR; no source/runtime change or rerun)",
+      "obligation-mapping: per-obligation verified test-node-ID mapping not yet produced (manifest currently an evidence index only; required by the order's obligation-manifest duty)",
+      "protected-live-test-plan: bounded protected live test plan currently carries ceiling_requirements placeholders only \u2014 no actual target route/model/backend and no numeric request/token/cost/time caps declared (order forbids inventing them; root review/authority supplies the concrete gate)"
     ]
   },
   "protected": {
     "status": "not_run",
     "proposed_live_test": {
       "scope": "one zero-retry process per profile against a real authorized route/model/backend",
-      "profiles": ["hermes-0.22.5-chat-v1 (pinned doc version \"2\", fixture c5e34d46270280d7e08639c01c28065380a2a80843c1114ac1f1ad2a2744d327)", "opencode-1.19.3-chat-v1 (pinned doc version \"1\", fixture 2bd4f2599456892bb5d5119a85c9ffe9525796c1aa934ad46b49ce34d18f0e14)"],
-      "ceiling_requirements": ["request count ceiling per profile", "token/cost ceiling", "wall-clock time ceiling", "task-owned process cleanup", "PG reservation/finalization accounting assertions (zero stranded reservations)"]
+      "profiles": [
+        "hermes-0.22.5-chat-v1 (pinned doc version \"2\", fixture c5e34d46270280d7e08639c01c28065380a2a80843c1114ac1f1ad2a2744d327)",
+        "opencode-1.19.3-chat-v1 (pinned doc version \"1\", fixture 2bd4f2599456892bb5d5119a85c9ffe9525796c1aa934ad46b49ce34d18f0e14)"
+      ],
+      "ceiling_requirements": [
+        "request count ceiling per profile (placeholder \u2014 numeric cap not yet declared)",
+        "token/cost ceiling (placeholder \u2014 numeric cap not yet declared)",
+        "wall-clock time ceiling (placeholder \u2014 numeric cap not yet declared)",
+        "task-owned process cleanup (requirement, no cap)",
+        "PG reservation/finalization accounting assertions, zero stranded reservations (requirement, no cap)"
+      ],
+      "status": "plan incomplete by design: no actual target route/model/backend or numeric ceilings are declared here; they require root review and protected authority. Not to be read as an executable plan."
     }
   }
 }

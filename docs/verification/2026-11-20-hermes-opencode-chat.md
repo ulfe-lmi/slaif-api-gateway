@@ -156,31 +156,36 @@ partition, and must not be summed into an inflated total:
   one ``test_chat_pin_stream_success_finalizes_pg_usage`` case executed
   separately per profile (Hermes, OpenCode).
 - **7821f944** (2 passed): provider-error release paths —
-  ``test_chat_pin_provider_http_error_releases_reservation`` and
-  ``test_chat_pin_stream_provider_error_after_admission_releases_
-  reservation``, **Hermes-only** parameters (the OpenCode stream-error
-  release parameter was added later and is not part of this 2-case
-  batch).
-- **e645b381** (3 passed): client disconnect (1) + request-quota 429
-  (1) + stream provider-error release (1).
+  ``test_chat_pin_provider_http_error_releases_reservation`` (HTTP 500
+  non-stream) and ``test_chat_pin_stream_provider_error_after_admission_
+  releases_reservation`` (HTTP 500 stream). **Both HTTP 500 release
+  tests are currently Hermes-only**; no OpenCode parameters exist for
+  them yet.
+- **e645b381** (3 passed): client disconnect (2 — one
+  ``test_chat_pin_client_disconnect_proves_actual_cancellation``
+  execution per profile: Hermes, OpenCode) + request-quota 429 (1).
 - **e3e97918** (2 passed): disconnect hardening — the strengthened
   ``test_chat_pin_client_disconnect_proves_actual_cancellation``
   (real-TCP disconnect, mocked upstream transport close proven before
-  teardown) **supersedes** the earlier disconnect case from the
-  ``e645b381`` batch, plus one additional disconnect assertion case.
+  teardown) re-executed for the same 2 profile parameters, **superseding
+  the 2 older disconnect executions** from the ``e645b381`` batch.
 - **e6e166c2** (8 passed): model/endpoint/provider/streaming-disabled
   route policy denials (4 cases, each executed under two profile
   parameters: Hermes and OpenCode).
 
 What the PG rounds prove: the **PG/HTTP** accounting lifecycle —
 reservation → finalization with provider-reported usage, reservation
-release on provider error, **estimated finalization** on client
+release on provider HTTP error, **estimated finalization** on client
 disconnect after partial output (the disconnect path settles the
 reservation from estimated usage; it is not an error release), 429
 request-quota denial, and pre-upstream denial of bad pins/keys/routes.
-What they do **not** prove: R4 held-slot revalidation (that path is
-exercised only by the unit fake-slot seam tests above) and real Redis
-behavior (rate-limit seams are mocked/faked in all of these tests).
+Current coverage gaps: the two HTTP 500 release tests are Hermes-only
+(no OpenCode parameters yet); the disconnect round only proves transport
+close for the mocked upstream, and real-provider behavior is not
+covered. What the PG rounds do **not** prove at all: R4 held-slot
+revalidation (exercised only by the unit fake-slot seam tests above)
+and real Redis behavior (rate-limit seams are mocked/faked in all of
+these tests).
 
 ### Native loopback (preprotected, reused — NOT rerun)
 
@@ -240,9 +245,14 @@ resolution.
 - The protected live gate is **``not_run``**: no production live
   inference, key mutation, or deploy is recorded. The report is
   **NEEDS_CONTINUATION** (see the adjacent obligation-manifest JSON)
-  because the two governance assertions above remain failed against the
-  immutable 227-a order; ``preprotected.missing`` includes governance and
-  is deliberately **not** ``[]`` and not a false READY.
+  because (a) the two governance assertions above remain failed
+  against the activated 227-a order, (b) the per-obligation verified
+  test-node-ID mapping required by the order's obligation-manifest duty
+  is not yet produced (the manifest is currently an evidence index),
+  and (c) the bounded protected live test plan carries placeholder
+  requirements only — no actual target route/model/backend and no
+  numeric ceilings are declared. ``preprotected.missing`` lists all
+  three and is deliberately **not** ``[]`` and not a false READY.
 - Quota/accounting/Redis foundations are **unchanged** versus base
   ``0940d8a2``; the changed services are auth, Chat
   orchestration/request-caps/request-policy, key policy, and key service.
