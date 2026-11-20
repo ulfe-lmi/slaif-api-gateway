@@ -16,14 +16,21 @@ dispatch denials, and usage accounting on the same seed helpers.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
+import socket
+import threading
+import time
 import uuid
+from collections.abc import Iterator
+from contextlib import closing, contextmanager
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 import httpx
 import pytest
+import uvicorn
 from fastapi.testclient import TestClient
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
@@ -980,6 +987,7 @@ async def _create_chat_key(
     allowed_models: list[str],
     chat_client_module: dict[str, str] | None,
     note: str,
+    request_limit_total: int = 100,
 ) -> tuple[str, uuid.UUID]:
     """Create a Chat-endpoint key; return (plaintext_key, gateway_key_id)."""
     engine = create_async_engine(database_url, future=True)
@@ -994,7 +1002,7 @@ async def _create_chat_key(
                     valid_until=now + timedelta(days=1),
                     cost_limit_eur=Decimal("10.000000000"),
                     token_limit_total=100_000,
-                    request_limit_total=100,
+                    request_limit_total=request_limit_total,
                     allowed_models=allowed_models,
                     allowed_endpoints=[CHAT_ENDPOINT],
                     note=note,
@@ -1631,6 +1639,351 @@ async def test_chat_pin_provider_http_error_releases_reservation(
     assert gateway_key.tokens_used_total == 0
     assert gateway_key.requests_used_total == 0
     assert gateway_key.cost_used_eur == Decimal("0")
+
+
+# ---------------------------------------------------------------------------
+# Round 4: real client disconnect mid-stream (uvicorn + real TCP)
+# ---------------------------------------------------------------------------
+
+
+def _free_port() -> int:
+    """A free loopback TCP port for a disposable uvicorn server."""
+    with closing(socket.socket(socket.AF_INET, socket.SOCK_STREAM)) as sock:
+        sock.bind(("127.0.0.1", 0))
+        return sock.getsockname()[1]
+
+
+@contextmanager
+def _run_uvicorn_server(app, port: int) -> Iterator[None]:
+    """Run the app on real TCP uvicorn in a daemon thread; exit on scope end."""
+    config = uvicorn.Config(
+        app,
+        host="127.0.0.1",
+        port=port,
+        log_level="error",
+        lifespan="on",
+        timeout_keep_alive=1,
+    )
+    server = uvicorn.Server(config)
+    thread = threading.Thread(target=lambda: asyncio.run(server.serve()), daemon=True)
+    thread.start()
+    deadline = time.monotonic() + 10.0
+    while not server.started:
+        if time.monotonic() > deadline:
+            raise AssertionError("uvicorn server did not start in time")
+        time.sleep(0.05)
+    try:
+        yield
+    finally:
+        server.should_exit = True
+        thread.join(timeout=10)
+
+
+async def _disconnect_stream_sse(upstream_model: str):
+    """Partial delta, 2 s stall, then late delta + usage + [DONE].
+
+    The client disconnects after the first delta; the late yields prove
+    the upstream generator is interrupted rather than consumed.
+    """
+    chunk_id = "chatcmpl_227_disconnect"
+
+    def _event(content: str, finish_reason: str | None, usage: dict | None) -> str:
+        event: dict = {
+            "id": chunk_id,
+            "object": "chat.completion.chunk",
+            "created": 123,
+            "model": upstream_model,
+            "choices": [
+                {"index": 0, "delta": {"content": content}, "finish_reason": finish_reason}
+            ],
+        }
+        if usage is not None:
+            event["choices"] = []
+            event["usage"] = usage
+        return _sse_event(json.dumps(event))
+
+    # httpx treats async-generator content items as raw bytes chunks.
+    yield _event("Partial answer.", None, None).encode()
+    await asyncio.sleep(2.0)
+    yield _event(
+        "", None, {"prompt_tokens": 5, "completion_tokens": 6, "total_tokens": 11}
+    ).encode()
+    yield b"data: [DONE]\n\n"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("module_id", "tool_name"),
+    [
+        (HERMES_MODULE_ID, "read_file"),
+        (OPENCODE_MODULE_ID, "read"),
+    ],
+)
+async def test_chat_pin_client_disconnect_proves_actual_cancellation(
+    migrated_postgres_url: str,
+    respx_mock,
+    monkeypatch,
+    module_id: str,
+    tool_name: str,
+) -> None:
+    """A real TCP client disconnect mid-stream cancels the app and estimates.
+
+    Real uvicorn over loopback + real PostgreSQL: the stream starts and the
+    first delta is delivered, then the client drops the connection while
+    the upstream generator is still producing. The gateway's shielded
+    interruption finalization records an estimated (non-invoice-grade)
+    ledger, finalizes the reservation, and burns exactly one request.
+    """
+    seed = await _seed(migrated_postgres_url)
+    suffix = uuid.uuid4().hex[:12]
+    provider_slug, base_url, runtime_model = await _seed_runtime_route(
+        migrated_postgres_url, suffix, supports_streaming=True
+    )
+    assert provider_slug not in {"openai", "openrouter"}
+    pin = _module_pin(module_id)
+    plaintext_key, key_id = await _create_chat_key(
+        migrated_postgres_url,
+        seed,
+        datetime.now(UTC),
+        allowed_models=[runtime_model],
+        chat_client_module=pin,
+        note=f"227 agent Chat profile disconnect {module_id}",
+    )
+
+    request_body = {
+        "model": runtime_model,
+        "messages": [{"role": "user", "content": "Read the log file."}],
+        "reasoning_effort": "xhigh",
+        "stream": True,
+        "stream_options": {"include_usage": True},
+        "tools": [
+            {
+                "type": "function",
+                "function": {
+                    "name": tool_name,
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"path": {"type": "string"}},
+                        "required": ["path"],
+                    },
+                },
+            }
+        ],
+    }
+    monkeypatch.setenv(HERMES227_SVC_KEY_ENV, FAKE_COMPATIBLE_UPSTREAM_KEY)
+    upstream = respx_mock.post(f"{base_url}/chat/completions").mock(
+        return_value=httpx.Response(
+            200,
+            content=_disconnect_stream_sse(RUNTIME_MODEL),
+            headers={"content-type": "text/event-stream"},
+        )
+    )
+
+    app = create_app(_runtime_settings(migrated_postgres_url))
+    port = _free_port()
+    # respx intercepts every httpx client in the process; the test-side
+    # loopback client must be a real TCP connection, so mark its URL
+    # pass-through while the provider URL stays mocked.
+    respx_mock.post(f"http://127.0.0.1:{port}{CHAT_ENDPOINT}").pass_through()
+    with _run_uvicorn_server(app, port):
+        http = httpx.Client(timeout=httpx.Timeout(30.0))
+        try:
+            with http.stream(
+                "POST",
+                f"http://127.0.0.1:{port}{CHAT_ENDPOINT}",
+                headers={"Authorization": f"Bearer {plaintext_key}"},
+                json=request_body,
+            ) as response:
+                assert response.status_code == 200, response.read()
+                received = ""
+                for chunk in response.iter_text():
+                    received += chunk
+                    if "Partial answer." in received:
+                        break
+                # Exiting the stream context closes the real TCP
+                # connection mid-stream.
+            assert "NEVER-ARRIVED." not in received
+        finally:
+            http.close()
+        # Give the app's shielded interruption finalization time to commit
+        # before the server is torn down.
+        time.sleep(1.5)
+    assert len(upstream.calls) == 1
+
+    deadline = time.monotonic() + 15.0
+    while time.monotonic() < deadline:
+        gateway_key, reservations, ledgers = await _runtime_state(
+            migrated_postgres_url, key_id
+        )
+        if ledgers:
+            break
+        await asyncio.sleep(0.25)
+
+    assert ledgers, "no ledger row was written before the polling deadline"
+    assert len(reservations) == 1
+    assert len(ledgers) == 1
+    reservation, ledger = reservations[0], ledgers[0]
+    assert reservation.status == "finalized"
+    assert ledger.streaming is True
+    assert ledger.success is False
+    assert ledger.accounting_status == "estimated"
+    assert ledger.error_type == "client_disconnected"
+    assert ledger.completion_tokens > 0
+    metadata = ledger.response_metadata or {}
+    assert metadata.get("stream_interruption_reason") == (
+        "chat_streaming_client_disconnected_estimated"
+    )
+    assert metadata.get("accounting_estimate_reason") == (
+        "chat_streaming_client_disconnected_estimated"
+    )
+    assert metadata.get("final_provider_usage_available") is False
+    assert gateway_key.tokens_reserved_total == 0
+    assert gateway_key.requests_reserved_total == 0
+    assert gateway_key.cost_reserved_eur == Decimal("0")
+    assert gateway_key.requests_used_total == 1
+    assert gateway_key.tokens_used_total > 0
+    # No cost_used_eur assertion: the disconnect finalizes the estimated
+    # (non-zero) cost, not zero.
+
+    # The persisted pin survives interruption; no secrets in the persisted set.
+    assert (gateway_key.metadata_json or {}).get("chat_client_module") == pin
+    db_payload = json.dumps(
+        {
+            "gateway_key": {
+                "public_key_id": gateway_key.public_key_id,
+                "key_hint": gateway_key.key_hint,
+                "token_hash": gateway_key.token_hash,
+                "metadata": gateway_key.metadata_json,
+            },
+            "reservation": {
+                "request_id": reservation.request_id,
+                "requested_model": reservation.requested_model,
+                "status": reservation.status,
+            },
+            "ledger": {
+                "usage_raw": ledger.usage_raw,
+                "response_metadata": ledger.response_metadata,
+                "error_message": ledger.error_message,
+            },
+        },
+        sort_keys=True,
+        default=str,
+    )
+    assert FAKE_COMPATIBLE_UPSTREAM_KEY not in db_payload
+    assert plaintext_key not in db_payload
+
+
+# ---------------------------------------------------------------------------
+# Round 4: request quota exhaustion (429 before upstream)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_chat_pin_request_quota_exhausted_denied_429_before_upstream(
+    migrated_postgres_url: str,
+    respx_mock,
+    monkeypatch,
+) -> None:
+    """A key at its request limit gets 429 preflight before any forwarding.
+
+    PG preflight only: the first request consumes the single allowed
+    request and finalizes normally; the identical second request is denied
+    by the PostgreSQL request-quota preflight with 429
+    ``quota_limit_exceeded`` before the provider is contacted. Concurrent
+    lazy-wait revalidation is Redis-gated and is not faked here.
+    """
+    seed = await _seed(migrated_postgres_url)
+    suffix = uuid.uuid4().hex[:12]
+    provider_slug, base_url, runtime_model = await _seed_runtime_route(
+        migrated_postgres_url, suffix
+    )
+    assert provider_slug not in {"openai", "openrouter"}
+    pin = _module_pin(HERMES_MODULE_ID)
+    plaintext_key, key_id = await _create_chat_key(
+        migrated_postgres_url,
+        seed,
+        datetime.now(UTC),
+        allowed_models=[runtime_model],
+        chat_client_module=pin,
+        note="227 agent Chat profile request quota exhaustion",
+        request_limit_total=1,
+    )
+
+    request_body = {
+        "model": runtime_model,
+        "messages": [{"role": "user", "content": "Read the log file."}],
+        "reasoning_effort": "xhigh",
+        "stream": False,
+        "tools": [
+            {
+                "type": "function",
+                "function": {
+                    "name": "read_file",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"path": {"type": "string"}},
+                        "required": ["path"],
+                    },
+                },
+            }
+        ],
+    }
+    monkeypatch.setenv(HERMES227_SVC_KEY_ENV, FAKE_COMPATIBLE_UPSTREAM_KEY)
+    upstream = respx_mock.post(f"{base_url}/chat/completions").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl_227_runtime",
+                "object": "chat.completion",
+                "model": RUNTIME_MODEL,
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {"role": "assistant", "content": "Done."},
+                        "finish_reason": "stop",
+                    }
+                ],
+                "usage": {
+                    "prompt_tokens": 5,
+                    "completion_tokens": 6,
+                    "total_tokens": 11,
+                },
+            },
+            headers={"x-request-id": "upstream-227-hermes"},
+        )
+    )
+
+    app = create_app(_runtime_settings(migrated_postgres_url))
+    with TestClient(app) as client:
+        first = client.post(
+            CHAT_ENDPOINT,
+            headers={"Authorization": f"Bearer {plaintext_key}"},
+            json=request_body,
+        )
+        assert first.status_code == 200, first.text
+        assert first.json()["usage"]["total_tokens"] == 11
+
+        second = client.post(
+            CHAT_ENDPOINT,
+            headers={"Authorization": f"Bearer {plaintext_key}"},
+            json=request_body,
+        )
+
+    assert second.status_code == 429, second.text
+    assert second.json()["error"]["code"] == "quota_limit_exceeded"
+    # The denied request never reached the provider.
+    assert len(upstream.calls) == 1
+
+    gateway_key, reservations, ledgers = await _runtime_state(
+        migrated_postgres_url, key_id
+    )
+    assert len(reservations) == 1
+    assert len(ledgers) == 1
+    assert reservations[0].status == "finalized"
+    assert gateway_key.requests_used_total == 1
+    assert gateway_key.tokens_reserved_total == 0
+    assert gateway_key.requests_reserved_total == 0
+    assert gateway_key.cost_reserved_eur == Decimal("0")
 
 
 @pytest.mark.asyncio
