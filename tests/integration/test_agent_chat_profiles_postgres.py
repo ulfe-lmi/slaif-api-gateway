@@ -1674,23 +1674,57 @@ def _run_uvicorn_server(app, port: int) -> Iterator[None]:
     server = uvicorn.Server(config)
     thread = threading.Thread(target=lambda: asyncio.run(server.serve()), daemon=True)
     thread.start()
-    deadline = time.monotonic() + 10.0
-    while not server.started:
-        if time.monotonic() > deadline:
-            raise AssertionError("uvicorn server did not start in time")
-        time.sleep(0.05)
     try:
+        deadline = time.monotonic() + 10.0
+        while not server.started:
+            if time.monotonic() > deadline:
+                raise AssertionError("uvicorn server did not start in time")
+            time.sleep(0.05)
         yield
     finally:
         server.should_exit = True
         thread.join(timeout=10)
+        assert not thread.is_alive()
 
 
-async def _disconnect_stream_sse(upstream_model: str):
-    """Partial delta, 2 s stall, then late delta + usage + [DONE].
+class _DisconnectStreamTracker:
+    """Flags for a disconnect stream: transport close and late emission."""
 
-    The client disconnects after the first delta; the late yields prove
-    the upstream generator is interrupted rather than consumed.
+    def __init__(self) -> None:
+        self.aclose_called = False
+        self.late_emitted = False
+
+
+class _TrackingByteStream(httpx.AsyncByteStream):
+    """Wraps an upstream SSE byte stream, recording transport close on the tracker.
+
+    ``httpx.Response(stream=...)`` hands this object to the client as the
+    transport stream, so the gateway's ``async with client.stream(...)``
+    unwind on client disconnect calls its ``aclose()``. The completed flag is
+    set only after the underlying async generator's ``aclose()`` succeeds.
+    """
+
+    def __init__(self, stream, tracker: _DisconnectStreamTracker) -> None:
+        self._stream = stream
+        self._tracker = tracker
+
+    def __aiter__(self) -> "_TrackingByteStream":
+        return self
+
+    async def __anext__(self) -> bytes:
+        return await self._stream.__anext__()
+
+    async def aclose(self) -> None:
+        await self._stream.aclose()
+        self._tracker.aclose_called = True
+
+
+async def _disconnect_stream_sse(tracker: _DisconnectStreamTracker, upstream_model: str):
+    """Partial delta, 2 s stall, then a real late sentinel + usage + [DONE].
+
+    The client disconnects after the first delta. The late sentinel delta
+    is only reached if the stream is consumed past the stall instead of
+    being closed; the tracker records both outcomes.
     """
     chunk_id = "chatcmpl_227_disconnect"
 
@@ -1712,6 +1746,8 @@ async def _disconnect_stream_sse(upstream_model: str):
     # httpx treats async-generator content items as raw bytes chunks.
     yield _event("Partial answer.", None, None).encode()
     await asyncio.sleep(2.0)
+    tracker.late_emitted = True
+    yield _event("NEVER-ARRIVED.", "stop", None).encode()
     yield _event(
         "", None, {"prompt_tokens": 5, "completion_tokens": 6, "total_tokens": 11}
     ).encode()
@@ -1778,10 +1814,13 @@ async def test_chat_pin_client_disconnect_proves_actual_cancellation(
         ],
     }
     monkeypatch.setenv(HERMES227_SVC_KEY_ENV, FAKE_COMPATIBLE_UPSTREAM_KEY)
+    tracker = _DisconnectStreamTracker()
     upstream = respx_mock.post(f"{base_url}/chat/completions").mock(
         return_value=httpx.Response(
             200,
-            content=_disconnect_stream_sse(RUNTIME_MODEL),
+            stream=_TrackingByteStream(
+                _disconnect_stream_sse(tracker, RUNTIME_MODEL), tracker
+            ),
             headers={"content-type": "text/event-stream"},
         )
     )
@@ -1809,26 +1848,30 @@ async def test_chat_pin_client_disconnect_proves_actual_cancellation(
                         break
                 # Exiting the stream context closes the real TCP
                 # connection mid-stream.
-            assert "NEVER-ARRIVED." not in received
+            assert "Partial answer." in received
         finally:
             http.close()
         # Give the app's shielded interruption finalization time to commit
         # before the server is torn down.
         time.sleep(1.5)
-    assert len(upstream.calls) == 1
 
-    deadline = time.monotonic() + 15.0
-    while time.monotonic() < deadline:
-        gateway_key, reservations, ledgers = await _runtime_state(
-            migrated_postgres_url, key_id
-        )
-        if ledgers:
-            break
-        await asyncio.sleep(0.25)
+        # Assert while uvicorn is still running, before teardown: the
+        # transport must be closed and the estimated ledger committed.
+        assert len(upstream.calls) == 1
+        deadline = time.monotonic() + 15.0
+        while time.monotonic() < deadline:
+            gateway_key, reservations, ledgers = await _runtime_state(
+                migrated_postgres_url, key_id
+            )
+            if ledgers and tracker.aclose_called:
+                break
+            await asyncio.sleep(0.25)
 
-    assert ledgers, "no ledger row was written before the polling deadline"
-    assert len(reservations) == 1
-    assert len(ledgers) == 1
+        assert ledgers, "no ledger row was written before the polling deadline"
+        assert tracker.aclose_called is True
+        assert tracker.late_emitted is False
+        assert len(reservations) == 1
+        assert len(ledgers) == 1
     reservation, ledger = reservations[0], ledgers[0]
     assert reservation.status == "finalized"
     assert ledger.streaming is True
@@ -1848,9 +1891,10 @@ async def test_chat_pin_client_disconnect_proves_actual_cancellation(
     assert gateway_key.requests_reserved_total == 0
     assert gateway_key.cost_reserved_eur == Decimal("0")
     assert gateway_key.requests_used_total == 1
-    assert gateway_key.tokens_used_total > 0
-    # No cost_used_eur assertion: the disconnect finalizes the estimated
-    # (non-zero) cost, not zero.
+    assert ledger.actual_cost_eur is not None
+    assert ledger.actual_cost_eur > 0
+    assert ledger.actual_cost_eur == gateway_key.cost_used_eur
+    assert gateway_key.tokens_used_total == ledger.total_tokens
 
     # The persisted pin survives interruption; no secrets in the persisted set.
     assert (gateway_key.metadata_json or {}).get("chat_client_module") == pin
