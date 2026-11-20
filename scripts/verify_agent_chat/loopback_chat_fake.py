@@ -102,9 +102,16 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path == "/v1/models":
             self._journal("GET", self.path, dict(self.headers), b"")
+            model_ids = ["agent-chat-fake-model"]
+            extra = os.environ.get("AGENT_CHAT_FAKE_MODELS", "")
+            for mid in extra.split(","):
+                mid = mid.strip()
+                if mid and mid not in model_ids:
+                    model_ids.append(mid)
             payload = {"object": "list", "data": [
-                {"id": "agent-chat-fake-model", "object": "model",
+                {"id": mid, "object": "model",
                  "created": 1700000000, "owned_by": "agent-chat-loopback"}
+                for mid in model_ids
             ]}
             data = json.dumps(payload).encode()
             self.send_response(200)
@@ -128,6 +135,25 @@ class Handler(BaseHTTPRequestHandler):
             self.send_error(400, "invalid json")
             return
         scenario = load(SCENARIO, {"mode": "text"})
+        if scenario.get("stall"):
+            # Synthetic upstream stall: journal is already written; hold the
+            # connection open with no response so the native client's own
+            # provider request timeout (or the outer watchdog) fires.
+            time.sleep(3600)
+            return
+        if scenario.get("error_status"):
+            status = int(scenario["error_status"])
+            payload = json.dumps({"error": {
+                "message": scenario.get("error_message", "synthetic upstream failure"),
+                "type": scenario.get("error_type", "server_error"),
+                "code": scenario.get("error_code"),
+            }}).encode()
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+            return
         model = req.get("model")
         stream = bool(req.get("stream"))
         msgs = [m for m in req.get("messages", []) if isinstance(m, dict)]
@@ -136,6 +162,21 @@ class Handler(BaseHTTPRequestHandler):
 
         if scenario.get("mode") == "compact":
             if not (has_tools or has_tool_msg):
+                rf = req.get("response_format")
+                is_title = (isinstance(rf, dict)
+                            and rf.get("type") == "json_schema"
+                            and isinstance(rf.get("json_schema"), dict)
+                            and rf["json_schema"].get("name") == "session_title")
+                if is_title:
+                    # session_title auxiliary request: valid title JSON, never a summary.
+                    with LOCK:
+                        st = load(STATE, {})
+                        st["title_requests"] = st.get("title_requests", 0) + 1
+                        save(STATE, st)
+                    self._text(req, model, stream,
+                               dict(scenario, final_text=scenario.get("aux_final_text", "ok"),
+                                    usage=[4, 2]))
+                    return
                 with LOCK:
                     st = load(STATE, {})
                     st["summary_issued"] = True
@@ -155,11 +196,32 @@ class Handler(BaseHTTPRequestHandler):
 
         if not (has_tools or has_tool_msg):
             # Auxiliary (title, etc.): never consumes the main turn counter.
+            rf = req.get("response_format")
+            is_title = (isinstance(rf, dict)
+                        and rf.get("type") == "json_schema"
+                        and isinstance(rf.get("json_schema"), dict)
+                        and rf["json_schema"].get("name") == "session_title")
             with LOCK:
                 st = load(STATE, {})
                 st["aux_requests"] = st.get("aux_requests", 0) + 1
+                if is_title:
+                    st["title_requests"] = st.get("title_requests", 0) + 1
+                elif scenario.get("summary_text"):
+                    # Only a genuine compression summary request (no session_title
+                    # schema) may set summary_issued.
+                    st["summary_issued"] = True
                 save(STATE, st)
             if scenario.get("mode") == "toolloop":
+                if is_title:
+                    self._text(req, model, stream,
+                               dict(scenario, final_text=scenario.get("aux_final_text", "ok"),
+                                    usage=[4, 2]))
+                    return
+                if scenario.get("summary_text"):
+                    self._text(req, model, stream,
+                               dict(scenario, final_text=scenario["summary_text"],
+                                    usage=[4, 2]))
+                    return
                 self._aux(req, model, stream, scenario)
                 return
             self._text(req, model, stream,
@@ -246,9 +308,13 @@ class Handler(BaseHTTPRequestHandler):
     def _toolloop(self, req, model, stream, n, scenario):
         with LOCK:
             st = load(STATE, {})
-        if n == 1:
+        tool_turn = scenario.get("tool_turn_at", 1)
+        if n == tool_turn:
+            tool_name = scenario.get("tool_name", "read")
+            arg_key = scenario.get("arg_key", "filePath")
             files = scenario.get("tool_files") or [scenario.get("tool_file", "probe.txt")]
-            calls = [{"call_id": "call_fake_" + uuid.uuid4().hex[:20], "path": f}
+            calls = [{"call_id": "call_fake_" + uuid.uuid4().hex[:20], "path": f,
+                      "tool_name": tool_name, "arg_key": arg_key}
                      for f in files]
             st["issued"] = {"call_id": calls[0]["call_id"], "path": calls[0]["path"],
                             "calls": calls}
@@ -259,16 +325,19 @@ class Handler(BaseHTTPRequestHandler):
                     "created": int(time.time()), "model": model}
             chunks = [
                 dict(base, choices=[{"index": 0, "delta": {"role": "assistant", "content": None}, "finish_reason": None}]),
+                *([dict(base, choices=[{"index": 0, "delta": {"reasoning_content": scenario["first_reasoning_content"]}, "finish_reason": None}])]
+                  if scenario.get("first_reasoning_content") else []),
                 dict(base, choices=[{"index": 0, "delta": {"tool_calls": [
                     {"index": i, "id": c["call_id"], "type": "function",
-                     "function": {"name": "read",
-                                  "arguments": json.dumps({"filePath": c["path"]})}}
+                     "function": {"name": c.get("tool_name", "read"),
+                                  "arguments": json.dumps({c.get("arg_key", "filePath"): c["path"]})}}
                     for i, c in enumerate(calls)
                 ]}, "finish_reason": None}]),
                 dict(base, choices=[{"index": 0, "delta": {}, "finish_reason": "tool_calls"}]),
             ]
             if isinstance(req.get("stream_options"), dict) and req["stream_options"].get("include_usage"):
-                chunks.append(self._usage_chunk(cid, model, 30, 6))
+                tu = scenario.get("tool_usage") or [30, 6]
+                chunks.append(self._usage_chunk(cid, model, tu[0], tu[1]))
             self._stream(chunks)
             return
         # Continuation: gate on the actually correlated native tool results.
@@ -315,9 +384,16 @@ class Handler(BaseHTTPRequestHandler):
                 facts["unverified_calls"].append(c["path"])
         facts["per_call"] = per_call
         facts["correlated_calls"] = sum(1 for cf in per_call if cf["correlated_tool_message"])
+        if scenario.get("summary_text"):
+            facts["summary_in_continuation"] = any(
+                isinstance(m, dict) and isinstance(m.get("content"), str)
+                and scenario["summary_text"] in m["content"]
+                for m in req.get("messages", []))
         st["toolloop_facts"] = facts
         st["toolloop_verified"] = (facts["correlated_calls"] == len(calls)
                                    and not facts["unverified_calls"])
+        if "summary_in_continuation" in facts:
+            st["compact_verified"] = facts["summary_in_continuation"]
         # Echo the verified marker extracted from the correlated native tool
         # result (never an unconditional file read).
         if st["toolloop_verified"] and verified_pairs:
@@ -355,7 +431,7 @@ class Handler(BaseHTTPRequestHandler):
             save(STATE, st)
         text = found if found is not None else "AGENT_CHAT_COMPACT_UNVERIFIED"
         self._text(req, model, stream,
-                   dict(scenario, final_text=text, usage=[50, 10]))
+                   dict(scenario, final_text=text, usage=scenario.get("main_usage") or [50, 10]))
 
 
 def main():
