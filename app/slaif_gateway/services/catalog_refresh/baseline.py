@@ -45,6 +45,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
 from slaif_gateway.schemas.catalog_refresh import (
     CODEX_COMPACTION_COMPATIBLE_ROUTE_IDS_KEY,
+    CODEX_CONTEXT_ADMISSION_KEY,
     CODEX_LIMITS_KEY,
     BaselineCounts,
     BaselineDocument,
@@ -56,6 +57,7 @@ from slaif_gateway.schemas.catalog_refresh import (
     _CAPABILITY_BOOL_BLOCKS,
     parse_decimal_text,
     parse_codex_compaction_compatible_route_ids,
+    parse_codex_context_admission,
     parse_codex_route_limits,
     parse_route_external_tool_policy,
     DEFAULT_EXTERNAL_TOOL_OPERATOR_CEILINGS,
@@ -192,6 +194,11 @@ def project_route_capabilities(raw: Any) -> tuple[dict[str, Any], bool]:
                 unrepresented = True
             else:
                 canonical[key] = {k: value[k] for k in sorted(value)}
+        elif key == CODEX_CONTEXT_ADMISSION_KEY:
+            try:
+                canonical[key] = parse_codex_context_admission({key: value})
+            except Exception:  # noqa: BLE001 - fixed contract parser error
+                unrepresented = True
         elif key == CODEX_COMPACTION_COMPATIBLE_ROUTE_IDS_KEY:
             try:
                 ids = parse_codex_compaction_compatible_route_ids(

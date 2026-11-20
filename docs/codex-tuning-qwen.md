@@ -42,7 +42,7 @@ request can choose a smaller value or request up to the route maximum, subject
 to operator, context, pricing, quota, and rate-limit checks. The maximum alone
 does not make every call reserve 128,000 output tokens.
 
-For ordinary generation, the necessary backend condition is:
+For backends that require the entire requested output budget to fit, the condition is:
 
 ```text
 actual input tokens + requested output budget <= actual backend context
@@ -71,6 +71,69 @@ For a request near the 128,000 maximum on V100/A100, compact earlier or explicit
 use a smaller output budget. A remote `/responses/compact` call has its own
 output-reservation policy; it reserves the configured compact default, capped at applicable maxima. These templates use
 local compaction and leave `remote_compaction_v2=false`.
+
+## Context admission for a clipping backend
+
+A maximum output is a ceiling, not a promise to generate that many tokens.
+The upgraded A100 vLLM backend clips it to available context: with 200,000
+actual input tokens and a 64,000 output maximum in a 262,144 context, the
+backend allows at most 62,144 generated tokens. Such a request need not fail.
+The gateway's byte-based estimate can differ substantially from actual Qwen
+input tokens. For example, 330,260 estimated input plus a 64,000 output cap
+exceeds the padded 393,216 gateway ceiling by 1,044 even when the backend may
+have room for a shorter answer.
+
+Select who decides capacity with top-level route capability data:
+
+```json
+{"codex_context_admission": "upstream"}
+```
+
+This is a capability fragment, not a complete replacement document. The strict
+values are `gateway_estimate` (the omitted default, preserving the old guard)
+and `upstream`. Null, booleans, unknown strings and objects are refused. Never
+infer the setting from a provider slug or GPU name. Enable upstream admission
+only after verifying the **actual served endpoint** rejects full/oversized
+input and clips generation to remaining context, including reasoning, tools,
+streaming and vision. Qualify each repaired proxy separately. The A100 upgrade
+does not establish clipping support on the RTX3090 or V100 routes.
+
+Use a partial, audited route plan after installing the new gateway build:
+
+```bash
+slaif-gateway routes update ROUTE_UUID \
+  --codex-context-admission upstream \
+  --dry-run /private/context-admission-plan.json --json
+slaif-gateway routes update ROUTE_UUID \
+  --execute /private/context-admission-plan.json \
+  --reason "Verified backend context validation and output clipping" --json
+slaif-gateway routes show ROUTE_UUID --json
+```
+
+Review the plan fingerprint and changed capability before execution. Omitted
+siblings, numeric limits, adapters and key policies are preserved. Existing
+routes stay on the default mode until explicitly updated. Database-backed
+route changes require no key rotation or API restart once the supporting build
+is running. Roll back the setting with the same two-step workflow using
+`--codex-context-admission gateway_estimate`; do that before rolling back to a
+build that does not understand the new capability.
+
+In upstream mode the route context number remains required for numeric profile
+readiness but does not reject requests from an approximate token estimate. The
+backend owns actual model capacity. **Accounting stays conservative**: the
+example still reserves 394,260 tokens, forwards the 64,000 cap, and settles from
+actual reported usage. Explicit smaller output requests remain smaller; larger
+requests are clipped to the route/operator maximum; omission inserts the route
+default. Payload/image bounds, absolute operator input/output ceilings,
+capability/ownership checks, quotas, TPM, concurrency and finalization remain
+in force. No input is silently truncated and no output is unlimited.
+
+This policy applies to fully gated Codex create and compact admission; compact
+keeps its existing endpoint reservation and absent upstream output-limit field.
+It does not change ordinary Chat/Responses behavior or fix old clients' recovery
+from a genuine backend context error. Client context and auto-compaction limits
+must still describe the real model; do not raise them to the padded gateway
+ceiling. Earlier compaction remains a useful latency and safety margin.
 
 ## Install a profile that actually selects Qwen
 
@@ -161,7 +224,8 @@ quotas. Existing client files are not rewritten by a route update.
 | --- | --- |
 | route `codex_limits.default_max_output_tokens` | injected and reserved only when the client omitted a limit; smaller explicit requests are preserved |
 | route `codex_limits.max_output_tokens` | ceiling for explicit create requests; larger requests are clipped down |
-| route `codex_limits.context_window_tokens` | admission estimate ceiling; input estimate plus output allowance must fit |
+| route `codex_limits.context_window_tokens` | required context metadata; estimate-plus-output guard in `gateway_estimate` mode |
+| route `codex_context_admission` | `gateway_estimate` by default; explicit `upstream` delegates actual capacity validation without reducing reservations |
 | `CODEX_ABSOLUTE_MAX_OUTPUT_TOKENS` | operator ceiling; currently 128,000 by default |
 | `CODEX_ABSOLUTE_MAX_INPUT_TOKENS` | separate operator input ceiling |
 | `DEFAULT_MAX_OUTPUT_TOKENS` / `HARD_MAX_OUTPUT_TOKENS` | ordinary Chat/Responses defaults; Codex extended limits require independent key/route gates |

@@ -507,9 +507,17 @@ Responses-specific rules for the current foundation:
 - a fully gated Codex request requires strict top-level route `codex_limits`
   metadata. After route resolution, SLAIF replaces only the injected ordinary
   output default with the route default, then clips a valid explicit/default
-  output budget to route/operator maxima and rejects estimated input plus that
-  effective output above context before
-  Redis, pricing, quota, or provider work. The qualification profile's 32,768
+  output budget to route/operator maxima. By default (top-level
+  `codex_context_admission` omitted or `gateway_estimate`), it rejects estimated
+  input plus effective output above the route context ceiling before Redis,
+  pricing, quota, or provider work. Explicit `codex_context_admission="upstream"`
+  delegates actual model-capacity validation and generation clipping to a
+  qualified backend; the conservative input estimate plus full capped output
+  budget still drives pricing, rate admission and PostgreSQL quota reservation.
+  Both modes retain operator input/output maxima, payload/capability checks,
+  replay ownership, and actual-usage settlement. Unknown or wrongly typed modes
+  fail closed with `responses_codex_context_admission_invalid`. The setting is
+  route data, not a provider-name heuristic, client parameter or key privilege. The qualification profile's 32,768
   default and 1,050,000/128,000 limits are configured model data, not universal
   facts; ordinary Responses remains at 1,024. Gated pinned V1 compact is the
   explicit exception: it preserves an absent upstream `max_output_tokens` field

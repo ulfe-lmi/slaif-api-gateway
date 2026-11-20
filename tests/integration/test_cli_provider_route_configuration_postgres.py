@@ -1848,3 +1848,111 @@ def test_legacy_bound_operator_directory_resolution(world, cli_env) -> None:
             os.environ["COMPLETION_SERVICE_PROFILE_DIR"] = saved
         get_settings.cache_clear()
         load_profile.cache_clear()
+
+
+def test_context_admission_plan_is_audited_preserves_siblings_and_rejects_replay(cli_env, tmp_path):
+    # Own route: preceding legacy tests deliberately mutate their shared world.
+    caps = tmp_path / "context-capabilities.json"
+    caps.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "capabilities": {
+                    "responses": {"text": True, "stateless": True, "streaming": True},
+                    "codex_limits": {
+                        "context_window_tokens": 393216,
+                        "default_max_output_tokens": 64000,
+                        "max_output_tokens": 128000,
+                    },
+                    "media_input_estimation": {"version": 1, "image_tokens": 16896},
+                },
+            }
+        )
+    )
+    provider = _cli(
+        "providers",
+        "add",
+        "--provider",
+        "context-test",
+        "--kind",
+        "openai_compatible",
+        "--base-url",
+        "https://context.example.test/v1",
+        "--api-key-env-var",
+        "CONTEXT_TEST_UPSTREAM_KEY",
+        "--disabled",
+        "--json",
+    )
+    assert provider.exit_code == 0, provider.output
+    route = _cli(
+        "routes",
+        "add",
+        "--match-type",
+        "exact",
+        "--provider",
+        "context-test",
+        "--requested-model",
+        "context-test",
+        "--upstream-model",
+        "context-test",
+        "--endpoint",
+        "/v1/responses",
+        "--streaming",
+        "--disabled",
+        "--capabilities-file",
+        str(caps),
+        "--json",
+    )
+    assert route.exit_code == 0, route.output
+    route_id = json.loads(route.stdout)["id"]
+    for mode in ("upstream", "gateway_estimate"):
+        before = asyncio.run(_route(cli_env, route_id))
+        counts = asyncio.run(_audit_counts(cli_env))
+        path = tmp_path / f"context-{mode}.json"
+        result = _cli(
+            "routes",
+            "update",
+            route_id,
+            "--codex-context-admission",
+            mode,
+            "--dry-run",
+            str(path),
+            "--json",
+        )
+        assert result.exit_code == 0, result.output
+        assert asyncio.run(_route(cli_env, route_id)) == before
+        assert asyncio.run(_audit_counts(cli_env)) == counts
+        plan = parse_route_update_plan_file(path.read_bytes())
+        assert plan.capability_patch.codex_context_admission == mode
+        result = _cli(
+            "routes",
+            "update",
+            route_id,
+            "--execute",
+            str(path),
+            "--reason",
+            "verified context admission test",
+            "--json",
+        )
+        assert result.exit_code == 0, result.stderr
+        after = asyncio.run(_route(cli_env, route_id))
+        assert after["capabilities"] == {**before["capabilities"], "codex_context_admission": mode}
+        assert after["id"] == before["id"]
+        assert after["requested_model"] == before["requested_model"]
+        counts_after = asyncio.run(_audit_counts(cli_env))
+        assert (
+            counts_after.get("model_route_updated", 0) == counts.get("model_route_updated", 0) + 1
+        )
+        replay = _cli(
+            "routes",
+            "update",
+            route_id,
+            "--execute",
+            str(path),
+            "--reason",
+            "stale context plan",
+            "--json",
+        )
+        assert replay.exit_code != 0
+        assert asyncio.run(_route(cli_env, route_id)) == after
+        assert asyncio.run(_audit_counts(cli_env)) == counts_after

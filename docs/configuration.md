@@ -897,6 +897,12 @@ Ordinary Responses keeps `DEFAULT_MAX_OUTPUT_TOKENS=1024`. A request with all
 four prior Codex gates instead requires strict route `codex_limits` and replaces
 only the injected ordinary default with
 `codex_limits.default_max_output_tokens` (32,768 in the qualification profile).
+Optional route `codex_context_admission` selects `gateway_estimate` (omitted
+by default) or `upstream`. The latter delegates actual context validation to a
+qualified clipping backend; it keeps capped forwarding, conservative quota/TPM/
+cost reservation and absolute operator input/output limits. This is database
+route configuration, not an environment variable or client/key setting. See the
+[Qwen configuration example](codex-tuning-qwen.md#context-admission-for-a-clipping-backend).
 The result remains bounded by the route maximum, route context window, and the
 operator ceilings above. The qualification 1,050,000/128,000 values are
 configured model data, not universal provider facts or unlimited output.

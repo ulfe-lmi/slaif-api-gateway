@@ -83,6 +83,7 @@ from slaif_gateway.services.responses_route_capabilities import (
     RESPONSES_CAPABILITY_CODEX_ENCRYPTED_REASONING_REPLAY,
     RESPONSES_CAPABILITY_CODEX_REQUEST_ENVELOPE,
     RESPONSES_CAPABILITY_CODEX_STREAMING_TOOL_EVENTS,
+    parse_codex_context_admission,
     parse_codex_route_limits,
 )
 
@@ -4567,6 +4568,7 @@ def apply_codex_route_limits(
     """Finalize fully gated Codex limits after route resolution and before side effects."""
 
     limits = parse_codex_route_limits(route_capabilities)
+    context_admission = parse_codex_context_admission(route_capabilities)
     policy_result = apply_media_input_estimate(policy_result, route_capabilities=route_capabilities, input_ceiling=settings.CODEX_ABSOLUTE_MAX_INPUT_TOKENS)
 
     def _limit_facts(
@@ -4612,7 +4614,13 @@ def apply_codex_route_limits(
             "Estimated Codex input exceeds the configured operator maximum.",
             diagnostics=_limit_facts(output_tokens_value=output_tokens),
         )
-    if policy_result.estimated_input_tokens + output_tokens > limits.context_window_tokens:
+    # A conservative reservation estimate is not a tokenizer measurement.
+    # Qualified upstreams validate actual input and shorten generation to fit;
+    # keep the full estimate/output reservation without inventing an input cap.
+    if (
+        context_admission == "gateway_estimate"
+        and policy_result.estimated_input_tokens + output_tokens > limits.context_window_tokens
+    ):
         _raise(
             "input",
             "responses_codex_context_window_exceeded",

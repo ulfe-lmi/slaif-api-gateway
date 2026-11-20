@@ -74,10 +74,12 @@ from slaif_gateway.services.realtime_route_capabilities import (
 )
 from slaif_gateway.services.responses_route_capabilities import (
     CODEX_COMPACTION_COMPATIBLE_ROUTE_IDS_KEY,
+    CODEX_CONTEXT_ADMISSION_KEY,
     CODEX_LIMITS_KEY,
     KNOWN_RESPONSES_CAPABILITIES,
     RESPONSES_CAPABILITIES_KEY,
     parse_codex_compaction_compatible_route_ids,
+    parse_codex_context_admission,
     parse_codex_route_limits,
     validate_responses_capability_block,
 )
@@ -105,6 +107,7 @@ KNOWN_CAPABILITY_GROUPS = frozenset(
         CHAT_COMPLETIONS_CAPABILITIES_KEY,
         RESPONSES_CAPABILITIES_KEY,
         CODEX_LIMITS_KEY,
+        CODEX_CONTEXT_ADMISSION_KEY,
         CODEX_ACCESS_KEY,
         CODEX_COMPACTION_COMPATIBLE_ROUTE_IDS_KEY,
         "media_input_estimation",
@@ -338,6 +341,11 @@ def validate_capabilities_document(
                 CODEX_LIMITS_KEY,
                 "Value must set all three positive integer limits in order."
             )
+    if CODEX_CONTEXT_ADMISSION_KEY in capabilities:
+        try:
+            parse_codex_context_admission(capabilities)
+        except Exception:
+            _fail(CODEX_CONTEXT_ADMISSION_KEY, "Value must be gateway_estimate or upstream.")
     if CODEX_ACCESS_KEY in capabilities:
         try:
             validate_codex_access(capabilities[CODEX_ACCESS_KEY])
@@ -451,6 +459,7 @@ class CapabilityPatch:
     """Typed partial capability leaves (explicit leaves only)."""
 
     codex_limits: dict[str, int] | None = None
+    codex_context_admission: str | None = None
     media_input_estimation: dict[str, object] | None = None
     chat_completions: dict[str, bool] | None = None
     responses: dict[str, bool] | None = None
@@ -459,6 +468,7 @@ class CapabilityPatch:
     def is_empty(self) -> bool:
         return (
             self.codex_limits is None
+            and self.codex_context_admission is None
             and self.media_input_estimation is None
             and self.chat_completions is None
             and self.responses is None
@@ -490,6 +500,7 @@ def parse_capability_patch(
         _fail("capability_patch", "Value must be a JSON object.")
     known = {
         CODEX_LIMITS_KEY,
+        CODEX_CONTEXT_ADMISSION_KEY,
         "media_input_estimation",
         CHAT_COMPLETIONS_CAPABILITIES_KEY,
         RESPONSES_CAPABILITIES_KEY,
@@ -511,6 +522,13 @@ def parse_capability_patch(
             if type(value) is not int or value <= 0:
                 _fail(f"{CODEX_LIMITS_KEY}.{name}", "Value must be a positive integer.")
         codex_limits = dict(raw)
+
+    context_admission = None
+    if CODEX_CONTEXT_ADMISSION_KEY in document:
+        try:
+            context_admission = parse_codex_context_admission(document)
+        except Exception:
+            _fail(CODEX_CONTEXT_ADMISSION_KEY, "Value must be gateway_estimate or upstream.")
 
     media: dict[str, object] | None = None
     if "media_input_estimation" in document:
@@ -570,6 +588,7 @@ def parse_capability_patch(
 
     patch = CapabilityPatch(
         codex_limits=codex_limits,
+        codex_context_admission=context_admission,
         media_input_estimation=media,
         chat_completions=chat,
         responses=responses,
@@ -595,6 +614,11 @@ def merge_capability_patch(
         block = dict(merged.get(CODEX_LIMITS_KEY) or {})
         block.update(patch.codex_limits)
         merged[CODEX_LIMITS_KEY] = block
+    if patch.codex_context_admission is not None:
+        # Validate programmatic callers too; strings are never coerced.
+        merged[CODEX_CONTEXT_ADMISSION_KEY] = parse_codex_context_admission(
+            {CODEX_CONTEXT_ADMISSION_KEY: patch.codex_context_admission}
+        )
     if patch.media_input_estimation is not None:
         block = dict(merged.get("media_input_estimation") or {})
         block.update(patch.media_input_estimation)
@@ -891,6 +915,8 @@ def render_route_update_plan(plan: RouteUpdatePlan) -> dict[str, Any]:
     if plan.capabilities_mode == "partial":
         if plan.capability_patch.codex_limits is not None:
             patch_document[CODEX_LIMITS_KEY] = dict(plan.capability_patch.codex_limits)
+        if plan.capability_patch.codex_context_admission is not None:
+            patch_document[CODEX_CONTEXT_ADMISSION_KEY] = plan.capability_patch.codex_context_admission
         if plan.capability_patch.media_input_estimation is not None:
             patch_document["media_input_estimation"] = dict(
                 plan.capability_patch.media_input_estimation

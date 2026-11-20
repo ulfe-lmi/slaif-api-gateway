@@ -225,7 +225,21 @@ response reference metadata after a successful provider create response with an
 ID. If `max_output_tokens` is omitted, ordinary Responses injects the existing
 1,024 default output cap. A request with all four existing Codex gates uses its
 strict route numeric default instead (32,768 for the qualification profile),
-bounded by route/operator maximums and the route context window. The
+bounded by route/operator maximums and the selected context-admission policy.
+The optional top-level route `codex_context_admission` is strictly
+`gateway_estimate` (also the omitted default) or `upstream`. The former checks
+estimated input plus effective output against `codex_limits.context_window_tokens`;
+the latter sends the capped request to a qualified backend for actual tokenized
+context validation and generation clipping. In upstream mode the route context
+value remains required numeric/readiness metadata, not a hard estimate-based
+rejection threshold. Accounting, pricing and rate admission still use the full
+conservative reservation, including the output cap; operator input/output
+ceilings and all authorization, payload, media and replay rules still apply.
+An unknown value, null or wrong type is rejected as
+`responses_codex_context_admission_invalid`. This setting neither increases
+backend capacity nor guarantees automatic recovery from a real backend overflow.
+See [Qwen context-admission configuration](codex-tuning-qwen.md#context-admission-for-a-clipping-backend).
+The
 1,050,000/128,000 qualification limits and pricing multipliers are configured
 model data, not universal hardcoded facts. The route-side requirement is
 fail-closed: a key holding all four Codex grants requires the resolved route

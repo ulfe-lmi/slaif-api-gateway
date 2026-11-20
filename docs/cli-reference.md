@@ -800,6 +800,13 @@ slaif-gateway routes update <route-uuid> --execute /tmp/route-plan.json \
   --reason "raise reviewed ceiling"
 ```
 
+- `--codex-context-admission gateway_estimate|upstream` selects the optional
+  route context-admission policy through the same reviewed partial plan.
+  Omission preserves the current setting; malformed values fail closed. Use
+  `upstream` only for a backend verified to validate actual input and clip output
+  to remaining context. Conservative quota/TPM/cost reservations and absolute
+  input/output ceilings remain. This changes no key policy and requires no
+  rotation. See the [Qwen example](codex-tuning-qwen.md#context-admission-for-a-clipping-backend).
 - Edit flags exist ONLY for `--dry-run`: `--codex-context-window-tokens`,
   `--codex-default-max-output-tokens`, `--codex-max-output-tokens`,
   `--media-image-tokens`, `--media-video-tokens`, `--media-video-frames`,
