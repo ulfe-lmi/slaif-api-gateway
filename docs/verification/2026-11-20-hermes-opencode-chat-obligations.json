@@ -1,0 +1,140 @@
+{
+  "objective": "227-a",
+  "record": "docs/verification/2026-11-20-hermes-opencode-chat.md",
+  "status": "NEEDS_CONTINUATION",
+  "status_reason": "Two test_oap_governance.py assertions fail against the activated 227-a order's format (title line and PR-mode declaration line). The activated order was not edited, the validator was not weakened; canonical 227-b AMEND_EXISTING_PR on the same PR will correct the order format. No source/runtime change or unit/native rerun is required for that resolution.",
+  "branch": "oap/227-hermes-opencode-chat",
+  "base": "0940d8a28f3a413d2a2cc6f4962c0efcafd71e13",
+  "implementation_head_sha": "5c2bacf83578f5a23b6e9700656e8bfd26dc373c",
+  "report_publication_commit": "SELF (this report's sole report-only commit, sole parent = implementation head, sole diff = the report)",
+  "activated_order": {
+    "path": "oap/orders/227-a-hermes-opencode-chat-preprotected.md",
+    "sha256": "4d24d84bef3b7c7d2f1a4b4f70e380dc84debf95da726c8a922735dcadd0f546",
+    "edited_during_round": false
+  },
+  "active_pointer": {
+    "path": "oap/active",
+    "value": "227-a",
+    "sha256": "ea3d8056453a861b46ca727cf55aee5043a1df7b36cde04d49af43688ab17738",
+    "edited_during_round": false
+  },
+  "source": {
+    "tree_sha_at_head": "recorded in the implementation git tree at 5c2bacf8",
+    "changed_services_vs_base": [
+      "auth (services/auth_service.py, schemas/auth.py)",
+      "chat orchestration (services/chat_completion_gateway.py, services/chat_completion_request_caps.py)",
+      "request policy (services/request_policy.py)",
+      "key policy configuration (services/key_policy_configuration.py)",
+      "key service (services/key_service.py)",
+      "new neutral chat machinery (modules/clients/agent_chat.py, modules/agent_chat_profile_data.py, thin bindings hermes_0225_chat.py / opencode_1193_chat.py, modules/servers/registry.py)",
+      "schemas (schemas/keys.py, schemas/key_configuration.py)",
+      "cli (cli/keys.py, main.py)"
+    ],
+    "unchanged_vs_base": [
+      "quota/accounting foundations",
+      "redis foundations",
+      "provider-forwarding contract/repository foundations"
+    ]
+  },
+  "fixture_and_data_digests": {
+    "hermes_profile_raw_file_sha256": "ecd9aa5d5474a140ba0b4969f539bba526d7366296d116e1a6acb956476aba58",
+    "hermes_profile_fixture_sha256_pinned": "c5e34d46270280d7e08639c01c28065380a2a80843c1114ac1f1ad2a2744d327",
+    "hermes_doc_version": "2",
+    "opencode_profile_raw_file_sha256": "302c5469d048c7037bac76ba1f40dc2f9ce78e214b133c1e414c928181d9af07",
+    "opencode_profile_fixture_sha256_pinned": "2bd4f2599456892bb5d5119a85c9ffe9525796c1aa934ad46b49ce34d18f0e14",
+    "opencode_doc_version": "1",
+    "opencode_structural_fixture_sha256": "c84570f8dbbefb727ec90b17df2de802257951bda65e78b352df4742392208d3"
+  },
+  "client_identity": {
+    "hermes": {
+      "profile_id": "hermes-0.22.5-chat-v1",
+      "distribution": "hermes-agent v0.22.5",
+      "source_commit": "bf0203a794a07aac3ff764972ab9087baa4e4f4e",
+      "sdk": "openai-python 2.24.0",
+      "python_observed": "3.14.9",
+      "wire": "chat_completions"
+    },
+    "opencode": {
+      "profile_id": "opencode-1.19.3-chat-v1",
+      "distribution": "opencode 1.19.3 (anomalyco/opencode tag v1.19.3, commit e3c4eb242585dcd77be1a867391b7c25fd47ce52)",
+      "executable_sha256": "179ca421d61eefeadfa0c50e084a6e79c1623734732f0f4593f81ccfd3ab7ee9",
+      "archive_sha256": "531cff2441129c30f0edd5878af494108ad07f5feb46d7ee29a2a5b830a5765d",
+      "chat_provider_package": "@ai-sdk/openai-compatible 2.0.41 (ai 6.0.168)",
+      "runtime": "bun 1.3.14",
+      "observed_user_agent": "opencode/1.19.3 ai-sdk/provider-utils/4.0.23 runtime/bun/1.3.14",
+      "wire": "chat_completions"
+    }
+  },
+  "evidence": {
+    "unit": {
+      "command": "PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -m pytest tests/unit/test_agent_chat_profiles.py tests/unit/test_hermes_aux_reasoning_effort.py tests/unit/test_opencode_1193_chat.py tests/unit/test_agent_chat_dispatch.py tests/unit/test_verify_hermes_chat_capture.py tests/unit/test_auth_service.py tests/unit/test_key_policy_configuration.py tests/unit/test_key_service_create.py tests/unit/test_request_policy_service.py -q -o addopts= -p no:cacheprovider",
+      "head": "5c2bacf8",
+      "result": "557 passed",
+      "exit_code": 0,
+      "notes": "unit coverage (mocked provider upstream); TestR4ChatBindingRevalidation cases in test_agent_chat_dispatch.py use fake rate-limiter/quota seams; no native client or real Redis/PostgreSQL exercised"
+    },
+    "unit_overlapping_root_reuse": {
+      "command": "PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -m pytest tests/unit/test_verify_hermes_chat_capture.py -q -o addopts= -p no:cacheprovider",
+      "head": "f9dd35b6",
+      "result": "16 passed",
+      "exit_code": 0,
+      "notes": "independent overlapping evidence; these 16 nodes are included in the 557 above and the counts must not be summed"
+    },
+    "postgres_lifecycle": {
+      "engine": "owned disposable PostgreSQL 16 at 127.0.0.1:54398, database slaif_227_agent_chat_test",
+      "test_file": "tests/integration/test_agent_chat_profiles_postgres.py",
+      "per_run_receipts_chronological_overlapping": {
+        "b63c4ec7": "1 passed (first binding case)",
+        "2475bb71": "4 passed (projection/dry-run, export strictness, rotation pin preservation, rerun of first binding)",
+        "9fe29e23": "1 passed (Hermes runtime dispatch + PG accounting success)",
+        "a5edb7ab": "2 passed (runtime success parameterized Hermes+OpenCode; Hermes parameter reruns 9fe29e23 case)",
+        "fd086c95": "13 passed (pre-upstream denial battery + absent-pin default)",
+        "c9434f6f": "2 passed (stream success finalizes PG usage, one case executed per profile)",
+        "7821f944": "2 passed (provider-error release paths, Hermes-only parameters)",
+        "e645b381": "3 passed (client disconnect + request-quota 429 + stream provider-error release)",
+        "e3e97918": "2 passed (disconnect hardening; supersedes earlier disconnect case from e645b381)",
+        "e6e166c2": "8 passed (model/endpoint/provider/streaming policy denials, 4 cases x 2 profile parameters)"
+      },
+      "proves": "PG/HTTP reservation->finalization, release on provider error, estimated finalization on client disconnect after partial output, 429 request-quota denial, pre-upstream denials",
+      "does_not_prove": ["R4 held-slot revalidation (unit fake-slot only)", "real Redis behavior (rate-limit seams mocked)"]
+    },
+    "native_loopback_reused_not_rerun": {
+      "hermes": ["loop7 (7 POSTs)", "timeout4 (11 POSTs, outer watchdog CLI -15 @120s)", "error3 (11 POSTs, 68 error lines)", "multi1 (3 POSTs, 2 read_file call/result pairs)", "entry-final-positive (3 POSTs/2 calls/CLI 0/verified cleanup/hash-only receipt)"],
+      "opencode": "structural captures in tests/fixtures/opencode/1.19.3/chat/ (title/aux, session identity, text stream, reasoning, tool loop, multi-call, compaction)"
+    },
+    "static": {
+      "ruff": "ruff check app tests -> All checks passed!, exit 0",
+      "whitespace": "git diff --check clean"
+    },
+    "governance": {
+      "other_governance_files": ["tests/unit/test_agentic_client_integration_governance.py", "tests/unit/test_provider_governance.py"],
+      "other_governance_result": "5 passed, exit 0",
+      "oap_governance_file": "tests/unit/test_oap_governance.py",
+      "oap_governance_result": "2 failed, 8 passed, exit 1",
+      "failed_tests": [
+        "test_active_identifier_resolves_exactly_one_matching_order",
+        "test_initial_round_declares_new_pr_and_one_objective_one_pr"
+      ],
+      "cause": "activated 227-a order format (title line; prose PR-mode declaration), not a code or test regression",
+      "resolution": "canonical 227-b AMEND_EXISTING_PR on the same PR corrects the order format; no source/runtime change or rerun"
+    }
+  },
+  "honesty_disclosures": [
+    "historical secondary full-unit run (Python 3.13) failed one named OpenRouter audio test; aggregate counts and causality unknown; no fix made, no full matrix rerun claimed",
+    "setupfail1 receipt cleanup unverified/retained; manual cleanup only",
+    "protected live gate not_run: no live inference, key mutation, or deploy recorded"
+  ],
+  "preprotected": {
+    "missing": [
+      "governance:227-a-order-format (2 test_oap_governance failures against the immutable activated order; to resolve via canonical 227-b AMEND_EXISTING_PR on the same PR)"
+    ]
+  },
+  "protected": {
+    "status": "not_run",
+    "proposed_live_test": {
+      "scope": "one zero-retry process per profile against a real authorized route/model/backend",
+      "profiles": ["hermes-0.22.5-chat-v1 (pinned doc version \"2\", fixture c5e34d46270280d7e08639c01c28065380a2a80843c1114ac1f1ad2a2744d327)", "opencode-1.19.3-chat-v1 (pinned doc version \"1\", fixture 2bd4f2599456892bb5d5119a85c9ffe9525796c1aa934ad46b49ce34d18f0e14)"],
+      "ceiling_requirements": ["request count ceiling per profile", "token/cost ceiling", "wall-clock time ceiling", "task-owned process cleanup", "PG reservation/finalization accounting assertions (zero stranded reservations)"]
+    }
+  }
+}
