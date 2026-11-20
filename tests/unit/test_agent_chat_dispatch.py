@@ -176,11 +176,12 @@ class TestSelectionHelpers:
         assert error.param == "top_level"
 
     def test_module_identity_none_and_module(self) -> None:
+        meta = _pin()
         assert gateway_module._chat_module_identity(None) is None
         assert gateway_module._chat_module_identity(HERMES_0225_CHAT_CLIENT_MODULE) == (
-            _HERMES_ID,
-            "1",
-            HERMES_0225_CHAT_CLIENT_MODULE.fixture_sha256,
+            meta["id"],
+            meta["version"],
+            meta["fixture_sha256"],
         )
 
 

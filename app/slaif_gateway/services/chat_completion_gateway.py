@@ -226,6 +226,31 @@ def _openai_error_from_chat_request_error(exc: AgentChatRequestError) -> OpenAIC
     )
 
 
+def _observe_chat_capture_module_provenance(request, chat_module) -> None:
+    """Record the selected Chat module identity for the capture sidecar.
+
+    Observation-only: bounded, content-free, best-effort, and never
+    affects routing, admission, or accounting.  A no-op when no request
+    scope is bound, the capture channel is unavailable, or the default
+    dialect (no selected profile) is in force.
+    """
+    if request is None or chat_module is None:
+        return
+    try:
+        from slaif_gateway.services.request_capture import (
+            record_scope_capture_provenance,
+        )
+
+        record_scope_capture_provenance(
+            request.scope,
+            module_id=getattr(chat_module, "module_id", None),
+            module_version=getattr(chat_module, "module_version", None),
+            module_fixture_sha256=getattr(chat_module, "fixture_sha256", None),
+        )
+    except Exception:  # noqa: BLE001 - observability must never affect the request
+        pass
+
+
 def _chat_module_identity(module) -> tuple[str, str, str] | None:
     """Reviewed profile identity (None for the default dialect)."""
     if module is None:
@@ -273,6 +298,7 @@ async def handle_chat_completion(
         # A stored but unknown/stale/malformed Chat pin fails closed BEFORE
         # validation, admission, or any upstream activity.
         raise _openai_error_from_chat_module_selection_error(exc) from exc
+    _observe_chat_capture_module_provenance(request, chat_module)
     try:
         if chat_module is None:
             # Existing default path: historical exclude_none=True behavior.

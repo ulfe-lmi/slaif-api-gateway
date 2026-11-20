@@ -30,6 +30,9 @@ from slaif_gateway.modules.clients.codex_0162 import (
 from slaif_gateway.modules.clients.hermes_0225_chat import (
     HERMES_0225_CHAT_CLIENT_MODULE_ID,
 )
+from slaif_gateway.modules.clients.opencode_1193_chat import (
+    OPENCODE_1193_CHAT_CLIENT_MODULE_ID,
+)
 from slaif_gateway.modules.clients.registry import client_module_metadata, get_client_module
 from slaif_gateway.schemas.key_configuration import (
     ABSENT,
@@ -41,7 +44,10 @@ from slaif_gateway.schemas.key_configuration import (
     parse_key_configuration,
     parse_key_configuration_file,
 )
-from slaif_gateway.schemas.keys import UpdateGatewayKeyConfigurationInput
+from slaif_gateway.schemas.keys import (
+    RotateGatewayKeyInput,
+    UpdateGatewayKeyConfigurationInput,
+)
 from slaif_gateway.services.key_errors import (
     GatewayKeyNotFoundError,
     InvalidGatewayKeyLimitsError,
@@ -1405,3 +1411,229 @@ async def test_export_stored_negative_rate_window_fails_explicitly() -> None:
     service, _, _, _, _ = make_key_service(row)
     with pytest.raises(KeyConfigurationExportError):
         await service.export_gateway_key_configuration(row.id)
+
+
+# --------------------------------------------------------------------------
+# KeyService Chat client-module pin laws (227-a service wiring)
+# --------------------------------------------------------------------------
+
+
+def _hermes_chat_pin() -> dict[str, str]:
+    return agent_chat_profile_metadata(
+        get_agent_chat_client_module(HERMES_0225_CHAT_CLIENT_MODULE_ID)
+    )
+
+
+def _opencode_chat_pin() -> dict[str, str]:
+    return agent_chat_profile_metadata(
+        get_agent_chat_client_module(OPENCODE_1193_CHAT_CLIENT_MODULE_ID)
+    )
+
+
+def _stale_chat_pin() -> dict[str, str]:
+    pin = _hermes_chat_pin()
+    return {**pin, "fixture_sha256": "0" * 64}
+
+
+@pytest.mark.asyncio
+async def test_update_chat_pin_set_stores_canonical_and_projects_audit() -> None:
+    row = FakeGatewayKeyRow(
+        metadata_json={"responses_policy": {"version": 1, "allowed_capabilities": ["text"]}}
+    )
+    service, _, _, audit, _ = make_key_service(row)
+    config = KeyConfiguration()
+    config.chat_client_module = dict(_hermes_chat_pin())
+    await service.update_gateway_key_configuration(_update_payload(row, config))
+    assert row.metadata_json["chat_client_module"] == _hermes_chat_pin()
+    # Unrelated stored policy survives verbatim.
+    assert row.metadata_json["responses_policy"] == {
+        "version": 1,
+        "allowed_capabilities": ["text"],
+    }
+    assert len(audit.calls) == 1
+    new_values = audit.calls[0]["new_values"]
+    assert new_values["chat_client_module"] == _hermes_chat_pin()
+    assert new_values["responses_policy"]["allowed_capabilities"] == ["text"]
+
+
+@pytest.mark.asyncio
+async def test_update_chat_pin_replace_with_registered_module() -> None:
+    row = FakeGatewayKeyRow(metadata_json={"chat_client_module": _hermes_chat_pin()})
+    service, repo, _, _, _ = make_key_service(row)
+    config = KeyConfiguration()
+    config.chat_client_module = dict(_opencode_chat_pin())
+    await service.update_gateway_key_configuration(_update_payload(row, config))
+    assert row.metadata_json["chat_client_module"] == _opencode_chat_pin()
+    assert repo.metadata_calls[-1]["metadata_json"]["chat_client_module"] == (
+        _opencode_chat_pin()
+    )
+
+
+@pytest.mark.asyncio
+async def test_update_chat_pin_explicit_null_clears_only_chat() -> None:
+    row = FakeGatewayKeyRow(
+        metadata_json={
+            "chat_client_module": _hermes_chat_pin(),
+            "responses_policy": {"version": 1, "allowed_capabilities": ["text"]},
+        }
+    )
+    service, _, _, audit, _ = make_key_service(row)
+    config = KeyConfiguration()
+    config.chat_client_module = None
+    await service.update_gateway_key_configuration(_update_payload(row, config))
+    assert "chat_client_module" not in row.metadata_json
+    assert row.metadata_json["responses_policy"] == {
+        "version": 1,
+        "allowed_capabilities": ["text"],
+    }
+    assert audit.calls[0]["new_values"]["chat_client_module"] is None
+    assert audit.calls[0]["old_values"]["chat_client_module"] == _hermes_chat_pin()
+
+
+@pytest.mark.asyncio
+async def test_update_chat_pin_absent_preserves_stored_pin() -> None:
+    row = FakeGatewayKeyRow(
+        metadata_json={
+            "chat_client_module": _hermes_chat_pin(),
+            "allowed_providers": ["openai"],
+        }
+    )
+    service, repo, _, _, _ = make_key_service(row)
+    config = KeyConfiguration()
+    config.allowed_providers = ["openrouter"]
+    await service.update_gateway_key_configuration(_update_payload(row, config))
+    assert row.metadata_json["chat_client_module"] == _hermes_chat_pin()
+    stored = repo.metadata_calls[-1]["metadata_json"]
+    assert stored["chat_client_module"] == _hermes_chat_pin()
+    assert stored["allowed_providers"] == ["openrouter"]
+
+
+@pytest.mark.asyncio
+async def test_update_chat_pin_replaces_stale_old_pin_without_resolving_it() -> None:
+    # A stale (unresolvable) OLD pin may be replaced: the old pin is never
+    # resolved first, only the NEW pin must be current and registered.
+    row = FakeGatewayKeyRow(metadata_json={"chat_client_module": _stale_chat_pin()})
+    service, _, _, _, _ = make_key_service(row)
+    config = KeyConfiguration()
+    config.chat_client_module = dict(_hermes_chat_pin())
+    await service.update_gateway_key_configuration(_update_payload(row, config))
+    assert row.metadata_json["chat_client_module"] == _hermes_chat_pin()
+
+    # ... and may be cleared with explicit null.
+    config_clear = KeyConfiguration()
+    config_clear.chat_client_module = None
+    await service.update_gateway_key_configuration(_update_payload(row, config_clear))
+    assert "chat_client_module" not in row.metadata_json
+
+
+@pytest.mark.asyncio
+async def test_update_chat_pin_invalid_new_pin_fails_closed_no_write() -> None:
+    row = FakeGatewayKeyRow(metadata_json={"chat_client_module": _hermes_chat_pin()})
+    service, repo, _, audit, _ = make_key_service(row)
+    config = KeyConfiguration()
+    config.chat_client_module = {**_hermes_chat_pin(), "id": "no-such-chat-module"}
+    with pytest.raises(AgentChatModuleSelectionError):
+        await service.update_gateway_key_configuration(_update_payload(row, config))
+    assert row.metadata_json == {"chat_client_module": _hermes_chat_pin()}
+    assert repo.metadata_calls == []
+    assert audit.calls == []
+
+
+@pytest.mark.asyncio
+async def test_project_key_configuration_update_reflects_chat_pin_set_and_clear() -> None:
+    row = FakeGatewayKeyRow()
+    service, _, _, _, _ = make_key_service(row)
+    config = KeyConfiguration()
+    config.chat_client_module = dict(_hermes_chat_pin())
+    projection = await service.project_key_configuration_update(
+        row, config, reason="set chat pin"
+    )
+    assert projection.before_document["chat_client_module"] is None
+    assert projection.after_document["chat_client_module"] == _hermes_chat_pin()
+
+    row.metadata_json = {"chat_client_module": _hermes_chat_pin()}
+    config_clear = KeyConfiguration()
+    config_clear.chat_client_module = None
+    projection_clear = await service.project_key_configuration_update(
+        row, config_clear, reason="clear chat pin"
+    )
+    assert projection_clear.before_document["chat_client_module"] == _hermes_chat_pin()
+    assert projection_clear.after_document["chat_client_module"] is None
+
+
+@pytest.mark.asyncio
+async def test_export_chat_pin_malformed_fails_and_stale_wellformed_exports_stored() -> None:
+    malformed = FakeGatewayKeyRow(metadata_json={"chat_client_module": "not-a-pin"})
+    service, _, _, _, _ = make_key_service(malformed)
+    with pytest.raises(KeyConfigurationExportError):
+        await service.export_gateway_key_configuration(malformed.id)
+
+    # A stale but well-formed pin is structural export: it ships exactly as
+    # stored (dispatch fails closed on it; export must not sanitize it).
+    stale = FakeGatewayKeyRow(metadata_json={"chat_client_module": _stale_chat_pin()})
+    service_stale, _, _, _, _ = make_key_service(stale)
+    document = await service_stale.export_gateway_key_configuration(stale.id)
+    assert document["chat_client_module"] == _stale_chat_pin()
+    # The exported document must survive the same strict version-1 parser.
+    reparsed = parse_key_configuration(document)
+    assert reparsed.chat_client_module == _stale_chat_pin()
+
+    absent = FakeGatewayKeyRow()
+    service_absent, _, _, _, _ = make_key_service(absent)
+    document_absent = await service_absent.export_gateway_key_configuration(absent.id)
+    assert document_absent["chat_client_module"] is None
+
+
+def test_chat_client_module_audit_projection_is_secret_safe() -> None:
+    service, _, _, _, _ = make_key_service()
+    project = service._chat_client_module_audit_projection
+    assert project(None) is None
+    assert project("string") == "unsupported"
+    pin = _hermes_chat_pin()
+    assert project(pin) == pin
+    # Whitespace is stripped on projection but values are still echoed back
+    # ONLY for the exact reviewed identity fields.
+    assert project({**pin, "id": f" {pin['id']}"})[
+        "id"
+    ] == pin["id"]
+    # Unknown names and wrong-typed values are counted, never copied.
+    wrong_typed = project({**pin, "version": 2, "extra": "x"})
+    assert wrong_typed["unsupported_fields"] == 2
+    assert "extra" not in wrong_typed
+    assert "version" not in wrong_typed
+    # Missing a reviewed field is also counted as unsupported.
+    missing = project({k: v for k, v in pin.items() if k != "fixture_sha256"})
+    assert missing["unsupported_fields"] == 1
+    assert "fixture_sha256" not in missing
+
+
+@pytest.mark.asyncio
+async def test_rotate_gateway_key_carries_chat_pin_verbatim() -> None:
+    pin = _hermes_chat_pin()
+    old_key = FakeGatewayKeyRow(
+        metadata_json={
+            "chat_client_module": pin,
+            "responses_policy": {"version": 1, "allowed_capabilities": ["text"]},
+        }
+    )
+    service, keys_repo, _, _, _ = make_key_service(old_key)
+    await service.rotate_gateway_key(
+        RotateGatewayKeyInput(gateway_key_id=old_key.id, reason="replacement")
+    )
+    create_call = keys_repo.created_calls[0]
+    assert create_call["metadata_json"]["chat_client_module"] == pin
+    assert create_call["metadata_json"]["responses_policy"] == {
+        "version": 1,
+        "allowed_capabilities": ["text"],
+    }
+
+    # Rotation copies the stored pin verbatim: a stale stored pin is carried
+    # as-is (rotation never resolves or re-validates the pin).
+    old_stale = FakeGatewayKeyRow(metadata_json={"chat_client_module": _stale_chat_pin()})
+    service_stale, keys_repo_stale, _, _, _ = make_key_service(old_stale)
+    await service_stale.rotate_gateway_key(
+        RotateGatewayKeyInput(gateway_key_id=old_stale.id, reason="replacement")
+    )
+    assert keys_repo_stale.created_calls[0]["metadata_json"]["chat_client_module"] == (
+        _stale_chat_pin()
+    )
