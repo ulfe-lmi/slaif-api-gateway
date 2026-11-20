@@ -83,7 +83,11 @@ admission. The OpenCode ``observed_user_agent`` is
 
 ### Unit coverage — 557 passed, EXIT 0
 
-Exact command, on the current implementation HEAD, Python 3.12:
+Exact command, on the tested implementation head
+``5c2bacf83578f5a23b6e9700656e8bfd26dc373c`` (full tree
+``430aae04aaa2f4dbaf4ff529623d022ff3a09278``;
+``app/slaif_gateway`` tree ``0ab1e80ad89a6578b17b0bfcaa99fa5e8ccab21e``),
+Python 3.12:
 
 ```bash
 PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -m pytest \
@@ -275,12 +279,23 @@ title and PR-mode declaration lines.
   (immutable) was **NEEDS_CONTINUATION** because of the three gaps it
   declared (order-format governance, obligation mapping, concrete
   protected plan); the canonical 227-b round resolves (a) by the new
-  active order and its 10/10 governance run, and (b)+(c) by the
-  completed ``obligation_mapping`` and the full **PROPOSED** protected
-  live test plan in the adjacent obligation-manifest JSON. The plan is
+  active order and its 10/10 governance run, and (c) by the full
+  **PROPOSED** protected live test plan in this record. The plan is
   proposed/unconfirmed — human target authority and protected
   execution remain pending, and ``protected.status`` stays
-  ``not_run``.
+  ``not_run``. Gap (b), the per-obligation ``obligation_mapping`` in the
+  adjacent obligation-manifest JSON, is owned by the secondary
+  component: its reviewed mapping commit is in handoff and is **not yet
+  integrated** into this branch; this record must not claim it
+  completed before that handoff lands.
+
+- **Base ancestry note (factual, no rebase/merge performed):** remote
+  ``main`` advanced past this branch's base ``0940d8a2`` to
+  ``4500e16fa0b5f177aa25313c6a72321307b52efc`` (merge of PR #394,
+  docs only: five Codex image-limit doc files, disjoint from
+  ``app``/``tests``) while this branch was under review. The base
+  ``0940d8a2`` remains an ancestor of remote ``main``; no rebase or
+  merge is required or performed by 227-b.
 - **227-a report source-ownership SHA typo (corrected here; the
   immutable report was not edited):** the 227-a report records the
   secondary Hermes dossier commit as
@@ -327,8 +342,15 @@ saved real client credentials/configs.
 
 - ONE native process launch per profile; NO outer retry/rerun after
   failure.
-- At most **6 ADMITTED** Chat/model requests per profile including
-  auxiliary traffic, guarded by a finite task-key request quota.
+- Original strict proposal: at most **6 ADMITTED** Chat/model requests
+  per profile including auxiliary traffic, guarded by a finite
+  task-key request quota. **UNSATISFIED as a guarantee** — see the
+  retry-semantics section below: source proof shows native retries
+  cannot be promised off, and the PG 500-release assertions prove a
+  finite ``request_limit_total`` does **not** cap total admitted
+  attempts across failures. The strict ceiling is therefore recorded
+  as **UNSATISFIED / protected human-decision pending**, not as a
+  bound the gateway enforces.
 - Total input+output token quota **1,000,000** per profile.
 - Configured gateway cost quota **EUR 1.00** per profile / **EUR 2.00**
   aggregate under approved pricing.
@@ -336,7 +358,9 @@ saved real client credentials/configs.
 
 These are proposed configured admission/accounting bounds, not an invoice
 and not an exact external no-overrun guarantee. Rejected attempts are
-distinct from admitted requests.
+distinct from admitted requests. The "6 SETTLED/charged requests per
+key" ceiling appears **only** in the unapproved relaxed alternative
+below, never as the strict proposal's enforced bound.
 
 ### Retry semantics — strict guarantees are UNSATISFIED (source-proven)
 
