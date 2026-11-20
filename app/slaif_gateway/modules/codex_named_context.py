@@ -41,3 +41,14 @@ def lower_codex_named_context_output(item: Mapping[str, Any]) -> dict[str, Any]:
     if item.get("id") is not None:
         result["id"] = item["id"]
     return result
+
+
+def lower_codex_named_context_input(value: Any) -> Any:
+    """Normalize validated context only after original request controls pass."""
+    if not isinstance(value, list):
+        return value
+    return [
+        lower_codex_named_context_output(item)
+        if isinstance(item, Mapping) and is_codex_named_context_output(item) else item
+        for item in value
+    ]

@@ -161,3 +161,15 @@ def test_context_image_parts_keep_their_original_order_and_image_gates():
     assert responses_image_input_requested(accepted.effective_body)
     with pytest.raises(ResponsesRequestPolicyError):
         apply_body(value, settings=Settings(RESPONSES_MAX_TOTAL_IMAGE_DATA_URL_BYTES=1))
+
+
+@pytest.mark.parametrize("choice", ["none", "auto"])
+def test_context_only_request_keeps_codex_control_validation_before_normalization(choice):
+    value = request(context())
+    value.update(tool_choice=choice, parallel_tool_calls=False, reasoning={"effort": "low"})
+    accepted, _ = apply_body(value)
+    assert accepted.effective_body["tool_choice"] == choice
+    assert accepted.effective_body["input"][0]["role"] == "user"
+    value["tool_choice"] = {"type": "function", "name": "runtime_context"}
+    with pytest.raises(ResponsesRequestPolicyError):
+        apply_body(value)

@@ -58,6 +58,7 @@ from slaif_gateway.modules.clients.responses_support import (
 from slaif_gateway.modules.contracts import ResponsesClientPolicySpec
 from slaif_gateway.modules.codex_named_context import (
     is_codex_named_context_output,
+    lower_codex_named_context_input,
     lower_codex_named_context_output,
 )
 from slaif_gateway.config import Settings
@@ -472,6 +473,10 @@ class ResponsesRequestPolicy:
             ),
         )
 
+        # Original Codex controls and lifecycle checks must run before context
+        # becomes ordinary user data. Estimation then sees forwarded content.
+        effective_body["input"] = lower_codex_named_context_input(effective_body["input"])
+
         (
             estimated_input_tokens,
             estimated_non_message_input_tokens,
@@ -656,6 +661,7 @@ class ResponsesRequestPolicy:
             )
             self._validate_codex_client_tool_controls(effective_body)
             tools_schema_bytes = self._validate_tools(effective_body)
+        effective_body["input"] = lower_codex_named_context_input(effective_body["input"])
         (
             estimated_input_tokens,
             estimated_non_message_tokens,
@@ -1179,15 +1185,6 @@ class ResponsesRequestPolicy:
                     else None
                 ),
             )
-        # Do this only after lifecycle/duplicate-ID validation. A context
-        # output never resolves a pending call and never becomes a replay
-        # reference. Every transport receives the same ordinary user data;
-        # no backend is asked to invent linkage for an unpaired tool result.
-        canonical_items = [
-            lower_codex_named_context_output(item)
-            if is_codex_named_context_output(item) else item
-            for item in canonical_items
-        ]
         return canonical_items, total_material_bytes
 
     def _split_dialect_fields(
