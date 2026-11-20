@@ -541,11 +541,11 @@ For OpenCode 1.19.3, use `id` `opencode-1.19.3-chat-v1`, `version`
 `"1"`, and `fixture_sha256`
 `2bd4f2599456892bb5d5119a85c9ffe9525796c1aa934ad46b49ce34d18f0e14`.
 
-Inspect and export the binding:
+Inspect the binding. Only `keys policy export` renders the stored
+`chat_client_module` pin (or `null`); `keys policy show` and `keys policy
+effective` do not display the Chat pin:
 
 ```bash
-run-cli slaif-gateway keys policy show <key-id>
-run-cli slaif-gateway keys policy effective <key-id>
 run-cli slaif-gateway keys policy export <key-id>
 ```
 
@@ -558,21 +558,29 @@ CHAT_MAX_TOOL_DESCRIPTION_BYTES=8192
 HARD_MAX_OUTPUT_TOKENS=32768
 ```
 
-Upgrading a profile (for example a new DATA revision with a new fixture
-digest) ships in a new gateway package/image: deploy that revision to
-API, worker, and scheduler, restart the services, and re-pin the key to
-the new `{id, version, fixture_sha256}`. There is no automatic profile
-upgrade, rotation, or migration command. Under Docker, keep any policy
-file in the mounted working directory so it survives container
-recreation (it is a mount, not a baked image layer); restarting never
-changes bytes baked into the image.
+Upgrading a profile is a DATA revision, not an automatic event. Profile
+DATA is baked into the image, and each process loads ONE identity per
+module id from it; a pin resolves only when its `fixture_sha256` matches
+the deployed revision, so a digest mismatch fails that key closed. A
+data-only revision therefore does NOT require a new code/package/image:
+bind-mount a reviewed JSON read-only at the exact packaged profile paths
+on api, worker, and scheduler, recreate the services, and re-pin each key
+to the new `{id, version, fixture_sha256}`. A full image/package upgrade
+is an alternative, not a requirement. The policy file you pass to `keys
+policy update` (in the `run-cli` workspace) is a SEPARATE mount from the
+profile DATA file, so keeping it in the working directory preserves only
+the pin document, not the baked profile DATA. There is no automatic
+profile upgrade, rotation, or migration command. See the [upgrade
+runbook](upgrade-runbook.md#hermesopencode-chat-client-profile-upgrade-and-rollback-227-a)
+for the exact data-only, image, and rollback steps.
 
 Rollback is a full revision restore, not just a re-pin: each process
 loads exactly ONE identity per module id from its packaged DATA, so the
 previous pin only resolves once the matching previous trusted
-package/image is deployed to API, worker, and scheduler (and the CLI
-that applies the pin, which bootstraps the same registry). Deploy that
-revision, restart, and only then apply the exact previous
+revision (the previous image, or the previous reviewed profile DATA at
+the packaged paths) is deployed to API, worker, and scheduler (and the
+CLI that applies the pin, which bootstraps the same registry). Deploy
+that revision, recreate/restart, and only then apply the exact previous
 `{id, version, fixture_sha256}` with the matching CLI. While a key's
 pin digest and the deployed DATA digest mismatch, requests for that key
 fail closed. A previous revision must itself be reviewed and
