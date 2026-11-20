@@ -850,6 +850,62 @@ without a `chat_completions` block use a compatibility fallback for the
 previously supported surface, while malformed or unknown `chat_completions`
 capability flags fail closed.
 
+### Agent Chat client profile forwarding (preprotected)
+
+Agent-harness Chat profiles — `hermes-0.22.5-chat-v1` (profile DATA revision
+2, canonical fixture digest
+`c5e34d46270280d7e08639c01c28065380a2a80843c1114ac1f1ad2a2744d327`) and
+`opencode-1.19.3-chat-v1` (profile DATA revision 1, canonical fixture digest
+`2bd4f2599456892bb5d5119a85c9ffe9525796c1aa934ad46b49ce34d18f0e14`) — are
+selected ONLY from the authenticated server-side key metadata tuple
+`metadata_json.chat_client_module`, which must be exactly
+`{id, version, fixture_sha256}`. An absent pin keeps the existing
+`openai-default` Chat forwarding unchanged. A present pin that is malformed,
+unknown (including Responses-only modules), stale, or digest-mismatched fails
+closed before profile normalization, admission, or upstream activity with
+`400 invalid_request_error`, never degrades to the default dialect, and never
+affects Responses.
+
+The profile path forwards the presence-preserving request body: explicit
+client nulls must survive the strict shape and unknown-field checks, so nulls
+cannot smuggle profile fields past validation. The default path keeps its
+existing normalization.
+
+The resolved route's server descriptor must carry a reviewed pair for the
+selected profile BEFORE Redis rate limiting, PostgreSQL quota reservation,
+and credential lookup, and again on the refreshed route after a real wait; a
+missing pair fails closed with `400 incompatible_client_server_pair`. The
+default Chat dialect is never gated by this check (its existing factory-side
+pair check is unchanged). Current pairs are finite and generic: both Chat
+profiles pair only with the `openai-compatible` server module. Unqualified,
+native, and signed Responses-only transports — including the signed Local
+Coding `local-coding-v1` module, which remains a Responses-only transport —
+cannot serve these selected Chat profiles; default native Chat is unchanged.
+
+After a real wait, the profile binding is re-resolved from the refreshed
+key; an identity change raises `policy_changed_while_waiting` (never
+forward under a stale pre-wait profile), the refreshed route must keep the
+pair, and a post-acquisition refresh denial releases the acquired concurrency
+slot exactly once.
+
+Forwarding semantics: client-supplied history, per-profile assistant
+reasoning fields, and in-request tool call arguments/results are preserved
+exactly in the forwarded body under the ordinary client-trust model (no
+Responses HMAC, item-ID, or cross-request snapshot). Tool declarations are
+client-local function declarations and grant no hosted, routing, or execution
+authority. A `reasoning_effort` value outside the selected profile's effort
+vocabulary fails closed with `agent_chat_reasoning_effort_not_allowed`.
+
+A data-only vocabulary upgrade is new profile document bytes with a new
+canonical digest requiring a re-pinned operator key and process restart;
+there is no per-tool source upgrade, automatic upgrade, or silent
+key-rotation path. Both profiles are preprotected candidates: the protected
+live-qualification gate is `not_run`, nothing in the profile DATA grants live
+qualification, and this section creates no schema, key-rotation, deployment,
+or live-qualification claim. Selection architecture is in the "Chat client
+profile selection" section of
+[module-architecture.md](module-architecture.md).
+
 ## Header Contract
 
 | Header | Client to gateway | Gateway to provider | Gateway to client | Behavior |
