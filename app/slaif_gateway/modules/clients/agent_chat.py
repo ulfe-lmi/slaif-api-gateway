@@ -957,6 +957,23 @@ def agent_chat_profile_metadata(module: AgentChatClientModule) -> dict[str, str]
     }
 
 
+def canonicalize_chat_client_module_pin(raw_pin: object) -> dict[str, str] | None:
+    """Authoring-time strict canonicalization of an operator Chat pin.
+
+    ``None`` (absent or explicit clear) yields ``None``. A present pin
+    must be exactly ``{id, version, fixture_sha256}`` with string values
+    resolving to a CURRENTLY REGISTERED module (registry, version, and
+    fixture digest; fail-closed). Returns the canonical tuple from
+    :func:`agent_chat_profile_metadata` so stored pins are canonical
+    today. Raises :class:`AgentChatModuleSelectionError` on malformed,
+    stale, or unknown pins.
+    """
+    if raw_pin is None:
+        return None
+    module = resolve_chat_client_module(raw_pin)
+    return agent_chat_profile_metadata(module)
+
+
 def build_agent_chat_client_module(data: AgentChatProfileData) -> AgentChatClientModule:
     """Bind one validated profile document to the neutral engine."""
     return _DefaultAgentChatClientModule(compile_agent_chat_profile_spec(data))

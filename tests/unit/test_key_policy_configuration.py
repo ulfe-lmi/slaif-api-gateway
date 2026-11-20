@@ -16,11 +16,19 @@ from decimal import Decimal
 
 import pytest
 
+from slaif_gateway.modules.clients.agent_chat import (
+    AgentChatModuleSelectionError,
+    agent_chat_profile_metadata,
+    get_agent_chat_client_module,
+)
 from slaif_gateway.modules.clients.codex_0147 import CODEX_0147_CLIENT_MODULE_ID
 from slaif_gateway.modules.clients.codex_0149 import CODEX_0149_CLIENT_MODULE_ID
 from slaif_gateway.modules.clients.codex_0162 import (
     CODEX_0162_CLIENT_MODULE_ID,
     CODEX_0162_V1_CLIENT_MODULE,
+)
+from slaif_gateway.modules.clients.hermes_0225_chat import (
+    HERMES_0225_CHAT_CLIENT_MODULE_ID,
 )
 from slaif_gateway.modules.clients.registry import client_module_metadata, get_client_module
 from slaif_gateway.schemas.key_configuration import (
@@ -42,6 +50,7 @@ from slaif_gateway.services.key_errors import (
 from slaif_gateway.services.key_policy_configuration import (
     UNBOUND,
     KeyConfigurationExportError,
+    build_create_gateway_key_input,
     canonical_rate_policy_members,
     proposed_matches_stored_binding,
     quota_group_values,
@@ -421,6 +430,89 @@ def test_schema_rejects_programmatic_float_costs() -> None:
     with pytest.raises(KeyConfigurationError):
         parse_key_configuration({"schema_version": 1, "cost_limit_eur": 12.5})
 
+
+def test_schema_chat_client_module_absent_null_and_object_semantics() -> None:
+    absent = parse_key_configuration({"schema_version": 1})
+    assert absent.chat_client_module is ABSENT
+    assert not absent.has("chat_client_module")
+    cleared = parse_key_configuration(
+        {"schema_version": 1, "chat_client_module": None}
+    )
+    assert cleared.has("chat_client_module")
+    assert cleared.chat_client_module is None
+    pin = {
+        "id": HERMES_0225_CHAT_CLIENT_MODULE_ID,
+        "version": "1",
+        "fixture_sha256": "0" * 64,
+    }
+    config = parse_key_configuration({"schema_version": 1, "chat_client_module": pin})
+    assert config.chat_client_module == pin
+
+
+def test_schema_chat_client_module_structural_rejects() -> None:
+    for bad in (12.5, "hermes-0.22.5-chat-v1", ["hermes-0.22.5-chat-v1"], True):
+        with pytest.raises(KeyConfigurationError):
+            parse_key_configuration({"schema_version": 1, "chat_client_module": bad})
+
+
+def test_schema_chat_client_module_export_allowlist_and_roundtrip() -> None:
+    pin = {
+        "id": HERMES_0225_CHAT_CLIENT_MODULE_ID,
+        "version": "1",
+        "fixture_sha256": "0" * 64,
+    }
+    with_pin = key_configuration_export(
+        parse_key_configuration({"schema_version": 1, "chat_client_module": pin})
+    )
+    assert with_pin["chat_client_module"] == pin
+    assert parse_key_configuration(with_pin).chat_client_module == pin
+    without = key_configuration_export(parse_key_configuration({"schema_version": 1}))
+    assert "chat_client_module" not in without
+    cleared = key_configuration_export(
+        parse_key_configuration({"schema_version": 1, "chat_client_module": None})
+    )
+    assert cleared.get("chat_client_module") is None
+
+
+def test_create_input_wires_chat_pin_through_authoring_canonicalization() -> None:
+    module = get_agent_chat_client_module(HERMES_0225_CHAT_CLIENT_MODULE_ID)
+    canonical = agent_chat_profile_metadata(module)
+    valid_from = datetime(2026, 1, 1, tzinfo=UTC)
+    valid_until = datetime(2027, 1, 1, tzinfo=UTC)
+    with_pin = build_create_gateway_key_input(
+        config=parse_key_configuration(
+            {"schema_version": 1, "chat_client_module": dict(canonical)}
+        ),
+        owner_id=OWNER_ID,
+        valid_from=valid_from,
+        valid_until=valid_until,
+    )
+    assert with_pin.chat_client_module == canonical
+    for document in (
+        {"schema_version": 1},
+        {"schema_version": 1, "chat_client_module": None},
+    ):
+        built = build_create_gateway_key_input(
+            config=parse_key_configuration(document),
+            owner_id=OWNER_ID,
+            valid_from=valid_from,
+            valid_until=valid_until,
+        )
+        assert built.chat_client_module is None
+    stale = {
+        "id": module.module_id,
+        "version": "999",
+        "fixture_sha256": module.fixture_sha256,
+    }
+    with pytest.raises(AgentChatModuleSelectionError):
+        build_create_gateway_key_input(
+            config=parse_key_configuration(
+                {"schema_version": 1, "chat_client_module": stale}
+            ),
+            owner_id=OWNER_ID,
+            valid_from=valid_from,
+            valid_until=valid_until,
+        )
 
 def test_schema_rate_members_positive_int_or_null_and_strict_vocabulary() -> None:
     config = parse_key_configuration(

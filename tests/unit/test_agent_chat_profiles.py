@@ -28,6 +28,7 @@ from slaif_gateway.modules.clients.agent_chat import (
     AgentChatRequestError,
     agent_chat_profile_metadata,
     build_agent_chat_client_module,
+    canonicalize_chat_client_module_pin,
     get_agent_chat_client_module,
     register_agent_chat_client_module,
     resolve_chat_client_module,
@@ -37,6 +38,9 @@ from slaif_gateway.modules.clients.agent_chat import (
 from slaif_gateway.modules.clients.hermes_0225_chat import (
     HERMES_0225_CHAT_CLIENT_MODULE,
     HERMES_0225_CHAT_CLIENT_MODULE_ID,
+)
+from slaif_gateway.modules.clients.opencode_1193_chat import (
+    OPENCODE_1193_CHAT_CLIENT_MODULE_ID,
 )
 
 COMMIT = "bf0203a794a07aac3ff764972ab9087baa4e4f4e"
@@ -637,3 +641,56 @@ class TestSafeDiagnostics:
         assert excinfo.value.error_code == "agent_chat_schema_too_deep"
         assert "child" not in excinfo.value.param
         assert excinfo.value.param.startswith("tools[0].function.parameters")
+
+
+class TestCanonicalizeChatClientModulePin:
+    """Authoring-time strict canonicalization of operator Chat pins."""
+
+    def test_none_is_absent_and_returns_none(self) -> None:
+        assert canonicalize_chat_client_module_pin(None) is None
+
+    def test_registered_pin_returns_exact_canonical_tuple(self) -> None:
+        for module_id in (
+            HERMES_0225_CHAT_CLIENT_MODULE_ID,
+            OPENCODE_1193_CHAT_CLIENT_MODULE_ID,
+        ):
+            module = get_agent_chat_client_module(module_id)
+            canonical = agent_chat_profile_metadata(module)
+            assert set(canonical) == {"id", "version", "fixture_sha256"}
+            assert canonicalize_chat_client_module_pin(dict(canonical)) == canonical
+            assert canonicalize_chat_client_module_pin(canonical) == canonical
+
+    def test_malformed_pins_are_rejected_fail_closed(self) -> None:
+        for bad in (
+            {"id": HERMES_0225_CHAT_CLIENT_MODULE_ID},
+            {"version": "1", "fixture_sha256": "f" * 64},
+            {"id": "x", "version": "1", "fixture_sha256": "f" * 64, "extra": "y"},
+            {"id": 1, "version": "1", "fixture_sha256": "f" * 64},
+            {"id": "x", "version": "1", "fixture_sha256": 64},
+            HERMES_0225_CHAT_CLIENT_MODULE_ID,
+            [HERMES_0225_CHAT_CLIENT_MODULE_ID],
+        ):
+            with pytest.raises(AgentChatModuleSelectionError):
+                canonicalize_chat_client_module_pin(bad)
+
+    def test_stale_version_and_digest_mismatch_are_rejected(self) -> None:
+        module = get_agent_chat_client_module(HERMES_0225_CHAT_CLIENT_MODULE_ID)
+        stale = {
+            "id": module.module_id,
+            "version": "999",
+            "fixture_sha256": module.fixture_sha256,
+        }
+        with pytest.raises(AgentChatModuleSelectionError):
+            canonicalize_chat_client_module_pin(stale)
+        wrong_digest = {
+            "id": module.module_id,
+            "version": module.module_version,
+            "fixture_sha256": "0" * 64,
+        }
+        with pytest.raises(AgentChatModuleSelectionError):
+            canonicalize_chat_client_module_pin(wrong_digest)
+
+    def test_unknown_id_is_rejected_fail_closed(self) -> None:
+        pin = {"id": "acme-1.0.0-chat-v1", "version": "1", "fixture_sha256": "f" * 64}
+        with pytest.raises(AgentChatModuleSelectionError):
+            canonicalize_chat_client_module_pin(pin)
