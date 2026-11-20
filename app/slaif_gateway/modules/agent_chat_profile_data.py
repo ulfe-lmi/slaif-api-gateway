@@ -41,7 +41,7 @@ MAX_AGENT_CHAT_PROFILE_NAME_LENGTH = 64
 MAX_AGENT_CHAT_PROFILE_VERSION_LENGTH = 9
 MAX_AGENT_CHAT_PROFILE_SOURCE_TAG_LENGTH = 64
 MAX_AGENT_CHAT_PROFILE_SDK_VERSION_LENGTH = 32
-MAX_AGENT_CHAT_PROFILE_REASONING_VALUES = 5
+MAX_AGENT_CHAT_PROFILE_REASONING_VALUES = 6
 MAX_AGENT_CHAT_PROFILE_ASSISTANT_FIELDS = 8
 MAX_AGENT_CHAT_PROFILE_TOOL_NAMES = 64
 MAX_AGENT_CHAT_PROFILE_FIELD_NAME_LENGTH = 32
@@ -62,8 +62,12 @@ _ASSISTANT_FIELD_RE = re.compile(r"^[a-z][a-z0-9_]*$")
 # bounded; per-profile admission is still controlled by the name whitelist.
 _TOOL_NAME_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9._-]*$")
 
+# Finite standard Chat reasoning-effort vocabulary. ``none`` is the
+# observed auxiliary (session-title) request value of the pinned Hermes
+# 0.22.5 client; profiles opt in explicitly, the default Chat policy is
+# unchanged.
 AGENT_CHAT_REASONING_EFFORT_VOCABULARY = frozenset(
-    {"minimal", "low", "medium", "high", "xhigh"}
+    {"minimal", "low", "medium", "high", "xhigh", "none"}
 )
 AGENT_CHAT_WIRE_API = "chat_completions"
 

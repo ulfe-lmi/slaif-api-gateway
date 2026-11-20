@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "id": "hermes-0.22.5-chat-v1",
-  "version": "1",
+  "version": "2",
   "client": {
     "name": "hermes-agent",
     "distribution_version": "0.22.5",
@@ -12,7 +12,7 @@
     "wire_api": "chat_completions"
   },
   "dialect": {
-    "reasoning_efforts": ["minimal", "low", "medium", "high", "xhigh"],
+    "reasoning_efforts": ["minimal", "low", "medium", "high", "xhigh", "none"],
     "assistant_message_fields": [
       {"name": "reasoning", "max_bytes": 65536},
       {"name": "reasoning_content", "max_bytes": 65536}

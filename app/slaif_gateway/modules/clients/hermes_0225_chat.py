@@ -33,8 +33,6 @@ from slaif_gateway.modules.clients.agent_chat import (
 )
 
 HERMES_0225_CHAT_CLIENT_MODULE_ID = "hermes-0.22.5-chat-v1"
-HERMES_0225_CHAT_CLIENT_MODULE_VERSION = "1"
-
 _PROFILE_PATH = (
     Path(__file__).resolve().parent / "profiles" / "hermes-0.22.5-chat.json"
 )
@@ -42,6 +40,11 @@ _PROFILE_PATH = (
 HERMES_0225_CHAT_PROFILE_DATA: AgentChatProfileData = load_agent_chat_profile_file(
     _PROFILE_PATH
 )
+
+# The exported module version is derived from the validated DATA, so a
+# reviewed document revision never requires a source-constant edit; only
+# the module ID remains a source literal.
+HERMES_0225_CHAT_CLIENT_MODULE_VERSION = HERMES_0225_CHAT_PROFILE_DATA.version
 
 HERMES_0225_CHAT_CLIENT_MODULE: AgentChatClientModule = (
     build_agent_chat_client_module(HERMES_0225_CHAT_PROFILE_DATA)
