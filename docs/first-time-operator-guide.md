@@ -509,58 +509,87 @@ agentic CLI clients: `hermes-0.22.5-chat-v1` (Hermes 0.22.5) and
 without a pin keep the default `openai-default` Chat behavior, and the
 standard OpenAI client works unchanged.
 
-A profile pin is a strict `{id, version, fixture_sha256}` object stored in
-the key policy under `chat_client_module`. An absent field preserves the
-current binding, an explicit `null` clears only the Chat binding, and any
-malformed, unknown, or stale pin fails closed before admission.
+A profile pin is a strict `{id, version, fixture_sha256}` object with
+string values, stored in the key policy under `chat_client_module`. A
+policy file must be a top-level `schema_version` 1 key-configuration
+document; an omitted field preserves the current binding, an explicit
+`null` clears only the Chat binding, and malformed, unknown, or stale
+pins - including a numeric `version` - fail closed before admission.
 
-Bind a key to the Hermes profile:
+Bind a key to the Hermes profile. `run-cli` mounts only the current
+working directory into `/workspace`, so keep the policy file in the
+current directory:
 
 ```bash
-cat > /tmp/hermes-chat-pin.json <<'JSON'
+cat > ./hermes-chat-pin.json <<'JSON'
 {
+  "schema_version": 1,
   "chat_client_module": {
     "id": "hermes-0.22.5-chat-v1",
-    "version": 2,
+    "version": "2",
     "fixture_sha256": "c5e34d46270280d7e08639c01c28065380a2a80843c1114ac1f1ad2a2744d327"
   }
 }
 JSON
 
-run-cli slaif-gateway keys policy-update <key-id> \
-  --policy-file /tmp/hermes-chat-pin.json \
+run-cli slaif-gateway keys policy update <key-id> \
+  --policy-file ./hermes-chat-pin.json \
   --reason "Bind key to Hermes 0.22.5 Chat client profile"
 ```
 
-For OpenCode 1.19.3, use `id` `opencode-1.19.3-chat-v1`, `version` `1`,
-and `fixture_sha256`
+For OpenCode 1.19.3, use `id` `opencode-1.19.3-chat-v1`, `version`
+`"1"`, and `fixture_sha256`
 `2bd4f2599456892bb5d5119a85c9ffe9525796c1aa934ad46b49ce34d18f0e14`.
 
 Inspect and export the binding:
 
 ```bash
-run-cli slaif-gateway keys policy-show <key-id>
-run-cli slaif-gateway keys policy-effective <key-id>
-run-cli slaif-gateway keys policy-export <key-id>
+run-cli slaif-gateway keys policy show <key-id>
+run-cli slaif-gateway keys policy effective <key-id>
+run-cli slaif-gateway keys policy export <key-id>
+```
+
+The OpenCode profile additionally requires two operator environment
+values in `.env` (applied with `./scripts/docker-refresh.sh
+--env-only`); global defaults are unchanged (both default to `4096`):
+
+```bash
+CHAT_MAX_TOOL_DESCRIPTION_BYTES=8192
+HARD_MAX_OUTPUT_TOKENS=32768
 ```
 
 Upgrading a profile (for example a new DATA revision with a new fixture
 digest) is an operator action: re-pin the key to the new
 `{id, version, fixture_sha256}` and restart API, worker, and scheduler.
-There is no automatic profile upgrade, rotation, or migration command. To
-roll back, clear the pin:
+There is no automatic profile upgrade, rotation, or migration command.
+
+Rollback is a re-pin to the previous *exact* pin: write the old
+`{id, version, fixture_sha256}` into a `schema_version` 1 document and
+update the key again. Clearing the pin is a *deliberate* disable, not a
+rollback: after `null`, the key returns to `openai-default` Chat
+validation, and a client tuned to a profile's widened envelope (for
+example Hermes `xhigh` reasoning effort) may fail default validation
+until the pin is restored:
 
 ```bash
-echo '{"chat_client_module": null}' > /tmp/clear-chat-pin.json
+cat > ./clear-chat-pin.json <<'JSON'
+{
+  "schema_version": 1,
+  "chat_client_module": null
+}
+JSON
 
-run-cli slaif-gateway keys policy-update <key-id> \
-  --policy-file /tmp/clear-chat-pin.json \
-  --reason "Clear Chat client profile pin"
+run-cli slaif-gateway keys policy update <key-id> \
+  --policy-file ./clear-chat-pin.json \
+  --reason "Deliberately clear Chat client profile pin"
 ```
 
-The key returns to `openai-default` behavior. These profiles are
-candidate dossiers: the protected live gate is `not_run`, and no
-production live inference is recorded for them.
+These profiles are candidate dossiers: see
+[agentic-clients/hermes-0.22.5-chat-v1.md](agentic-clients/hermes-0.22.5-chat-v1.md)
+and
+[agentic-clients/opencode-1.19.3-chat-v1.md](agentic-clients/opencode-1.19.3-chat-v1.md).
+The protected live gate is `not_run`, and no production live inference
+is recorded for them.
 
 ## Real-Provider Smoke Test
 
