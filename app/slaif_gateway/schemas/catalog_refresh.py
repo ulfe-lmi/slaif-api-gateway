@@ -52,9 +52,11 @@ from slaif_gateway.services.external_tool_policy_contract import (
 from slaif_gateway.services.realtime_route_capabilities import KNOWN_REALTIME_CAPABILITIES
 from slaif_gateway.services.responses_route_capabilities import (
     CODEX_COMPACTION_COMPATIBLE_ROUTE_IDS_KEY,
+    CODEX_CONTEXT_ADMISSION_KEY,
     CODEX_LIMITS_KEY,
     KNOWN_RESPONSES_CAPABILITIES,
     parse_codex_compaction_compatible_route_ids,
+    parse_codex_context_admission,
     parse_codex_route_limits,
 )
 
@@ -1089,7 +1091,8 @@ class BaselineProviderRow(CatalogRefreshModel):
 # --- Baseline route capability projection (180-e) ---------------------------
 # Runtime model_routes.capabilities is a nested map of endpoint-family blocks
 # (chat_completions/audio_endpoints/embeddings/realtime/responses boolean
-# blocks, the typed codex_limits integer contract, the bounded Codex
+# blocks, the typed codex_limits integer contract, the context-admission mode,
+# and the bounded Codex
 # compaction route-ID allowlist, and the typed external_tools policy). The
 # baseline export projects exactly the recognized runtime contract with
 # bounded allowlists, preserving nested structure and effective meaning.
@@ -1104,7 +1107,7 @@ _CAPABILITY_BOOL_BLOCKS: dict[str, frozenset[str]] = {
     "responses": KNOWN_RESPONSES_CAPABILITIES,
 }
 _CAPABILITY_TOP_KEYS: frozenset[str] = frozenset(_CAPABILITY_BOOL_BLOCKS) | frozenset(
-    {CODEX_LIMITS_KEY, CODEX_COMPACTION_COMPATIBLE_ROUTE_IDS_KEY, "external_tools"}
+    {CODEX_LIMITS_KEY, CODEX_CONTEXT_ADMISSION_KEY, CODEX_COMPACTION_COMPATIBLE_ROUTE_IDS_KEY, "external_tools"}
 )
 
 # 180-f (F2): the single deterministic mapping between proposal intent and
@@ -1217,6 +1220,11 @@ def validate_route_capability_projection(raw: Any) -> None:
             parse_codex_route_limits({CODEX_LIMITS_KEY: raw[CODEX_LIMITS_KEY]})
         except Exception as exc:  # noqa: BLE001 - contract parser raises typed errors
             raise ValueError("capability block codex_limits is malformed") from exc
+    if CODEX_CONTEXT_ADMISSION_KEY in raw:
+        try:
+            parse_codex_context_admission(raw)
+        except Exception as exc:
+            raise ValueError("capability codex_context_admission is malformed") from exc
     if CODEX_COMPACTION_COMPATIBLE_ROUTE_IDS_KEY in raw:
         try:
             parse_codex_compaction_compatible_route_ids(

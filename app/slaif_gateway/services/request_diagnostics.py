@@ -215,6 +215,7 @@ _REQUIRED_ERROR_CODES = frozenset(
         "responses_codex_streaming_tool_events_not_allowed",
         # route-limit (context / output / input) rejection
         "responses_codex_limits_invalid",
+        "responses_codex_context_admission_invalid",
         "output_token_limit_exceeded",
         "input_token_limit_exceeded",
         "responses_codex_context_window_exceeded",

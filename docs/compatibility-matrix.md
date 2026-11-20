@@ -27,6 +27,14 @@ Shipped 0.16x presets (0.162.1 through 0.167.1) are exact data
 profiles, not a broad client or production-certification claim; packaged
 revision 8 remains the frozen fallback.
 
+Fully gated Codex routes additionally support explicit top-level
+`codex_context_admission="upstream"` for qualified backends that validate actual
+context and clip generation. Omission retains `gateway_estimate` admission.
+Both retain conservative reservations, output caps and absolute input/payload
+limits. [Configuration and boundaries](codex-tuning-qwen.md#context-admission-for-a-clipping-backend)
+are covered by policy/configuration tests and SDK/PostgreSQL streaming and
+non-streaming tests with mocked provider HTTP; no new live qualification follows.
+
 For the canonical RC2 target classification, see
 [`rc2-feature-scope.md`](rc2-feature-scope.md). This document records current
 implemented behavior only; a green harness on current `main` means

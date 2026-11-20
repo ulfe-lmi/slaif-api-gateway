@@ -499,6 +499,10 @@ def update(
     codex_max_output_tokens: Annotated[
         str | None, typer.Option("--codex-max-output-tokens")
     ] = None,
+    codex_context_admission: Annotated[
+        str | None,
+        typer.Option("--codex-context-admission", help="gateway_estimate (default) or qualified upstream"),
+    ] = None,
     media_image_tokens: Annotated[str | None, typer.Option("--media-image-tokens")] = None,
     media_video_tokens: Annotated[str | None, typer.Option("--media-video-tokens")] = None,
     media_video_frames: Annotated[str | None, typer.Option("--media-video-frames")] = None,
@@ -616,6 +620,7 @@ def update(
     )
     patch_flags_used = bool(
         codex_patch
+        or codex_context_admission is not None
         or media_patch
         or chat_patch
         or responses_patch
@@ -717,6 +722,7 @@ def update(
         completion_service = CapabilityPatch().completion_service  # omitted
     patch = CapabilityPatch(
         codex_limits=codex_patch or None,
+        codex_context_admission=codex_context_admission,
         media_input_estimation=media_patch or None,
         chat_completions=chat_patch,
         responses=responses_patch,

@@ -450,3 +450,83 @@ async def test_codex_unpartitioned_total_tokens_fail_closed() -> None:
             accounting.extract_usage(response),
             estimate,
         )
+
+
+@pytest.mark.parametrize("requested,effective", [(None, 64_000), (32, 32), (200_000, 128_000)])
+def test_upstream_context_admission_keeps_output_budget_and_reservation_exposure(
+    requested: int | None, effective: int
+) -> None:
+    # Measured gateway rejection: 330260 + 64000 = 394260 > 393216.
+    # This byte estimate is not the backend's tokenizer measurement.
+    initial = _codex_policy(max_output_tokens=requested).model_copy(
+        update={"estimated_input_tokens": 330_260}
+    )
+    caps = _route_capabilities(context_window_tokens=393_216, default_max_output_tokens=64_000)
+    caps["codex_context_admission"] = "upstream"
+    final = apply_codex_route_limits(initial, route_capabilities=caps, settings=Settings())
+    assert final.estimated_input_tokens == 330_260
+    assert final.effective_output_tokens == effective
+    assert final.effective_body["max_output_tokens"] == effective
+    assert final.estimated_input_tokens + final.effective_output_tokens == 330_260 + effective
+    assert final.codex_context_window_tokens == 393_216
+    # A later route revalidation must honor the destination's own mode.
+    if effective >= 64_000:
+        caps.pop("codex_context_admission")
+        with pytest.raises(Exception) as exc:
+            apply_codex_route_limits(final, route_capabilities=caps, settings=Settings())
+        assert exc.value.error_code == "responses_codex_context_window_exceeded"
+
+
+def test_upstream_context_admission_keeps_absolute_input_and_output_ceilings() -> None:
+    caps = _route_capabilities(context_window_tokens=393_216)
+    caps["codex_context_admission"] = "upstream"
+    final = apply_codex_route_limits(
+        _codex_policy(max_output_tokens=128_000).model_copy(
+            update={"estimated_input_tokens": 500_000}
+        ),
+        route_capabilities=caps,
+        settings=Settings(CODEX_ABSOLUTE_MAX_OUTPUT_TOKENS=40_000),
+    )
+    assert final.effective_output_tokens == 40_000
+    assert final.estimated_input_tokens == 500_000  # no route-window guess/clipping
+    with pytest.raises(Exception) as exc:
+        apply_codex_route_limits(
+            final.model_copy(
+                update={"estimated_input_tokens": 1_050_001, "unadjusted_input_tokens": 1_050_001}
+            ),
+            route_capabilities=caps,
+            settings=Settings(),
+        )
+    assert exc.value.error_code == "input_token_limit_exceeded"
+
+
+@pytest.mark.parametrize("bad", [None, True, 1, "", "auto", {}, ["upstream"]])
+def test_codex_context_admission_rejects_malformed_explicit_mode(bad: object) -> None:
+    caps = _route_capabilities()
+    caps["codex_context_admission"] = bad
+    with pytest.raises(Exception) as exc:
+        apply_codex_route_limits(_codex_policy(), route_capabilities=caps, settings=Settings())
+    assert exc.value.error_code == "responses_codex_context_admission_invalid"
+
+
+def test_upstream_compact_keeps_its_reservation_without_forwarding_output_limit() -> None:
+    compact = (
+        _policy(Settings())
+        .apply_compact(
+            {
+                "model": "gpt-5.6-sol",
+                "input": [{"role": "user", "content": "bounded"}],
+                "prompt_cache_key": "context-compact",
+            },
+            allow_codex_compaction=True,
+        )
+        .model_copy(update={"estimated_input_tokens": 1_049_000})
+    )
+    caps = _route_capabilities()
+    caps["codex_context_admission"] = "upstream"
+    final = apply_codex_route_limits(
+        compact, route_capabilities=caps, settings=Settings(), include_output_field=False
+    )
+    assert final.estimated_input_tokens == 1_049_000
+    assert final.effective_output_tokens == 12_000
+    assert "max_output_tokens" not in final.effective_body

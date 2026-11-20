@@ -35,6 +35,7 @@ RESPONSES_CAPABILITY_CODEX_STREAMING_TOOL_EVENTS = "codex_streaming_tool_events"
 RESPONSES_CAPABILITY_CODEX_ENCRYPTED_REASONING_REPLAY = "codex_encrypted_reasoning_replay"
 RESPONSES_CAPABILITY_CODEX_COMPACTION = "codex_compaction"
 CODEX_LIMITS_KEY = "codex_limits"
+CODEX_CONTEXT_ADMISSION_KEY = "codex_context_admission"
 CODEX_COMPACTION_COMPATIBLE_ROUTE_IDS_KEY = "codex_compaction_compatible_route_ids"
 _CODEX_LIMIT_FIELDS = frozenset(
     {"context_window_tokens", "default_max_output_tokens", "max_output_tokens"}
@@ -166,6 +167,28 @@ def parse_codex_route_limits(
         context_window_tokens=context,
         default_max_output_tokens=default_output,
         max_output_tokens=maximum_output,
+    )
+
+
+def parse_codex_context_admission(route_capabilities: Mapping[str, object] | None) -> str:
+    """Choose who validates model capacity; omission preserves the legacy guard.
+
+    Upstream mode is an operator assertion that the backend validates actual
+    tokenized input and bounds generation to its remaining context. It changes
+    neither the output cap nor conservative quota/rate/cost reservations.
+    """
+    if not route_capabilities or CODEX_CONTEXT_ADMISSION_KEY not in route_capabilities:
+        return "gateway_estimate"
+    value = route_capabilities[CODEX_CONTEXT_ADMISSION_KEY]
+    if isinstance(value, str) and value in ("gateway_estimate", "upstream"):
+        return value
+    raise ResponsesRouteCapabilityError(
+        ResponsesRouteCapabilityFinding(
+            capability=CODEX_CONTEXT_ADMISSION_KEY,
+            field="model",
+            error_code="responses_codex_context_admission_invalid",
+            safe_message="This model route has invalid Codex context-admission settings.",
+        )
     )
 
 
@@ -509,6 +532,7 @@ def enforce_responses_route_capabilities(
         )
     if codex_extended_limits_requested or codex_compaction_requested:
         parse_codex_route_limits(route_capabilities)
+        parse_codex_context_admission(route_capabilities)
 
 
 def _parse_route_capabilities(route_capabilities: Mapping[str, object] | None) -> dict[str, bool]:
