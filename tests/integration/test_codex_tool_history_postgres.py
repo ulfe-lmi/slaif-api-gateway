@@ -1273,11 +1273,13 @@ async def test_group_b_codec_rejection_settles_usage_once_then_refuses(
     await client.aclose()
 
 
+@pytest.mark.parametrize("client_context", [False, True])
 @pytest.mark.asyncio
 async def test_group_b_preserve_passthrough_settles_success(
     async_test_session: AsyncSession,
     rev16_client_module: object,
     monkeypatch: pytest.MonkeyPatch,
+    client_context: bool,
 ) -> None:
     """The preserve profile has no codec: the wire response passes through.
 
@@ -1311,8 +1313,14 @@ async def test_group_b_preserve_passthrough_settles_success(
 
     before = await _group_b_settlement_facts(session, key_id)
 
+    body = _group_b_body()
+    if client_context:
+        body["input"] = [{
+            "type": "function_call_output", "name": "runtime_context",
+            "namespace": "agent", "output": "synthetic standalone context",
+        }]
     response = await handle_response_create(
-        payload=ResponsesCreateRequest.model_validate(_group_b_body()),
+        payload=ResponsesCreateRequest.model_validate(body),
         authenticated_key=auth_key,
         settings=settings,
     )
@@ -1618,6 +1626,14 @@ async def test_group_b_owned_history_success_settles_through_real_workflow(
     body["input"] = _success_items()
     if output_identity:
         body["input"][2].update(name="read", namespace="functions")
+        # Source-derived, client-authored context is not a response to a
+        # model call. It may arrive while a real call is pending and must
+        # neither satisfy it nor acquire an HMAC reference.
+        body["input"].insert(2, {
+            "type": "function_call_output", "call_id": None, "id": None,
+            "name": "runtime_context", "namespace": "agent",
+            "output": "synthetic client context between call and result",
+        })
     if kind == "configured-preserve-order":
         # Codex's retained-summary/late-instruction shape after local compaction.
         body["input"] = [
@@ -1674,6 +1690,22 @@ async def test_group_b_owned_history_success_settles_through_real_workflow(
             assert "namespace" not in hist_outputs[0]
         else:
             assert hist_outputs[0]["namespace"] == spec.namespace
+        context_messages = [
+            i for i in input_items
+            if i.get("role") == "user"
+            and any(
+                p.get("text") == "synthetic client context between call and result"
+                for p in i.get("content", []) if isinstance(p, dict)
+            )
+        ]
+        assert len(context_messages) == 1
+        assert context_messages[0]["content"][0]["text"] == (
+            'Codex client context {"name":"runtime_context","namespace":"agent"}'
+        )
+        assert not any(
+            i.get("type") == "function_call_output" and i.get("call_id") is None
+            for i in input_items
+        )
     tool_names = _collect_tool_names(wire.get("tools"))
     assert spec.kept_name in tool_names
     # The removal notice plus the second additional_tools update leave the
@@ -1709,6 +1741,7 @@ async def test_group_b_owned_history_success_settles_through_real_workflow(
         ("route", "codex_client_tools"),
     ],
 )
+@pytest.mark.parametrize("client_context", [False, True])
 @pytest.mark.asyncio
 async def test_group_b_missing_codex_grant_denied_before_quota_and_provider(
     async_test_session: AsyncSession,
@@ -1716,6 +1749,7 @@ async def test_group_b_missing_codex_grant_denied_before_quota_and_provider(
     monkeypatch: pytest.MonkeyPatch,
     grant_source: str,
     missing_capability: str,
+    client_context: bool,
 ) -> None:
     """The selected rev-16 shape fails closed when a Codex grant is missing.
 
@@ -1765,6 +1799,11 @@ async def test_group_b_missing_codex_grant_denied_before_quota_and_provider(
     body["model"] = _GATE_PUBLIC_MODEL
     body["store"] = False
     body["input"] = _success_items()
+    if client_context:
+        body["input"] = [{
+            "type": "function_call_output", "name": "runtime_context",
+            "namespace": "agent", "output": "synthetic standalone context",
+        }]
 
     timeline: list[str] = []
     before_reservations = await session.scalar(

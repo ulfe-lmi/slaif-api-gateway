@@ -1355,15 +1355,15 @@ tool outputs, and optional `namespace` on function outputs. These fields
 are already present in the pinned upstream
 [`ResponseItem` protocol](https://github.com/openai/codex/blob/rust-v0.167.1/codex-rs/protocol/src/models.rs).
 Absent or null identities are accepted. Non-null values must be non-empty
-strings within the existing tool-name byte limits and must match the exact
-preceding call's historical binding. A later declaration, removal, or
+strings within the existing tool-name byte limits. For call-linked results
+they must match the exact preceding call's historical binding. A later declaration, removal, or
 same-name tool in another namespace cannot rebind a result. Custom outputs
 do not accept `namespace` in this pinned contract.
 
 Accepted fields remain transient history, are included in input accounting,
 and grant no declaration, execution, or replay authority. Call-ID, ordering,
 kind, uniqueness, capability, and same-key replay-ownership checks still
-apply. Preserve transports retain these fields; native and portable vLLM
+apply to call-linked results. Preserve transports retain these fields; native and portable vLLM
 codecs translate a supplied result name to the matching call's wire name
 and remove its separately represented namespace. They do not invent an
 omitted name. Ordinary Responses and frozen profiles without the feature
@@ -1373,3 +1373,37 @@ This corrects an engine omission in revision 16 support. Rebuild and drain/
 restart all API and worker processes; no schema, preset digest, key rotation,
 or key-pin migration is required. It resolves a field-only rejection such as
 `input[322].name`; it does not recover genuinely missing replay references.
+
+### Named client context without a tool call
+
+The same revision-16 feature accepts a distinct source-derived shape:
+`function_call_output` with a bounded non-empty `name` and an absent/null
+`call_id`. Codex's pinned
+[`AdditionalContextToolOutput`](https://github.com/openai/codex/blob/rust-v0.167.1/codex-rs/context-fragments/src/additional_context.rs)
+uses this for client-authored context, with an optional namespace. It has no
+preceding model call. Codex also retains such named context across compaction
+in [`is_retained_tool_output`](https://github.com/openai/codex/blob/rust-v0.167.1/codex-rs/core/src/compact_retained_tool_outputs.rs).
+
+After validating the existing field/text/image bounds and duplicate IDs, the
+gateway represents this information as an ordinary `user` message at the
+same position. Its first text part labels it `Codex client context` with a
+JSON-encoded name/namespace; subsequent parts preserve the original text or
+validated images in order. There is no fabricated call ID, tool declaration,
+tool execution, replay reference, or system/developer role. This shared
+normalization applies before transport preparation, so vLLM, llama.cpp and
+preserve/portable transports receive the same ordinary context data and
+account for the forwarded representation. The canonical source request is
+not mutated. Request-wide resource limits and independent image gates remain.
+
+Context-only requests still require all three Codex envelope/client-tool/
+streaming-event grants on both key and route. Named context can coexist with
+pending calls but cannot resolve one; real results keep exact call-ID, kind,
+identity, ordering and same-key ownership checks. Empty/malformed call IDs
+are rejected rather than treated as context. Custom outputs still require
+their call IDs. Anonymous call-free outputs are rejected. Optional null
+output IDs in this profile are inert, as omitted IDs are.
+
+This covers Responses create and already-gated Codex compaction; the ordinary
+input-token-count contract is unchanged. Frozen profiles and ordinary
+Responses remain strict. Rebuild/drain/restart the engine; no preset digest,
+key material, key-pin, schema, route setting or quota change is required.

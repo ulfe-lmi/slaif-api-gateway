@@ -227,6 +227,16 @@ name and remove the separate namespace. A result cannot declare a tool or
 authorize replay, and no output identity is persisted as a new reference.
 Other profiles and ordinary Responses keep their strict field vocabulary.
 
+Call-free named `function_call_output` items have a different meaning: the
+pinned client uses them to supply additional context, not a tool response.
+The revision-16 core normalizes these validated items to labeled user data
+before shared preparation. All adapters receive ordinary user messages,
+preserving their positions and text/image order; no synthetic call or replay
+reference is created. The original envelope/client-tool/streaming-event
+requirements still reach route admission for context-only requests. Actual
+call-linked outputs retain every linkage and ownership check. See
+[the named-context contract](responses-compatibility.md#named-client-context-without-a-tool-call).
+
 Instruction placement is part of the SAME shared pure preparation (run
 by the production adapter and the pre-admission estimate preview): a
 lifecycle request (non-`None` bindings) on a
