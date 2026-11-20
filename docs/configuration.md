@@ -866,7 +866,9 @@ provider usage finalization. Ordinary create reuses
   byte limits and token/context accounting remain independent.)
 - `RESPONSES_MAX_IMAGE_URL_BYTES=4096`
 - `RESPONSES_MAX_IMAGE_DATA_URL_BYTES=20971520`
-- `RESPONSES_MAX_TOTAL_IMAGE_DATA_URL_BYTES=41943040`
+- `RESPONSES_MAX_TOTAL_IMAGE_DATA_URL_BYTES=41943040` (40 MiB packaged default;
+  the [Codex image-history runbook](runbooks/codex-image-payload-size.md) shows
+  the explicit 128 MiB deployment override and rolling API reload)
 - `RESPONSES_ALLOWED_IMAGE_MIME_TYPES=image/png,image/jpeg,image/webp,image/gif`
 - `RESPONSES_MAX_FILE_PARTS_PER_REQUEST=8`
 - `RESPONSES_MAX_FILE_URL_BYTES=4096`

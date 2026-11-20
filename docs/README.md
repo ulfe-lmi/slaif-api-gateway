@@ -66,6 +66,8 @@ and do not override current contracts or merged code.
 - [Upgrade and recovery](upgrade-runbook.md) — controlled upgrades.
 - [Operator runbooks](runbooks/README.md) — ongoing operation and incident
   procedures.
+- [Codex image-history payload size](runbooks/codex-image-payload-size.md) —
+  aggregate image bytes, the 128 MiB override, rolling reload and verification.
 - [Incident response](incident-response.md) — response overview.
 - [SME sizing guidance](sizing.md) — capacity planning boundary.
 - [Observability boundaries](observability.md) — metrics and SLO foundation.
