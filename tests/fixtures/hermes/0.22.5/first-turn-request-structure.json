@@ -1,13 +1,14 @@
 {
   "profile": {
     "client_module_id": "hermes-0.22.5-chat-v1",
-    "client_module_version": "1",
+    "client_module_version": "2",
     "distribution": "hermes-agent",
     "distribution_version": "0.22.5",
     "source_tag": "v0.22.5",
     "source_commit": "bf0203a794a07aac3ff764972ab9087baa4e4f4e",
     "model_catalog_class": "custom_named_provider",
-    "wire_api": "chat_completions"
+    "wire_api": "chat_completions",
+    "revision_note": "distribution/source_tag/source_commit are immutable observations of the pinned v0.22.5 source archive; client_module_version '2' is the runtime candidate DATA revision (DATA2 digest c5e34d46270280d7e08639c01c28065380a2a80843c1114ac1f1ad2a2744d327) pinned in provenance.json, not a client release version"
   },
   "request": {
     "label": "structural_counterpart_of_native_capture",

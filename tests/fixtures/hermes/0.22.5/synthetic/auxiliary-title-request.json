@@ -1,9 +1,9 @@
 {
   "label": "synthetic_counterpart",
-  "description": "Synthetic executable counterpart of the captured native Hermes 0.22.5 auxiliary session-title request structure. Dummy content only; not a native capture.",
+  "description": "Synthetic executable counterpart of the captured native Hermes 0.22.5 auxiliary session-title request structure (observed none reasoning effort). Dummy content only; not a native capture.",
   "request": {
     "model": "synthetic-model",
-    "reasoning_effort": "xhigh",
+    "reasoning_effort": "none",
     "messages": [
       {"role": "user", "content": "synthetic conversation for title"}
     ],

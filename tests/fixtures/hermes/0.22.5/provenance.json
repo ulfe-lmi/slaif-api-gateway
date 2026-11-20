@@ -9,5 +9,10 @@
   "sdk_version": "2.24.0",
   "uv_lock_sha256": "f1609519f30dac8886b03e60693e36fa75e033fa3e7259c8c8befe8fb6e34460",
   "evidence": "HERMES-STATUS.md (SHA-256 52862b51f4694b59a54e6619e41aa287f7432a2240b979f54aeb872069a95d2f)",
-  "note": "public provenance facts only; no credentials, sessions, or private paths"
+  "runtime_candidate": {
+    "data_revision": 2,
+    "data_digest": "c5e34d46270280d7e08639c01c28065380a2a80843c1114ac1f1ad2a2744d327",
+    "note": "runtime candidate DATA revision (schema_version 1 document, revision 2, 'admits auxiliary none effort') currently pinned in app/slaif_gateway/modules/clients/profiles/hermes-0.22.5-chat.json; a data-only revision, separate from the immutable source-archive observations above"
+  },
+  "note": "public provenance facts only; no credentials, sessions, or private paths. distribution/source_tag/source_commit/SDK facts are immutable observations of the pinned v0.22.5 archive; runtime_candidate is the separately pinned candidate DATA revision and must not be conflated with the source tag"
 }

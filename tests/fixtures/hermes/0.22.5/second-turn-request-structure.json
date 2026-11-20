@@ -1,8 +1,9 @@
 {
   "profile": {
     "client_module_id": "hermes-0.22.5-chat-v1",
-    "client_module_version": "1",
-    "wire_api": "chat_completions"
+    "client_module_version": "2",
+    "wire_api": "chat_completions",
+    "revision_note": "client_module_version '2' tracks the runtime candidate DATA revision (DATA2 digest in provenance.json), distinct from the immutable v0.22.5 source observations"
   },
   "request": {
     "label": "structural_counterpart_of_native_capture",
