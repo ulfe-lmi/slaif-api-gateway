@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import json
 import re
 import uuid
@@ -53,7 +54,10 @@ from slaif_gateway.services.key_policy_configuration import (
     stored_module_binding,
 )
 from slaif_gateway.modules.clients.agent_chat import (
+    AgentChatModuleSelectionError,
+    agent_chat_profile_metadata,
     canonicalize_chat_client_module_pin,
+    resolve_chat_client_module,
 )
 from slaif_gateway.services.external_tool_policy_contract import (
     EXTERNAL_TOOL_FENCED,
@@ -234,6 +238,15 @@ class KeyService:
         chat_live_burn_policy = self._validate_chat_streaming_live_burn_policy(
             payload.chat_streaming_live_burn_policy
         )
+        # Strict authoring validation at the SERVICE boundary: the create
+        # DTO is a plain dataclass, so a direct service call may carry a
+        # malformed, unknown, or stale Chat pin even though the CLI/schema
+        # builders validate it. The service must fail closed before any
+        # key record, one-time secret, or audit mutation; builder-side
+        # validation is not a trust boundary.
+        chat_client_module = canonicalize_chat_client_module_pin(
+            payload.chat_client_module
+        )
         if is_trusted_calibration_key(
             key_purpose=key_purpose,
             capability_policy_mode=capability_policy_mode,
@@ -276,7 +289,7 @@ class KeyService:
             )
         metadata_json = self._metadata_with_chat_client_module(
             metadata_json,
-            payload.chat_client_module,
+            chat_client_module,
         )
         gateway_key = await self._gateway_keys_repository.create_gateway_key_record(
             public_key_id=generated.public_key_id,
@@ -1518,22 +1531,23 @@ class KeyService:
 
         if chat_raw is None:
             config.chat_client_module = None
-        elif (
-            not isinstance(chat_raw, dict)
-            or set(chat_raw) != {"id", "version", "fixture_sha256"}
-            or any(
-                not isinstance(value, str) or not value.strip()
-                for value in chat_raw.values()
-            )
-        ):
-            # A stored Chat pin must be the complete strict three-string
-            # identity tuple; anything else fails the export explicitly
-            # instead of sanitizing to a partial document. (Stale but
-            # well-formed pins export as stored; they fail closed at
-            # dispatch, not at export.)
-            raise KeyConfigurationExportError(param="chat_client_module")
         else:
-            config.chat_client_module = dict(chat_raw)
+            try:
+                # The export contract requires a CURRENT authoring identity:
+                # the stored pin must strictly resolve to a currently
+                # registered Chat module (registry, version, and fixture
+                # digest). A stale or malformed stored pin is refused
+                # explicitly rather than exported as an apparently
+                # consumable document; it is repaired through the ordinary
+                # configuration update (set/replace/clear), which does NOT
+                # resolve the old pin first.
+                config.chat_client_module = canonicalize_chat_client_module_pin(
+                    chat_raw
+                )
+            except AgentChatModuleSelectionError as exc:
+                raise KeyConfigurationExportError(
+                    param="chat_client_module"
+                ) from exc
 
         config.cost_limit_eur = cost_limit_eur
         config.token_limit_total = token_limit_total
@@ -1675,7 +1689,7 @@ class KeyService:
             max_concurrent_requests=(
                 old_key.max_concurrent_requests if payload.preserve_rate_limit_policy else None
             ),
-            metadata_json=self._metadata_with_chat_client_module(
+            metadata_json=self._metadata_preserving_chat_client_module(
                 self._metadata_with_external_tool_policy(
                 self._metadata_with_chat_streaming_live_burn_policy(
                     self._metadata_with_responses_streaming_live_burn_policy(
@@ -1712,7 +1726,7 @@ class KeyService:
                 ),
                 external_tool_policy,
             ),
-                self._chat_client_module_from_key(old_key),
+                self._raw_chat_client_module_from_key(old_key),
             ),
             created_by_admin_user_id=payload.actor_admin_id,
             hmac_key_version=int(active_hmac_version),
@@ -2247,6 +2261,30 @@ class KeyService:
         metadata["chat_client_module"] = dict(chat_client_module)
         return metadata
 
+    @classmethod
+    def _metadata_preserving_chat_client_module(
+        cls,
+        metadata_json: dict[str, object] | None,
+        raw_pin: object,
+    ) -> dict[str, object]:
+        """Rotation-only RAW preservation of the stored Chat pin.
+
+        Rotation must never resolve, canonicalize, upgrade, or drop a
+        stored pin: a valid pin (including a stale but well-formed exact
+        tuple) carries over as-is without auto-upgrade, and a MALFORMED
+        stored pin keeps its raw fail-closed state (dispatch fails closed
+        on it) instead of being converted into the default Chat authority.
+        This helper is separate from the authoring-time
+        :meth:`_metadata_with_chat_client_module`, which only ever stores
+        a validated canonical tuple.
+        """
+        metadata = dict(metadata_json or {})
+        if raw_pin is None:
+            metadata.pop("chat_client_module", None)
+            return metadata
+        metadata["chat_client_module"] = copy.deepcopy(raw_pin)
+        return metadata
+
     @staticmethod
     def _metadata_with_external_tool_policy(
         metadata_json: dict[str, object] | None,
@@ -2339,10 +2377,9 @@ class KeyService:
         return cls._safe_responses_policy(raw_policy if isinstance(raw_policy, dict) else None)
 
     @staticmethod
-    def _chat_client_module_from_key(gateway_key: GatewayKey) -> dict[str, str] | None:
+    def _raw_chat_client_module_from_key(gateway_key: GatewayKey) -> object:
         metadata = getattr(gateway_key, "metadata_json", None)
-        raw_pin = metadata.get("chat_client_module") if isinstance(metadata, dict) else None
-        return dict(raw_pin) if isinstance(raw_pin, dict) else None
+        return metadata.get("chat_client_module") if isinstance(metadata, dict) else None
 
     async def _audit_gateway_key_change(
         self,
@@ -2618,30 +2655,39 @@ class KeyService:
     ) -> dict[str, object] | str | None:
         """Secret-safe allowlisted projection of the stored Chat pin.
 
-        A well-formed pin projects its exact three-string identity tuple;
-        unknown names, missing names, and wrong-typed values increment a
-        fixed ``unsupported_fields`` count instead of echoing values. A
-        non-object stored pin projects to the fixed ``"unsupported"``
-        marker. This projection never raises: an unrenderable stored pin
-        must not abort an unrelated configuration update.
+        ONLY a pin that strictly resolves to a CURRENTLY registered Chat
+        module is echoed, and then only as the registry's canonical
+        three-string identity tuple (never the stored bytes, never a
+        trimmed/repaired identity). Anything else - a stale version, an
+        unknown or Responses-only id, a malformed or non-object stored
+        pin, or a known field holding an unvalidated value (which may be
+        opaque secret material, not authoring identity) - projects to a
+        fixed ``unsupported_fields`` count or the fixed ``"unsupported"``
+        marker and never echoes a stored string. This projection never
+        raises: an unrenderable stored pin must not abort an unrelated
+        configuration update, nor block its explicit repair or clear.
         """
         if raw_pin is None:
             return None
         if not isinstance(raw_pin, dict):
             return "unsupported"
-        projected: dict[str, object] = {}
+        try:
+            module = resolve_chat_client_module(raw_pin)
+        except AgentChatModuleSelectionError:
+            module = None
+        if module is not None:
+            return agent_chat_profile_metadata(module)
         unsupported = 0
         for key in sorted(set(raw_pin) - cls._CHAT_AUDIT_FIELDS):
             unsupported += 1
         for key in sorted(cls._CHAT_AUDIT_FIELDS):
             value = raw_pin.get(key)
-            if isinstance(value, str) and value.strip():
-                projected[key] = value.strip()
-            else:
+            if not isinstance(value, str) or not value.strip():
                 unsupported += 1
+        projected: dict[str, object] = {}
         if unsupported:
             projected["unsupported_fields"] = unsupported
-        return projected
+        return projected if projected else "unsupported"
 
     @staticmethod
     def _usage_audit_values(gateway_key: GatewayKey) -> dict[str, object]:

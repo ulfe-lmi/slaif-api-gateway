@@ -1562,21 +1562,30 @@ async def test_project_key_configuration_update_reflects_chat_pin_set_and_clear(
 
 
 @pytest.mark.asyncio
-async def test_export_chat_pin_malformed_fails_and_stale_wellformed_exports_stored() -> None:
+async def test_export_chat_pin_requires_current_authoring_identity() -> None:
+    # A malformed stored pin fails the export explicitly.
     malformed = FakeGatewayKeyRow(metadata_json={"chat_client_module": "not-a-pin"})
     service, _, _, _, _ = make_key_service(malformed)
     with pytest.raises(KeyConfigurationExportError):
         await service.export_gateway_key_configuration(malformed.id)
 
-    # A stale but well-formed pin is structural export: it ships exactly as
-    # stored (dispatch fails closed on it; export must not sanitize it).
+    # A stale but well-formed pin is REFUSED, not exported: the export
+    # contract requires a current authoring identity. It is repaired
+    # through the ordinary configuration update (set/replace/clear), which
+    # does not resolve the old pin first.
     stale = FakeGatewayKeyRow(metadata_json={"chat_client_module": _stale_chat_pin()})
     service_stale, _, _, _, _ = make_key_service(stale)
-    document = await service_stale.export_gateway_key_configuration(stale.id)
-    assert document["chat_client_module"] == _stale_chat_pin()
-    # The exported document must survive the same strict version-1 parser.
+    with pytest.raises(KeyConfigurationExportError):
+        await service_stale.export_gateway_key_configuration(stale.id)
+
+    # A current registered pin exports canonically and the document must
+    # survive the same strict version-1 parser.
+    current = FakeGatewayKeyRow(metadata_json={"chat_client_module": _hermes_chat_pin()})
+    service_current, _, _, _, _ = make_key_service(current)
+    document = await service_current.export_gateway_key_configuration(current.id)
+    assert document["chat_client_module"] == _hermes_chat_pin()
     reparsed = parse_key_configuration(document)
-    assert reparsed.chat_client_module == _stale_chat_pin()
+    assert reparsed.chat_client_module == _hermes_chat_pin()
 
     absent = FakeGatewayKeyRow()
     service_absent, _, _, _, _ = make_key_service(absent)
@@ -1591,11 +1600,18 @@ def test_chat_client_module_audit_projection_is_secret_safe() -> None:
     assert project("string") == "unsupported"
     pin = _hermes_chat_pin()
     assert project(pin) == pin
-    # Whitespace is stripped on projection but values are still echoed back
-    # ONLY for the exact reviewed identity fields.
-    assert project({**pin, "id": f" {pin['id']}"})[
-        "id"
-    ] == pin["id"]
+    # A value stored in a known field is NOT validated identity material:
+    # an opaque value must never be echoed, trimmed-repaired, or rendered
+    # as an identity. Only the fixed marker/count is projected.
+    opaque = "SYNTHETIC_OPAQUE_AUTH_MATERIAL_" + "9" * 16
+    leaked = project({**pin, "version": opaque})
+    assert leaked == "unsupported"
+    assert opaque not in str(leaked)
+    # A whitespace-padded identity does not resolve strictly and is not
+    # repaired by trimming.
+    padded = project({**pin, "id": f" {pin['id']}"})
+    assert padded == "unsupported"
+    assert pin["id"] not in str(padded)
     # Unknown names and wrong-typed values are counted, never copied.
     wrong_typed = project({**pin, "version": 2, "extra": "x"})
     assert wrong_typed["unsupported_fields"] == 2
@@ -1605,6 +1621,8 @@ def test_chat_client_module_audit_projection_is_secret_safe() -> None:
     missing = project({k: v for k, v in pin.items() if k != "fixture_sha256"})
     assert missing["unsupported_fields"] == 1
     assert "fixture_sha256" not in missing
+    # A stale well-formed tuple (unknown version) renders no stored values.
+    assert project(_stale_chat_pin()) == "unsupported"
 
 
 @pytest.mark.asyncio
@@ -1637,3 +1655,32 @@ async def test_rotate_gateway_key_carries_chat_pin_verbatim() -> None:
     assert keys_repo_stale.created_calls[0]["metadata_json"]["chat_client_module"] == (
         _stale_chat_pin()
     )
+
+
+@pytest.mark.asyncio
+async def test_rotate_gateway_key_preserves_malformed_chat_pin_fail_closed() -> None:
+    # Rotation must never resolve, canonicalize, upgrade, or drop a stored
+    # Chat pin. A malformed stored pin keeps its raw fail-closed state
+    # (dispatch fails closed on it) instead of being silently converted
+    # into the default Chat authority.
+    for malformed in ("not-a-pin", ["hermes-0.22.5-chat-v1"], True, 42):
+        old_key = FakeGatewayKeyRow(
+            metadata_json={"chat_client_module": malformed}
+        )
+        service, keys_repo, _, _, _ = make_key_service(old_key)
+        await service.rotate_gateway_key(
+            RotateGatewayKeyInput(gateway_key_id=old_key.id, reason="replacement")
+        )
+        assert keys_repo.created_calls[0]["metadata_json"][
+            "chat_client_module"
+        ] == malformed
+
+    # An absent pin stays absent: rotation grants no default Chat pin.
+    old_plain = FakeGatewayKeyRow()
+    service_plain, keys_repo_plain, _, _, _ = make_key_service(old_plain)
+    await service_plain.rotate_gateway_key(
+        RotateGatewayKeyInput(gateway_key_id=old_plain.id, reason="replacement")
+    )
+    assert "chat_client_module" not in keys_repo_plain.created_calls[0][
+        "metadata_json"
+    ]
