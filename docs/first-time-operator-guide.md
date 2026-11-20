@@ -559,17 +559,30 @@ HARD_MAX_OUTPUT_TOKENS=32768
 ```
 
 Upgrading a profile (for example a new DATA revision with a new fixture
-digest) is an operator action: re-pin the key to the new
-`{id, version, fixture_sha256}` and restart API, worker, and scheduler.
-There is no automatic profile upgrade, rotation, or migration command.
+digest) ships in a new gateway package/image: deploy that revision to
+API, worker, and scheduler, restart the services, and re-pin the key to
+the new `{id, version, fixture_sha256}`. There is no automatic profile
+upgrade, rotation, or migration command. Under Docker, keep any policy
+file in the mounted working directory so it survives container
+recreation (it is a mount, not a baked image layer); restarting never
+changes bytes baked into the image.
 
-Rollback is a re-pin to the previous *exact* pin: write the old
-`{id, version, fixture_sha256}` into a `schema_version` 1 document and
-update the key again. Clearing the pin is a *deliberate* disable, not a
-rollback: after `null`, the key returns to `openai-default` Chat
-validation, and a client tuned to a profile's widened envelope (for
-example Hermes `xhigh` reasoning effort) may fail default validation
-until the pin is restored:
+Rollback is a full revision restore, not just a re-pin: each process
+loads exactly ONE identity per module id from its packaged DATA, so the
+previous pin only resolves once the matching previous trusted
+package/image is deployed to API, worker, and scheduler (and the CLI
+that applies the pin, which bootstraps the same registry). Deploy that
+revision, restart, and only then apply the exact previous
+`{id, version, fixture_sha256}` with the matching CLI. While a key's
+pin digest and the deployed DATA digest mismatch, requests for that key
+fail closed. A previous revision must itself be reviewed and
+qualified; the gateway makes no automatic compatibility promise.
+
+Clearing the pin is a *deliberate* disable, not a rollback: after
+`null`, the key returns to `openai-default` Chat validation, and a
+client tuned to a profile's widened envelope (for example Hermes
+`xhigh` reasoning effort) may fail default validation until the pin is
+restored:
 
 ```bash
 cat > ./clear-chat-pin.json <<'JSON'
