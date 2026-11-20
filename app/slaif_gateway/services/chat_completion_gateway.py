@@ -49,6 +49,11 @@ from slaif_gateway.modules.clients.agent_chat import (
     AgentChatRequestError,
     resolve_chat_client_module,
 )
+from slaif_gateway.modules.servers.registry import (
+    ensure_client_server_pair,
+    resolve_server_module,
+)
+from slaif_gateway.providers.errors import ProviderConfigurationError
 from slaif_gateway.metrics import (
     add_cost_eur,
     add_tokens,
@@ -228,6 +233,33 @@ def _chat_module_identity(module) -> tuple[str, str, str] | None:
     return (module.module_id, module.module_version, module.fixture_sha256)
 
 
+def _ensure_chat_client_server_pair(
+    client_module_id: str, route: RouteResolutionResult
+) -> None:
+    """Enforce the selected Chat profile's reviewed server pair.
+
+    Runs on the trusted resolved route descriptor BEFORE admission
+    (rate-limit/quota reservation) and credential lookup, and again on
+    the refreshed route after a real wait. The default Chat dialect is
+    never gated here (its existing factory-side pair check is
+    unchanged).
+    """
+    try:
+        descriptor = resolve_server_module(
+            route.provider,
+            getattr(route, "provider_kind", None),
+            getattr(route, "capabilities", None),
+        )
+        ensure_client_server_pair(client_module_id, descriptor.module_id)
+    except ProviderConfigurationError as exc:
+        raise OpenAICompatibleError(
+            "The selected Chat client and server modules are not compatible.",
+            status_code=400,
+            error_type="invalid_request_error",
+            code="incompatible_client_server_pair",
+        ) from exc
+
+
 async def handle_chat_completion(
     *,
     payload: ChatCompletionRequest,
@@ -308,6 +340,12 @@ async def handle_chat_completion(
         policy_result=policy_result,
         request=request,
     )
+    if chat_module is not None:
+        # Selected profile: the route's server descriptor must carry a
+        # reviewed pair for this profile BEFORE any admission or
+        # credential lookup (unqualified, native, and signed
+        # Responses-only transports fail closed here).
+        _ensure_chat_client_server_pair(chat_module.module_id, route)
     try:
         policy_result = apply_media_input_estimate(policy_result, route_capabilities=route.capabilities, input_ceiling=settings.HARD_MAX_INPUT_TOKENS)
     except RequestPolicyError as exc:
@@ -346,22 +384,34 @@ async def handle_chat_completion(
         # The request genuinely waited: admission was re-validated, so
         # forward under the CURRENT key, request policy result, and route
         # (R4: never forward under a stale pre-wait authorization).
-        refreshed_key = refreshed_context.authenticated_key
         try:
-            refreshed_chat_module = _resolve_chat_client_module(refreshed_key)
-        except AgentChatModuleSelectionError as exc:
-            raise _openai_error_from_chat_module_selection_error(exc) from exc
-        if _chat_module_identity(refreshed_chat_module) != _chat_module_identity(chat_module):
-            # The Chat profile binding changed while waiting: never forward
-            # under a stale pre-wait profile (R4).
-            raise policy_changed_while_waiting_error()
-        authenticated_key = refreshed_key
-        policy_result = refreshed_context.policy_result
-        route = refreshed_context.route
-        upstream_body = _build_safe_chat_completion_upstream_body(
-            policy_result=policy_result,
-            upstream_model=route.resolved_model,
-        )
+            refreshed_key = refreshed_context.authenticated_key
+            try:
+                refreshed_chat_module = _resolve_chat_client_module(refreshed_key)
+            except AgentChatModuleSelectionError as exc:
+                raise _openai_error_from_chat_module_selection_error(exc) from exc
+            if _chat_module_identity(refreshed_chat_module) != _chat_module_identity(chat_module):
+                # The Chat profile binding changed while waiting: never
+                # forward under a stale pre-wait profile (R4).
+                raise policy_changed_while_waiting_error()
+            authenticated_key = refreshed_key
+            policy_result = refreshed_context.policy_result
+            route = refreshed_context.route
+            if chat_module is not None:
+                # The refreshed route must still carry a reviewed pair
+                # for the same profile (R4).
+                _ensure_chat_client_server_pair(chat_module.module_id, route)
+            upstream_body = _build_safe_chat_completion_upstream_body(
+                policy_result=policy_result,
+                upstream_model=route.resolved_model,
+            )
+        except Exception:
+            # Post-acquisition refresh denial: release any acquired
+            # concurrency slot exactly once before the error propagates
+            # (the success-path release below is never reached on this
+            # path).
+            await _release_rate_limit_concurrency(rate_limit_reservation, suppress=True)
+            raise
     try:
         quota = await _reserve_chat_completion_quota(
             authenticated_key=authenticated_key,
@@ -1126,6 +1176,25 @@ def _revalidate_chat_completion_after_wait(
             new_route.provider,
         ) != (original.route.resolved_model, original.route.provider):
             raise policy_changed_while_waiting_error()
+
+        # The Chat profile binding and its reviewed transport pair must
+        # hold for the CURRENT route before any limiter admission under
+        # it (R4): a stale/changed binding or an unqualified pair fails
+        # the wait instead of being forwarded.
+        try:
+            original_chat_module = _resolve_chat_client_module(
+                original.authenticated_key
+            )
+            new_chat_module = _resolve_chat_client_module(new_key)
+        except AgentChatModuleSelectionError as exc:
+            raise _openai_error_from_chat_module_selection_error(exc) from exc
+        if (
+            _chat_module_identity(new_chat_module)
+            != _chat_module_identity(original_chat_module)
+        ):
+            raise policy_changed_while_waiting_error()
+        if new_chat_module is not None:
+            _ensure_chat_client_server_pair(new_chat_module.module_id, new_route)
 
         return LazyAdmissionContext(
             gateway_key_id=new_key.gateway_key_id,
