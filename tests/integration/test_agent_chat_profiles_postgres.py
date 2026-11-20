@@ -988,6 +988,8 @@ async def _create_chat_key(
     chat_client_module: dict[str, str] | None,
     note: str,
     request_limit_total: int = 100,
+    allowed_endpoints: list[str] | None = None,
+    allowed_providers: list[str] | None = None,
 ) -> tuple[str, uuid.UUID]:
     """Create a Chat-endpoint key; return (plaintext_key, gateway_key_id)."""
     engine = create_async_engine(database_url, future=True)
@@ -1004,8 +1006,13 @@ async def _create_chat_key(
                     token_limit_total=100_000,
                     request_limit_total=request_limit_total,
                     allowed_models=allowed_models,
-                    allowed_endpoints=[CHAT_ENDPOINT],
+                    allowed_endpoints=(
+                        allowed_endpoints
+                        if allowed_endpoints is not None
+                        else [CHAT_ENDPOINT]
+                    ),
                     note=note,
+                    allowed_providers=allowed_providers,
                     chat_client_module=chat_client_module,
                 )
             )
@@ -2040,3 +2047,164 @@ async def test_chat_pin_stream_provider_error_after_admission_releases_reservati
     assert gateway_key.tokens_used_total == 0
     assert gateway_key.requests_used_total == 0
     assert gateway_key.cost_used_eur == Decimal("0")
+
+
+# ---------------------------------------------------------------------------
+# Round 5: key-policy and route-capability denials (model/endpoint/provider/stream)
+# ---------------------------------------------------------------------------
+
+
+async def _policy_denial_setup(
+    migrated_postgres_url: str,
+    respx_mock,
+    monkeypatch,
+    module_id: str,
+    *,
+    allowed_models: list[str] | None = None,
+    allowed_endpoints: list[str] | None = None,
+    allowed_providers: list[str] | None = None,
+) -> tuple[str, str, uuid.UUID, object]:
+    """(runtime_model, plaintext_key, key_id, upstream) for a policy denial.
+
+    Seeds a unique openai_compatible runtime route, creates a valid-pinned
+    Chat key with one failing key-policy dimension, and mocks the upstream
+    endpoint that must never be called.
+    """
+    seed = await _seed(migrated_postgres_url)
+    suffix = uuid.uuid4().hex[:12]
+    provider_slug, base_url, runtime_model = await _seed_runtime_route(
+        migrated_postgres_url, suffix
+    )
+    assert provider_slug not in {"openai", "openrouter"}
+    pin = _module_pin(module_id)
+    plaintext_key, key_id = await _create_chat_key(
+        migrated_postgres_url,
+        seed,
+        datetime.now(UTC),
+        allowed_models=allowed_models or [runtime_model],
+        chat_client_module=pin,
+        note=f"227 agent Chat profile policy denial {module_id}",
+        allowed_endpoints=allowed_endpoints,
+        allowed_providers=allowed_providers,
+    )
+    monkeypatch.setenv(HERMES227_SVC_KEY_ENV, FAKE_COMPATIBLE_UPSTREAM_KEY)
+    upstream = respx_mock.post(f"{base_url}/chat/completions").mock(
+        return_value=httpx.Response(200, json={"id": "must-not-be-called"})
+    )
+    return runtime_model, plaintext_key, key_id, upstream
+
+
+def _policy_post(client, plaintext_key: str, body: dict) -> object:
+    return client.post(
+        CHAT_ENDPOINT,
+        headers={"Authorization": f"Bearer {plaintext_key}"},
+        json=body,
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("module_id", [HERMES_MODULE_ID, OPENCODE_MODULE_ID])
+async def test_chat_pin_model_not_allowed_denied_before_upstream(
+    migrated_postgres_url: str, respx_mock, monkeypatch, module_id: str
+) -> None:
+    """A key whose allowed_models omits the requested model is denied 403."""
+    runtime_model, plaintext_key, key_id, upstream = await _policy_denial_setup(
+        migrated_postgres_url,
+        respx_mock,
+        monkeypatch,
+        module_id,
+        allowed_models=["227-unrelated-model"],
+    )
+    app = create_app(_runtime_settings(migrated_postgres_url))
+    with TestClient(app) as client:
+        response = _policy_post(
+            client,
+            plaintext_key,
+            {"model": runtime_model, "messages": [{"role": "user", "content": "hi"}]},
+        )
+    assert response.status_code == 403, response.text
+    assert (
+        response.json()["error"]["code"] == "model_not_allowed_for_key"
+    ), response.text
+    await _assert_no_forwarding_no_accounting(migrated_postgres_url, key_id, upstream)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("module_id", [HERMES_MODULE_ID, OPENCODE_MODULE_ID])
+async def test_chat_pin_endpoint_not_allowed_denied_before_upstream(
+    migrated_postgres_url: str, respx_mock, monkeypatch, module_id: str
+) -> None:
+    """A key that does not allow the Chat endpoint is denied 403 here."""
+    runtime_model, plaintext_key, key_id, upstream = await _policy_denial_setup(
+        migrated_postgres_url,
+        respx_mock,
+        monkeypatch,
+        module_id,
+        allowed_endpoints=["/v1/responses"],
+    )
+    app = create_app(_runtime_settings(migrated_postgres_url))
+    with TestClient(app) as client:
+        response = _policy_post(
+            client,
+            plaintext_key,
+            {"model": runtime_model, "messages": [{"role": "user", "content": "hi"}]},
+        )
+    assert response.status_code == 403, response.text
+    assert (
+        response.json()["error"]["code"] == "endpoint_not_allowed"
+    ), response.text
+    await _assert_no_forwarding_no_accounting(migrated_postgres_url, key_id, upstream)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("module_id", [HERMES_MODULE_ID, OPENCODE_MODULE_ID])
+async def test_chat_pin_provider_not_allowed_denied_before_upstream(
+    migrated_postgres_url: str, respx_mock, monkeypatch, module_id: str
+) -> None:
+    """A key restricted to the native 'openai' slug cannot use the compat route."""
+    runtime_model, plaintext_key, key_id, upstream = await _policy_denial_setup(
+        migrated_postgres_url,
+        respx_mock,
+        monkeypatch,
+        module_id,
+        allowed_providers=["openai"],
+    )
+    app = create_app(_runtime_settings(migrated_postgres_url))
+    with TestClient(app) as client:
+        response = _policy_post(
+            client,
+            plaintext_key,
+            {"model": runtime_model, "messages": [{"role": "user", "content": "hi"}]},
+        )
+    assert response.status_code == 403, response.text
+    assert (
+        response.json()["error"]["code"] == "provider_not_allowed_for_key"
+    ), response.text
+    await _assert_no_forwarding_no_accounting(migrated_postgres_url, key_id, upstream)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("module_id", [HERMES_MODULE_ID, OPENCODE_MODULE_ID])
+async def test_chat_pin_streaming_disabled_route_denied_before_upstream(
+    migrated_postgres_url: str, respx_mock, monkeypatch, module_id: str
+) -> None:
+    """stream=True on a non-streaming route is denied 400 with param=stream."""
+    runtime_model, plaintext_key, key_id, upstream = await _policy_denial_setup(
+        migrated_postgres_url, respx_mock, monkeypatch, module_id
+    )
+    app = create_app(_runtime_settings(migrated_postgres_url))
+    with TestClient(app) as client:
+        response = _policy_post(
+            client,
+            plaintext_key,
+            {
+                "model": runtime_model,
+                "messages": [{"role": "user", "content": "hi"}],
+                "stream": True,
+            },
+        )
+    assert response.status_code == 400, response.text
+    error = response.json()["error"]
+    assert error["code"] == "chat_capability_not_supported", response.text
+    assert error["param"] == "stream", response.text
+    await _assert_no_forwarding_no_accounting(migrated_postgres_url, key_id, upstream)
