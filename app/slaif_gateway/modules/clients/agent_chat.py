@@ -976,3 +976,4 @@ def bootstrap_agent_chat_client_modules() -> None:
     """
     # Static shipped Chat harness bindings (registration side effect):
     from slaif_gateway.modules.clients import hermes_0225_chat as _hermes_0225_chat  # noqa: F401
+    from slaif_gateway.modules.clients import opencode_1193_chat as _opencode_1193_chat  # noqa: F401
