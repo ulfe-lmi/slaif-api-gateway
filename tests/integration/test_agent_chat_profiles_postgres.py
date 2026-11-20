@@ -661,7 +661,9 @@ async def test_chat_pin_rotation_preserves_persisted_pin_and_existing_audits(
 # ---------------------------------------------------------------------------
 
 
-async def _seed_runtime_route(database_url: str, suffix: str) -> tuple[str, str, str]:
+async def _seed_runtime_route(
+    database_url: str, suffix: str, *, supports_streaming: bool = False
+) -> tuple[str, str, str]:
     """Unique openai_compatible provider + explicit Chat route + pricing.
 
     Returns (provider_slug, base_url, model); the base_url is the respx
@@ -670,6 +672,8 @@ async def _seed_runtime_route(database_url: str, suffix: str) -> tuple[str, str,
     left same-model routes for other providers in the shared test DB,
     model-to-provider resolution stays unambiguous. The upstream model
     stays the static RUNTIME_MODEL (pricing is per-provider).
+    ``supports_streaming`` is passed through to the route for the
+    streaming round-trip cases; it defaults to ``False``.
     """
     engine = create_async_engine(database_url, future=True)
     factory = async_sessionmaker(engine, expire_on_commit=False)
@@ -703,7 +707,7 @@ async def _seed_runtime_route(database_url: str, suffix: str) -> tuple[str, str,
                     endpoint=CHAT_ENDPOINT,
                     priority=1,
                     visible_in_models=True,
-                    supports_streaming=False,
+                    supports_streaming=supports_streaming,
                     notes="227 agent Chat profile runtime test route",
                 )
                 await PricingRulesRepository(session).create_pricing_rule(
@@ -1354,3 +1358,188 @@ async def test_revoked_gateway_key_denied_before_upstream(
     assert response.status_code == 403, response.text
     assert response.json()["error"]["code"] == "gateway_key_revoked", response.text
     await _assert_no_forwarding_no_accounting(migrated_postgres_url, key_id, upstream)
+
+
+# ---------------------------------------------------------------------------
+# Round 4: streamed Chat success finalization over real HTTP + PostgreSQL
+# ---------------------------------------------------------------------------
+
+
+def _sse_event(data: str) -> str:
+    return f"data: {data}\n\n"
+
+
+def _stream_success_sse(upstream_model: str) -> str:
+    """Canonical three-event Chat success stream: delta, usage, [DONE]."""
+    chunk_id = "chatcmpl_227_stream"
+    delta_event = {
+        "id": chunk_id,
+        "object": "chat.completion.chunk",
+        "created": 123,
+        "model": upstream_model,
+        "choices": [
+            {"index": 0, "delta": {"content": "Done."}, "finish_reason": "stop"}
+        ],
+    }
+    usage_event = {
+        "id": chunk_id,
+        "object": "chat.completion.chunk",
+        "created": 123,
+        "model": upstream_model,
+        "choices": [],
+        "usage": {"prompt_tokens": 5, "completion_tokens": 6, "total_tokens": 11},
+    }
+    return (
+        _sse_event(json.dumps(delta_event))
+        + _sse_event(json.dumps(usage_event))
+        + "data: [DONE]\n\n"
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("module_id", "tool_name"),
+    [
+        (HERMES_MODULE_ID, "read_file"),
+        (OPENCODE_MODULE_ID, "read"),
+    ],
+)
+async def test_chat_pin_stream_success_finalizes_pg_usage(
+    migrated_postgres_url: str,
+    respx_mock,
+    monkeypatch,
+    module_id: str,
+    tool_name: str,
+) -> None:
+    """A streamed Chat success finalizes PostgreSQL usage from the SSE chunk.
+
+    Real TestClient HTTP + real PostgreSQL: the unique openai_compatible
+    provider passes the finite pair gate, the profile forwards the stream
+    request with the substituted provider key, the complete SSE body is
+    consumed, and accounting ends with exactly one finalized
+    reservation/ledger and zero pending counters.
+    """
+    seed = await _seed(migrated_postgres_url)
+    suffix = uuid.uuid4().hex[:12]
+    provider_slug, base_url, runtime_model = await _seed_runtime_route(
+        migrated_postgres_url, suffix, supports_streaming=True
+    )
+    assert provider_slug not in {"openai", "openrouter"}
+    pin = _module_pin(module_id)
+    plaintext_key, key_id = await _create_chat_key(
+        migrated_postgres_url,
+        seed,
+        datetime.now(UTC),
+        allowed_models=[runtime_model],
+        chat_client_module=pin,
+        note=f"227 agent Chat profile stream success {module_id}",
+    )
+
+    request_body = {
+        "model": runtime_model,
+        "messages": [{"role": "user", "content": "Read the log file."}],
+        "reasoning_effort": "xhigh",
+        "stream": True,
+        "stream_options": {"include_usage": True},
+        "tools": [
+            {
+                "type": "function",
+                "function": {
+                    "name": tool_name,
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"path": {"type": "string"}},
+                        "required": ["path"],
+                    },
+                },
+            }
+        ],
+    }
+    monkeypatch.setenv(HERMES227_SVC_KEY_ENV, FAKE_COMPATIBLE_UPSTREAM_KEY)
+    upstream = respx_mock.post(f"{base_url}/chat/completions").mock(
+        return_value=httpx.Response(
+            200,
+            content=_stream_success_sse(RUNTIME_MODEL).encode(),
+            headers={"content-type": "text/event-stream"},
+        )
+    )
+
+    app = create_app(_runtime_settings(migrated_postgres_url))
+    with TestClient(app) as client:
+        with client.stream(
+            "POST",
+            CHAT_ENDPOINT,
+            headers={"Authorization": f"Bearer {plaintext_key}"},
+            json=request_body,
+        ) as response:
+            assert response.status_code == 200, response.read()
+            streamed = "".join(response.iter_text())
+
+    assert "Done." in streamed
+    assert "data: [DONE]" in streamed
+
+    # Exact forwarding through the profile-decoded canonical body, with the
+    # substituted provider key and no gateway secret leakage.
+    assert len(upstream.calls) == 1
+    upstream_body = json.loads(upstream.calls[0].request.content)
+    assert upstream_body["model"] == RUNTIME_MODEL
+    assert upstream_body["stream"] is True
+    assert upstream_body["reasoning_effort"] == "xhigh"
+    upstream_headers = {
+        name.lower(): value for name, value in upstream.calls[0].request.headers.items()
+    }
+    assert upstream_headers.get("authorization") == (
+        f"Bearer {FAKE_COMPATIBLE_UPSTREAM_KEY}"
+    )
+    raw_upstream = upstream.calls[0].request.content.decode("utf-8", "replace")
+    assert plaintext_key not in raw_upstream
+    assert "sk-slaif-" not in raw_upstream
+
+    # PostgreSQL accounting: exactly one terminal reservation + ledger row,
+    # zero pending reservations, actual usage from the SSE usage chunk.
+    gateway_key, reservations, ledgers = await _runtime_state(
+        migrated_postgres_url, key_id
+    )
+    assert len(reservations) == 1
+    assert len(ledgers) == 1
+    reservation, ledger = reservations[0], ledgers[0]
+    assert reservation.status == "finalized"
+    assert ledger.streaming is True
+    assert ledger.accounting_status == "finalized"
+    assert ledger.prompt_tokens == 5
+    assert ledger.completion_tokens == 6
+    assert ledger.total_tokens == 11
+    assert gateway_key.tokens_reserved_total == 0
+    assert gateway_key.requests_reserved_total == 0
+    assert gateway_key.cost_reserved_eur == Decimal("0")
+    assert gateway_key.tokens_used_total == 11
+    assert gateway_key.requests_used_total == 1
+    # 5 input + 6 output tokens at 1.00 EUR/1M each = 0.000011 EUR actual.
+    assert gateway_key.cost_used_eur == Decimal("0.000011")
+
+    # The persisted pin survives dispatch; no secrets in the persisted set.
+    assert (gateway_key.metadata_json or {}).get("chat_client_module") == pin
+    db_payload = json.dumps(
+        {
+            "gateway_key": {
+                "public_key_id": gateway_key.public_key_id,
+                "key_hint": gateway_key.key_hint,
+                "token_hash": gateway_key.token_hash,
+                "metadata": gateway_key.metadata_json,
+            },
+            "reservation": {
+                "request_id": reservation.request_id,
+                "requested_model": reservation.requested_model,
+                "status": reservation.status,
+            },
+            "ledger": {
+                "usage_raw": ledger.usage_raw,
+                "response_metadata": ledger.response_metadata,
+                "error_message": ledger.error_message,
+            },
+        },
+        sort_keys=True,
+        default=str,
+    )
+    assert FAKE_COMPATIBLE_UPSTREAM_KEY not in db_payload
+    assert plaintext_key not in db_payload
