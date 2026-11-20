@@ -659,12 +659,15 @@ async def test_chat_pin_rotation_preserves_persisted_pin_and_existing_audits(
 # ---------------------------------------------------------------------------
 
 
-async def _seed_runtime_route(database_url: str, suffix: str) -> tuple[str, str]:
+async def _seed_runtime_route(database_url: str, suffix: str) -> tuple[str, str, str]:
     """Unique openai_compatible provider + explicit Chat route + pricing.
 
-    Returns (provider_slug, base_url); the base_url is the respx target.
-    The provider slug is unique per invocation, so the route/model pair is
-    owned by the calling test.
+    Returns (provider_slug, base_url, model); the base_url is the respx
+    target and model is the public requested model. The provider slug AND
+    the public model are unique per invocation, so even when earlier runs
+    left same-model routes for other providers in the shared test DB,
+    model-to-provider resolution stays unambiguous. The upstream model
+    stays the static RUNTIME_MODEL (pricing is per-provider).
     """
     engine = create_async_engine(database_url, future=True)
     factory = async_sessionmaker(engine, expire_on_commit=False)
@@ -674,6 +677,7 @@ async def _seed_runtime_route(database_url: str, suffix: str) -> tuple[str, str]
             async with session.begin():
                 providers = ProviderConfigsRepository(session)
                 provider_slug = f"227compat-{suffix}"
+                model = f"{RUNTIME_MODEL}-{suffix}"
                 assert await providers.get_provider_config_by_provider(
                     provider_slug
                 ) is None
@@ -690,7 +694,7 @@ async def _seed_runtime_route(database_url: str, suffix: str) -> tuple[str, str]
                     notes="227 agent Chat profile runtime test provider",
                 )
                 await ModelRoutesRepository(session).create_model_route(
-                    requested_model=RUNTIME_MODEL,
+                    requested_model=model,
                     provider=provider_slug,
                     upstream_model=RUNTIME_MODEL,
                     match_type="exact",
@@ -713,7 +717,7 @@ async def _seed_runtime_route(database_url: str, suffix: str) -> tuple[str, str]
                 )
     finally:
         await engine.dispose()
-    return provider_slug, base_url
+    return provider_slug, base_url, model
 
 
 def _runtime_settings(database_url: str) -> Settings:
@@ -755,25 +759,36 @@ async def _runtime_state(database_url: str, gateway_key_id: uuid.UUID):
 
 
 @pytest.mark.asyncio
-async def test_chat_pin_runtime_hermes_success_finalizes_pg_usage(
+@pytest.mark.parametrize(
+    ("module_id", "tool_name"),
+    [
+        (HERMES_MODULE_ID, "read_file"),
+        (OPENCODE_MODULE_ID, "read"),
+    ],
+)
+async def test_chat_pin_runtime_success_finalizes_pg_usage(
     migrated_postgres_url: str,
     respx_mock,
     monkeypatch,
+    module_id: str,
+    tool_name: str,
 ) -> None:
-    """Authenticated current Hermes pin dispatches and finalizes on PG.
+    """Authenticated current Chat pin dispatches and finalizes on PG.
 
     Real TestClient HTTP + real PostgreSQL: the finite pair gate passes
     for the unique openai_compatible provider (never the native 'openai'
-    seed), the Hermes profile decodes xhigh + the local read_file
-    declaration, the body reaches the mocked generic upstream with the
-    substituted fake provider key, and PostgreSQL accounting ends with
-    exactly one finalized reservation/ledger and zero pending counters.
+    seed), the profile decodes xhigh + the local tool declaration, the
+    body reaches the mocked generic upstream with the substituted fake
+    provider key, and PostgreSQL accounting ends with exactly one
+    finalized reservation/ledger and zero pending counters.
     """
     seed = await _seed(migrated_postgres_url)
     suffix = uuid.uuid4().hex[:12]
-    provider_slug, base_url = await _seed_runtime_route(migrated_postgres_url, suffix)
+    provider_slug, base_url, runtime_model = await _seed_runtime_route(
+        migrated_postgres_url, suffix
+    )
     assert provider_slug not in {"openai", "openrouter"}
-    hermes_pin = _module_pin(HERMES_MODULE_ID)
+    pin = _module_pin(module_id)
     now = datetime.now(UTC)
 
     engine = create_async_engine(migrated_postgres_url, future=True)
@@ -790,10 +805,10 @@ async def test_chat_pin_runtime_hermes_success_finalizes_pg_usage(
                     cost_limit_eur=Decimal("10.000000000"),
                     token_limit_total=100_000,
                     request_limit_total=100,
-                    allowed_models=[RUNTIME_MODEL],
+                    allowed_models=[runtime_model],
                     allowed_endpoints=[CHAT_ENDPOINT],
-                    note="227 agent Chat profile runtime success key",
-                    chat_client_module=hermes_pin,
+                    note=f"227 agent Chat profile runtime success {module_id}",
+                    chat_client_module=pin,
                 )
             )
             await session.commit()
@@ -803,7 +818,7 @@ async def test_chat_pin_runtime_hermes_success_finalizes_pg_usage(
         await engine.dispose()
 
     request_body = {
-        "model": RUNTIME_MODEL,
+        "model": runtime_model,
         "messages": [{"role": "user", "content": "Read the log file."}],
         "reasoning_effort": "xhigh",
         "stream": False,
@@ -811,7 +826,7 @@ async def test_chat_pin_runtime_hermes_success_finalizes_pg_usage(
             {
                 "type": "function",
                 "function": {
-                    "name": "read_file",
+                    "name": tool_name,
                     "parameters": {
                         "type": "object",
                         "properties": {"path": {"type": "string"}},
@@ -827,7 +842,7 @@ async def test_chat_pin_runtime_hermes_success_finalizes_pg_usage(
         return_value=httpx.Response(
             200,
             json={
-                "id": "chatcmpl_227_hermes",
+                "id": "chatcmpl_227_runtime",
                 "object": "chat.completion",
                 "model": RUNTIME_MODEL,
                 "choices": [
@@ -857,13 +872,14 @@ async def test_chat_pin_runtime_hermes_success_finalizes_pg_usage(
 
     assert response.status_code == 200, response.text
     body = response.json()
-    assert body["id"] == "chatcmpl_227_hermes"
+    assert body["id"] == "chatcmpl_227_runtime"
     assert body["choices"][0]["message"]["content"] == "Done."
     assert body["usage"]["total_tokens"] == 11
 
     # Exact forwarding through the profile-decoded canonical body.
     assert len(upstream.calls) == 1
     upstream_body = json.loads(upstream.calls[0].request.content)
+    # The per-invocation public model maps to the static upstream model.
     assert upstream_body["model"] == RUNTIME_MODEL
     assert upstream_body["messages"] == request_body["messages"]
     assert upstream_body["tools"] == request_body["tools"]
@@ -901,7 +917,7 @@ async def test_chat_pin_runtime_hermes_success_finalizes_pg_usage(
     assert ledger.total_tokens == 11
 
     # The persisted pin survives dispatch; no secrets in the persisted set.
-    assert (gateway_key.metadata_json or {}).get("chat_client_module") == hermes_pin
+    assert (gateway_key.metadata_json or {}).get("chat_client_module") == pin
     db_payload = json.dumps(
         {
             "gateway_key": {
