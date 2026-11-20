@@ -294,8 +294,9 @@ carry only the exact pinned model, history, instructions, tools,
 rejects `stream`, `store`, `include`, `tool_choice`, background, hosted/MCP
 authority, V2 `compaction_trigger`, provider-state IDs, media, and unknown
 fields. Prior reasoning/tool/compaction history must pass same-key HMAC lookup
-before side effects. A different compact route row requires explicit same-
-provider/same-upstream-model compatible-route metadata.
+before side effects. For opaque reasoning/compaction, a different compact
+route row requires explicit same-provider/same-upstream-model compatible-route
+metadata. Verified plain tool history does not need that route exception.
 
 With all five Codex key capabilities, pinned create/compact history may also
 contain exact `internal_chat_message_metadata_passthrough` on message (including
@@ -633,8 +634,11 @@ frame remains unchanged in transit.
 Fully validated reasoning and function/custom done items receive reusable
 HMAC-only references with a configurable TTL (default and maximum: 365 days) after final provider usage and successful
 PostgreSQL accounting. A replay request must resolve every item/call ID to the
-same key before route work and then match provider, route, model, kind, and
-approved tool identity before Redis/pricing/quota/provider work. Raw IDs,
+same key and approved kind/tool identity before Redis/pricing/quota/provider
+work. Verified client function/custom-tool history is portable across routes,
+providers and models; opaque reasoning/compaction must additionally match
+provider/route/model. Destination policy and capabilities still apply. See
+[model switching](codex-model-switching.md). Raw IDs,
 digests, encrypted reasoning, summaries, arguments, and results never persist
 or appear in logs/metrics/audit/errors. Cross-key, expired, unavailable HMAC
 version, and compatibility mismatches deny safely. Client-managed replay cannot

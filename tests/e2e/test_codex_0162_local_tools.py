@@ -701,9 +701,11 @@ def _connector_stream_sse() -> tuple[str, dict[str, object]]:
 
 
 @pytest.mark.e2e
+@pytest.mark.parametrize("switch_route", [False, True])
 def test_codex_0162_v2_connector_name_stream_and_replay(
     monkeypatch: pytest.MonkeyPatch,
     owned_pg_url: str,  # noqa: F811
+    switch_route: bool,
 ) -> None:
     """Pinned 0162-v2 key: leading-underscore connector names end to end.
 
@@ -739,6 +741,31 @@ def test_codex_0162_v2_connector_name_stream_and_replay(
         )
     )
 
+    alternate_model = local_model + "-alternate"
+    if switch_route:
+        kwargs = _local_coding_test_data_kwargs({
+            "id": module.module_id, "version": module.module_version,
+            "fixture_sha256": module.fixture_sha256,
+        })
+        kwargs["provider"] = "local-coding-alternate"
+        kwargs["upstream_model"] = "qwen3.8-27b-alternate"
+        asyncio.run(_create_responses_test_data(
+            database_url, model=alternate_model,
+            base_url=f"http://127.0.0.1:{local_port}/v1", **kwargs,
+        ))
+
+        async def allow_destination():
+            from slaif_gateway.db.models import GatewayKey
+
+            engine = create_async_engine(database_url)
+            async with async_sessionmaker(engine)() as session:
+                key = await session.get(GatewayKey, created.gateway_key_id)
+                key.allowed_models = [local_model, alternate_model]
+                await session.commit()
+            await engine.dispose()
+
+        asyncio.run(allow_destination())
+
     from slaif_gateway.config import get_settings
     from slaif_gateway.main import create_app
 
@@ -761,6 +788,8 @@ def test_codex_0162_v2_connector_name_stream_and_replay(
         ]
         assert "client_metadata" not in body and "prompt_cache_key" not in body
         observed.append([dict(item) for item in body["input"]])
+        expected_model = "qwen3.8-27b-alternate" if switch_route and len(observed) == 2 else "qwen3.8-27b"
+        assert body["model"] == expected_model
         if len(observed) == 1:
             return httpx.Response(
                 200, content=sse.encode(), headers={"content-type": "text/event-stream"}
@@ -808,7 +837,7 @@ def test_codex_0162_v2_connector_name_stream_and_replay(
                 and getattr(event.item, "type", None) == "function_call"
             )
             replay = client.responses.create(
-                model=local_model,
+                model=alternate_model if switch_route else local_model,
                 input=[
                     _connector_declaration(),
                     {
@@ -827,6 +856,23 @@ def test_codex_0162_v2_connector_name_stream_and_replay(
                 prompt_cache_key=SESSION,
                 extra_body={"client_metadata": _metadata()},
             )
+            if switch_route:
+                returned = client.responses.create(
+                    model=local_model,
+                    input=[
+                        _connector_declaration(),
+                        {"role": "user", "content": [{"type": "input_text", "text": "return to A"}]},
+                        returned_call.model_dump(exclude_none=True),
+                        {"type": "function_call_output", "call_id": call["call_id"], "output": "synthetic output"},
+                        # Replay only input fields accepted by this frozen client profile.
+                        {"type": "message", "role": "assistant", "content": [
+                            {"type": "output_text", "text": replay.output_text},
+                        ]},
+                    ],
+                    prompt_cache_key=SESSION,
+                    extra_body={"client_metadata": _metadata()},
+                )
+                assert returned.id == "codex-0162-e2e-response"
 
     # The gateway's strict typed-SSE validator admitted exactly the
     # generic 0.162 grammar, with the exact namespace and name preserved.
@@ -840,22 +886,22 @@ def test_codex_0162_v2_connector_name_stream_and_replay(
     assert returned_call.name == "_read_page"
     assert returned_call.namespace == "mcp__codex_apps__chatgpt_space"
     assert replay.id == "codex-0162-e2e-response"
-    assert len(local_route.calls) == 2
+    assert len(local_route.calls) == (3 if switch_route else 2)
     for request in (call.request for call in local_route.calls):
         _verify_local_coding_signature(request)
 
     state = asyncio.run(
         _load_accounting_state(database_url, created.gateway_key_id, provider="local-coding")
     )
-    assert state.gateway_key.requests_used_total == 2
-    assert state.gateway_key.tokens_used_total == 10
+    expected_requests = 3 if switch_route else 2
+    assert state.gateway_key.requests_used_total == expected_requests
+    assert state.gateway_key.tokens_used_total == 5 * expected_requests
     assert asyncio.run(_load_ledger_rows(database_url, created.gateway_key_id)) == [
         (5, "finalized"),
-        (5, "finalized"),
-    ]
+    ] * expected_requests
     assert asyncio.run(
         _load_accounting_side_effect_counts(database_url, created.gateway_key_id)
-    ) == (2, 2)
+    ) == (expected_requests, expected_requests)
 
 
 @pytest.mark.e2e

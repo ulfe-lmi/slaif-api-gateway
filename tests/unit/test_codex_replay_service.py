@@ -264,7 +264,7 @@ async def test_persist_and_verify_are_hmac_only_idempotent_and_route_bound() -> 
 
 
 @pytest.mark.asyncio
-async def test_cross_key_expiry_name_and_route_mismatches_fail_closed() -> None:
+async def test_cross_key_expiry_and_name_deny_but_owned_tool_history_is_portable() -> None:
     repository = FakeRepository()
     service = CodexReplayService(repository=repository, settings=_settings())
     key_id = uuid.uuid4()
@@ -309,14 +309,12 @@ async def test_cross_key_expiry_name_and_route_mismatches_fail_closed() -> None:
         gateway_key_id=key_id,
         now=now + timedelta(minutes=1),
     )
-    with pytest.raises(CodexReplayReferenceError) as exc_info:
-        service.verify_route_compatibility(
-            authorization,
-            provider="openrouter",
-            route_id=route_id,
-            upstream_model="gpt-test",
-        )
-    assert exc_info.value.error_code == "responses_codex_replay_route_mismatch"
+    service.verify_route_compatibility(
+        authorization,
+        provider="openrouter",
+        route_id=uuid.uuid4(),
+        upstream_model="different-model",
+    )
 
 
 @pytest.mark.asyncio
@@ -570,7 +568,7 @@ async def test_present_item_id_with_matching_call_id_never_downgrades() -> None:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("mismatch", ["route", "provider", "model", "tool"])
-async def test_replay_scope_mismatches_fail_closed_independently(mismatch: str) -> None:
+async def test_owned_tool_scope_is_portable_but_tool_identity_remains_bound(mismatch: str) -> None:
     repository = FakeRepository()
     service = CodexReplayService(repository=repository, settings=_settings())
     key_id = uuid.uuid4()
@@ -597,14 +595,71 @@ async def test_replay_scope_mismatches_fail_closed_independently(mismatch: str) 
     authorization = await service.verify_owned_replay(
         candidates=(candidate,), gateway_key_id=key_id, now=now + timedelta(minutes=1)
     )
-    with pytest.raises(CodexReplayReferenceError) as exc_info:
+    service.verify_route_compatibility(
+        authorization,
+        provider="other-provider" if mismatch == "provider" else "local-coding",
+        route_id=uuid.uuid4() if mismatch == "route" else route_id,
+        upstream_model="other-model" if mismatch == "model" else "qwen-test",
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("opaque", [_reasoning(), _compaction()])
+@pytest.mark.parametrize("mismatch", ["provider", "route", "model"])
+async def test_portable_tools_never_make_mixed_opaque_history_portable(opaque, mismatch) -> None:
+    repository = FakeRepository()
+    service = CodexReplayService(repository=repository, settings=_settings())
+    key_id, route_id = uuid.uuid4(), uuid.uuid4()
+    now = datetime.now(UTC)
+    await service.persist_validated_references(
+        candidates=(_tool(), opaque), gateway_key_id=key_id, usage_ledger_id=uuid.uuid4(),
+        source_request_id="req_mixed_opaque", provider="source",
+        route_id=route_id, upstream_model="source-model", now=now,
+    )
+    authorization = await service.verify_owned_replay(
+        candidates=(_tool(), opaque), gateway_key_id=key_id, now=now,
+    )
+    with pytest.raises(CodexReplayReferenceError) as exc:
         service.verify_route_compatibility(
-            authorization,
-            provider="other-provider" if mismatch == "provider" else "local-coding",
+            authorization, provider="other" if mismatch == "provider" else "source",
             route_id=uuid.uuid4() if mismatch == "route" else route_id,
-            upstream_model="other-model" if mismatch == "model" else "qwen-test",
+            upstream_model="other" if mismatch == "model" else "source-model",
         )
-    assert exc_info.value.error_code == "responses_codex_replay_route_mismatch"
+    assert exc.value.error_code == "responses_codex_replay_route_mismatch"
+    assert "Opaque" in str(exc.value)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("idless", [False, True])
+async def test_mixed_source_tool_history_can_switch_models_and_return_without_rebinding(idless) -> None:
+    from dataclasses import replace
+
+    repository = FakeRepository()
+    service = CodexReplayService(repository=repository, settings=_settings())
+    key_id = uuid.uuid4()
+    now = datetime.now(UTC)
+    sources = [("vllm", uuid.uuid4(), "model-a"), ("llama", uuid.uuid4(), "model-b")]
+    tools = [
+        Candidate("function_call", "fc_portable", "call_portable", "functions", "exec_command"),
+        Candidate("custom_tool_call", "ctc_portable", "custom_portable", "functions", "apply_patch"),
+    ]
+    for candidate, (provider, route_id, model) in zip(tools, sources, strict=True):
+        await service.persist_validated_references(
+            candidates=(candidate,), gateway_key_id=key_id, usage_ledger_id=uuid.uuid4(),
+            source_request_id="req_" + provider, provider=provider,
+            route_id=route_id, upstream_model=model, now=now,
+        )
+    original_rows = [dict(vars(row)) for row in repository.rows]
+    candidates = tuple(replace(c, item_id=None) if idless else c for c in tools)
+    authorization = await service.verify_owned_replay(
+        candidates=candidates, gateway_key_id=key_id, now=now,
+        allow_idless_tool_call_replay=idless,
+    )
+    for provider, route_id, model in [*sources, ("third", uuid.uuid4(), "model-c"), sources[0]]:
+        service.verify_route_compatibility(
+            authorization, provider=provider, route_id=route_id, upstream_model=model,
+        )
+    assert [dict(vars(row)) for row in repository.rows] == original_rows
 
 
 @pytest.mark.asyncio

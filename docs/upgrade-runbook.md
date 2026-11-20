@@ -6,6 +6,15 @@
 
 ## Before changing a deployment
 
+The [Codex model-switching update](codex-model-switching.md) changes replay
+compatibility in the engine: verified same-key client-tool history is portable,
+while opaque reasoning/compaction remains source-bound. Deploy the reviewed
+image and recreate API workers; there is no schema, key-pin, registry or key
+rotation step. Existing reference rows retain their source provenance. An older
+binary may reject a newly accumulated mixed-route history after rollback;
+preserve the database and local conversations, and use forward recovery or
+visible-history reconstruction rather than deleting ownership records.
+
 For the Qwen output-budget/terminal update, follow the
 [Codex tuning guide](codex-tuning-qwen.md). The engine change accepts bounded,
 usage-backed output-limit terminals and requires recreating API workers; it adds

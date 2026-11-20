@@ -67,8 +67,11 @@ Native vLLM can regenerate both tool identifiers in the terminal response.
 The adapter restores the closed stream's identifiers only when output position,
 declared wire name and complete arguments match exactly. Changed, missing or
 unclosed calls fail. These identifiers are protocol linkage, not user identity.
-Canonical events then pass the existing validator and same-key/provider/route
-replay reference gates. Non-streaming responses use their own native identifiers.
+Canonical events then pass the existing validator and same-key replay reference
+gates. Verified client-tool history is portable between permitted model routes;
+opaque reasoning/compaction retains provider/route/model binding. See
+[model switching](../codex-model-switching.md). Non-streaming responses use their
+own native identifiers.
 
 State is per request: at most 256 declared tools, three tool items and 1 MiB of
 native JSON arguments per tool, with at most 65536 native argument fragments.

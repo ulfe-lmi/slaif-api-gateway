@@ -1308,7 +1308,8 @@ async def main() -> None:
             )
 
             member_active = await keys.create_gateway_key_record(
-                public_key_id=f"seed_member_active_{uuid.uuid4().hex[:12]}",
+                # URL-safe public IDs may begin with '-'; keep that CLI case deterministic.
+                public_key_id=f"-seed_member_active_{uuid.uuid4().hex[:12]}",
                 token_hash=uuid.uuid4().hex,
                 owner_id=owner_seed.id,
                 cohort_id=cohort_seed.id,
@@ -1513,6 +1514,7 @@ async def main() -> None:
                 "route_d": str(route_d.id),
                 "k_policy": str(k_policy.gateway_key_id),
                 "k_policy_public": k_policy.public_key_id,
+                "member_active_public": member_active.public_key_id,
                 "k_source_chat": str(k_source_chat.gateway_key_id),
                 "k_source_chat_public": k_source_chat.public_key_id,
                 "k_source_denyall": str(k_source_denyall.gateway_key_id),
@@ -1954,8 +1956,18 @@ def test_dod1_lookup_and_bounded_paging(field_workflow: FieldEnvironment) -> Non
     assert env.run_cli("cohorts", "show", m["cohort_seed"], label="dod1-cohorts-show-07").json["name"] == "Seed Cohort 205"
 
     # Key lookup by public key ID and by exact owner email.
-    by_public = env.run_cli("keys", "show", m["k_policy_public"], label="dod1-keys-show-08").json
+    # Options precede '--': a generated public ID can otherwise be parsed as an option.
+    by_public = json.loads(env.run_cli(
+        "keys", "show", "--json", "--", m["k_policy_public"],
+        json_output=False, label="dod1-keys-show-08",
+    ).stdout)
     assert by_public["id"] == m["k_policy"]
+    assert m["member_active_public"].startswith("-")
+    by_dash_public = json.loads(env.run_cli(
+        "keys", "show", "--json", "--", m["member_active_public"],
+        json_output=False, label="dod1-keys-show-dash-public",
+    ).stdout)
+    assert by_dash_public["id"] == m["member_active"]
     by_email = env.run_cli(
         "keys", "list", "--owner-email", m["owner_seed_email"], "--limit", "100",
         label="dod1-keys-list-09",

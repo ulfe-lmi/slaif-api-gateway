@@ -169,7 +169,7 @@ quotas. Existing client files are not rewritten by a route update.
 | key quota and rate-limit policy | reserves estimated input plus output before inference; can reject a request before any answer |
 | wait mode / maximum wait | queues eligible rate-limited requests within the configured bound; does not enlarge token or context limits |
 | concurrency per key | simultaneous requests, distinct from tools within one turn |
-| replay-reference TTL | lifetime of same-key/provider/route replay ownership; preserve durable database state across restarts |
+| replay-reference TTL | lifetime of same-key replay ownership; plain tool history is portable, opaque state remains source-bound; preserve durable database state across restarts |
 
 A 20,000-token input with the default output budget reserves exposure for about
 84,000 tokens. Hard-quota settlement uses actual reported usage and releases
@@ -294,7 +294,8 @@ defines the canonical event.
 | 429 | estimated reservation, token/request window, concurrent requests and wait policy |
 | output-limit notice | provider status/reason, thinking consumption, requested/default budget |
 | generic stream failure | unsupported event, malformed tool encoding, missing usage or transport failure |
-| replay-reference unavailable | durable ownership/TTL and key/provider/route; an older failed stream may have left orphaned history—rewind before that turn; preserve the database during upgrades |
+| replay-reference unavailable | same-key ownership, expiry and tool identity; an older failed stream may have left orphaned history; preserve the database during upgrades |
+| replay route mismatch | opaque reasoning/compaction belongs to another route; verified plain tool history can cross permitted routes; see [model switching](codex-model-switching.md) |
 
 Use content-free diagnostics first. Do not log bearer keys, tool contents,
 images or whole conversations to tune these controls.
