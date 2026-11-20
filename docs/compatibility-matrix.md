@@ -33,6 +33,12 @@ checked against each historical call and translated by its selected adapter.
 Unit and PostgreSQL/mock-provider tests cover this boundary; ordinary
 Responses and profiles without that feature retain their field restrictions.
 
+Revision 16 additionally accepts
+[named client context without a call ID](responses-compatibility.md#named-client-context-without-a-tool-call).
+Bounded context is normalized to labeled user data for all adapters; it
+neither completes a pending call nor creates replay authority. Original
+key/route grants remain required even for context-only requests.
+
 Fully gated Codex routes additionally support explicit top-level
 `codex_context_admission="upstream"` for qualified backends that validate actual
 context and clip generation. Omission retains `gateway_estimate` admission.

@@ -56,6 +56,10 @@ from slaif_gateway.modules.clients.responses_support import (
     _BASE64_CHARS_RE,
 )
 from slaif_gateway.modules.contracts import ResponsesClientPolicySpec
+from slaif_gateway.modules.codex_named_context import (
+    is_codex_named_context_output,
+    lower_codex_named_context_output,
+)
 from slaif_gateway.config import Settings
 from slaif_gateway.schemas.policy import ResponsesPolicyResult
 from slaif_gateway.modules.codex_tool_history import (
@@ -1162,6 +1166,7 @@ class ResponsesRequestPolicy:
         if (
             codex_client_tool_items
             or codex_reasoning_items
+            or any(is_codex_named_context_output(item) for item in canonical_items)
             or (codex_tool_call_items and (codex_top_level_tool_taxonomy is not None or codex_tool_history_facts is not None))
         ):
             self._validate_codex_tool_roundtrip_items(
@@ -1174,6 +1179,15 @@ class ResponsesRequestPolicy:
                     else None
                 ),
             )
+        # Do this only after lifecycle/duplicate-ID validation. A context
+        # output never resolves a pending call and never becomes a replay
+        # reference. Every transport receives the same ordinary user data;
+        # no backend is asked to invent linkage for an unpaired tool result.
+        canonical_items = [
+            lower_codex_named_context_output(item)
+            if is_codex_named_context_output(item) else item
+            for item in canonical_items
+        ]
         return canonical_items, total_material_bytes
 
     def _split_dialect_fields(
@@ -2452,6 +2466,13 @@ class ResponsesRequestPolicy:
                 calls[call_id] = matches[0]
                 pending.add(call_id)
             elif item_type in {"function_call_output", "custom_tool_call_output"}:
+                if (
+                    self._codex_spec.codex_tool_history_mode == MODE_POSITIONAL_UPDATES
+                    and is_codex_named_context_output(item)
+                ):
+                    # Client context may arrive between a call and its real
+                    # result; it cannot satisfy that call or bind to a tool.
+                    continue
                 call_id = str(item["call_id"])
                 if call_id in outputs:
                     _raise(
@@ -2547,13 +2568,15 @@ class ResponsesRequestPolicy:
             )
         expected_type = "custom_tool_call_output" if custom else "function_call_output"
         call_id = item.get("call_id")
-        if item.get("type") != expected_type or not isinstance(call_id, str):
+        positional_history = self._codex_spec.codex_tool_history_mode == MODE_POSITIONAL_UPDATES
+        named_context_output = positional_history and is_codex_named_context_output(item)
+        if item.get("type") != expected_type or (not named_context_output and not isinstance(call_id, str)):
             _raise(
                 f"{param}.call_id",
                 "responses_codex_tool_roundtrip_invalid",
                 "Codex tool outputs require the matching bounded call ID.",
             )
-        if self._codex_spec.tool_call_id_pattern.fullmatch(call_id) is None:
+        if not named_context_output and self._codex_spec.tool_call_id_pattern.fullmatch(call_id) is None:
             _raise(
                 f"{param}.call_id",
                 "responses_codex_tool_roundtrip_invalid",
@@ -2652,11 +2675,13 @@ class ResponsesRequestPolicy:
                 )
             canonical[field] = value
         if "id" in item:
-            canonical["id"] = self._validate_codex_message_id(
-                item.get("id"),
-                param=f"{param}.id",
+            canonical["id"] = (
+                None if positional_history and item["id"] is None
+                else self._validate_codex_message_id(item["id"], param=f"{param}.id")
             )
-        material_bytes = len(canonical_json_bytes(canonical))
+        material_bytes = len(canonical_json_bytes(
+            lower_codex_named_context_output(canonical) if named_context_output else canonical
+        ))
         return canonical, material_bytes - image_material_bytes, material_bytes, image_parts, image_data_bytes, 0, 0
 
     def _validate_function_call_output_item(
@@ -4757,11 +4782,17 @@ def responses_codex_request_envelope_allowed(policy: object) -> bool:
 
 
 def responses_codex_client_tools_requested(body: Mapping[str, Any]) -> bool:
-    """Detect Codex client tool declarations from input shape only."""
+    """Detect declarations or call-free Codex client context from input shape.
+
+    Context-only requests retain the key/route gates even after the policy
+    lowers their contents to user messages. No model/profile-name inference.
+    """
 
     input_value = body.get("input")
     return isinstance(input_value, list) and any(
-        isinstance(item, Mapping) and item.get("type") == "additional_tools" for item in input_value
+        isinstance(item, Mapping) and (
+            item.get("type") == "additional_tools" or is_codex_named_context_output(item)
+        ) for item in input_value
     )
 
 
@@ -5071,6 +5102,8 @@ def responses_codex_streaming_tool_events_requested(body: Mapping[str, Any]) -> 
     input_value = body.get("input")
     if not isinstance(input_value, list):
         return has_namespace_tools and body.get("stream") is True
+    if any(isinstance(item, Mapping) and is_codex_named_context_output(item) for item in input_value):
+        return True  # Retain all three gates for context-only requests too.
     item_types = {
         item.get("type")
         for item in input_value
@@ -5259,6 +5292,8 @@ def _codex_positional_events_from_items(
                 )
             )
         elif item_type in {"function_call_output", "custom_tool_call_output"}:
+            if is_codex_named_context_output(item):
+                continue  # Client-authored context, never a call/output event.
             output_id = item.get("id")
             events.append(
                 CodexToolCallOutputEvent(

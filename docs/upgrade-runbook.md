@@ -286,6 +286,17 @@ and worker process. Keep the existing profile file, digest, key pins, and
 keys; no database migration or rotation is required. Rolling back only this
 engine correction restores the old field rejection for affected histories.
 
+The follow-up engine correction also supports Codex's named client context:
+`function_call_output` with a name and absent/null `call_id`. This source-defined
+item is additional context rather than a call-linked result. It is normalized
+to labeled user data for every backend, under the original key/route gates;
+no call ID or ownership is fabricated. See
+[the exact behavior and boundaries](responses-compatibility.md#named-client-context-without-a-tool-call).
+Deploying only the optional-name fix can expose the next rejection at
+`input[...].call_id`; the named-context correction requires a new engine
+build and drained API/worker restart. Existing revision-16 files, digests,
+pins, keys, routes, quotas and schema remain unchanged.
+
 The 226 declaration-history lifecycle is ENGINE behavior plus profile
 DATA: the new preset (`codex-0.167.1`, revision `16`) requires the NEW
 engine containing the lifecycle validators. Pointing the preset file at
