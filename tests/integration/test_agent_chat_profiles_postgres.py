@@ -1543,3 +1543,147 @@ async def test_chat_pin_stream_success_finalizes_pg_usage(
     )
     assert FAKE_COMPATIBLE_UPSTREAM_KEY not in db_payload
     assert plaintext_key not in db_payload
+
+
+# ---------------------------------------------------------------------------
+# Round 4: provider failures (non-stream 500, stream 500) release cleanly
+# ---------------------------------------------------------------------------
+
+_PROVIDER_ERROR_500_JSON = {
+    "error": {"message": "upstream exploded", "type": "provider_error"}
+}
+
+
+async def _streaming_denial_setup(
+    migrated_postgres_url: str, respx_mock, monkeypatch, module_id: str, streaming: bool
+) -> tuple[str, str, str, dict, object]:
+    """(runtime_model, base_url, plaintext_key, key_id, upstream) for a 500 case."""
+    seed = await _seed(migrated_postgres_url)
+    suffix = uuid.uuid4().hex[:12]
+    provider_slug, base_url, runtime_model = await _seed_runtime_route(
+        migrated_postgres_url, suffix, supports_streaming=streaming
+    )
+    assert provider_slug not in {"openai", "openrouter"}
+    pin = _module_pin(module_id)
+    plaintext_key, key_id = await _create_chat_key(
+        migrated_postgres_url,
+        seed,
+        datetime.now(UTC),
+        allowed_models=[runtime_model],
+        chat_client_module=pin,
+        note=f"227 agent Chat profile provider error {module_id}",
+    )
+    monkeypatch.setenv(HERMES227_SVC_KEY_ENV, FAKE_COMPATIBLE_UPSTREAM_KEY)
+    upstream = respx_mock.post(f"{base_url}/chat/completions").mock(
+        return_value=httpx.Response(500, json=_PROVIDER_ERROR_500_JSON)
+    )
+    return runtime_model, base_url, plaintext_key, key_id, upstream
+
+
+@pytest.mark.asyncio
+async def test_chat_pin_provider_http_error_releases_reservation(
+    migrated_postgres_url: str, respx_mock, monkeypatch
+) -> None:
+    """A non-streamed provider 500 is gateway 500, reservation released.
+
+    Admission happened (the reservation exists) but no output was produced,
+    so the reservation is released and the ledger is a failed record with
+    zero counters.
+    """
+    runtime_model, base_url, plaintext_key, key_id, upstream = (
+        await _streaming_denial_setup(
+            migrated_postgres_url, respx_mock, monkeypatch, HERMES_MODULE_ID, False
+        )
+    )
+
+    request_body = {
+        "model": runtime_model,
+        "messages": [{"role": "user", "content": "Read the log file."}],
+        "reasoning_effort": "xhigh",
+        "stream": False,
+    }
+    app = create_app(_runtime_settings(migrated_postgres_url))
+    with TestClient(app) as client:
+        response = client.post(
+            CHAT_ENDPOINT,
+            headers={"Authorization": f"Bearer {plaintext_key}"},
+            json=request_body,
+        )
+
+    assert response.status_code == 500, response.text
+    assert response.json()["error"]["code"] == "provider_http_error", response.text
+    assert len(upstream.calls) == 1
+
+    gateway_key, reservations, ledgers = await _runtime_state(
+        migrated_postgres_url, key_id
+    )
+    assert len(reservations) == 1
+    assert len(ledgers) == 1
+    reservation, ledger = reservations[0], ledgers[0]
+    assert reservation.status == "released"
+    assert ledger.streaming is False
+    assert ledger.accounting_status == "failed"
+    assert ledger.success is False
+    assert ledger.error_type == "provider_http_error"
+    assert gateway_key.tokens_reserved_total == 0
+    assert gateway_key.requests_reserved_total == 0
+    assert gateway_key.cost_reserved_eur == Decimal("0")
+    assert gateway_key.tokens_used_total == 0
+    assert gateway_key.requests_used_total == 0
+    assert gateway_key.cost_used_eur == Decimal("0")
+
+
+@pytest.mark.asyncio
+async def test_chat_pin_stream_provider_error_after_admission_releases_reservation(
+    migrated_postgres_url: str, respx_mock, monkeypatch
+) -> None:
+    """A provider 500 on a stream request is an SSE error event, released.
+
+    Streaming opens the upstream inside the response generator, so the
+    client receives a 200 SSE body containing the error event; with no
+    output delivered the reservation is released and the ledger failed.
+    """
+    runtime_model, base_url, plaintext_key, key_id, upstream = (
+        await _streaming_denial_setup(
+            migrated_postgres_url, respx_mock, monkeypatch, HERMES_MODULE_ID, True
+        )
+    )
+
+    request_body = {
+        "model": runtime_model,
+        "messages": [{"role": "user", "content": "Read the log file."}],
+        "reasoning_effort": "xhigh",
+        "stream": True,
+    }
+    app = create_app(_runtime_settings(migrated_postgres_url))
+    with TestClient(app) as client:
+        with client.stream(
+            "POST",
+            CHAT_ENDPOINT,
+            headers={"Authorization": f"Bearer {plaintext_key}"},
+            json=request_body,
+        ) as response:
+            assert response.status_code == 200, response.read()
+            streamed = "".join(response.iter_text())
+
+    assert "provider_http_error" in streamed
+    assert "Done." not in streamed
+    assert len(upstream.calls) == 1
+
+    gateway_key, reservations, ledgers = await _runtime_state(
+        migrated_postgres_url, key_id
+    )
+    assert len(reservations) == 1
+    assert len(ledgers) == 1
+    reservation, ledger = reservations[0], ledgers[0]
+    assert reservation.status == "released"
+    assert ledger.streaming is True
+    assert ledger.accounting_status == "failed"
+    assert ledger.success is False
+    assert ledger.error_type == "provider_http_error"
+    assert gateway_key.tokens_reserved_total == 0
+    assert gateway_key.requests_reserved_total == 0
+    assert gateway_key.cost_reserved_eur == Decimal("0")
+    assert gateway_key.tokens_used_total == 0
+    assert gateway_key.requests_used_total == 0
+    assert gateway_key.cost_used_eur == Decimal("0")
