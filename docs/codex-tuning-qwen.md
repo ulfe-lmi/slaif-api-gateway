@@ -225,6 +225,15 @@ still apply. Do not reintroduce an image-count workaround for token-estimation
 errors. Video-frame extraction and direct video capabilities have independent
 route/request bounds; disabling the image count does not enable arbitrary video.
 
+Long image histories can independently cross the packaged 40 MiB aggregate
+data-URL byte cap because earlier images are resubmitted on later turns.
+The deployment now explicitly sets
+`RESPONSES_MAX_TOTAL_IMAGE_DATA_URL_BYTES=134217728` (128 MiB), with the
+20 MiB per-image limit unchanged and a matching `128m` API transport ceiling.
+See the [image-history payload runbook](runbooks/codex-image-payload-size.md)
+for configuration, API reload, boundary verification and rollback. This does
+not change image-token estimation or the backend context window.
+
 The compatibility preset owns tool namespace vocabulary, declaration/schema
 limits, visible-reasoning sizes and replay shapes. Those byte/item bounds are
 separate from output token budgets. A long answer fitting 128,000 tokens can

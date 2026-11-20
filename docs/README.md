@@ -35,6 +35,8 @@ and do not override current contracts or merged code.
   request-envelope slice.
 - [Codex tuning with three Qwen backends](codex-tuning-qwen.md) — client
   templates, context/compaction headroom, output budgets, adapters and diagnostics.
+- [Codex image-history payload size](runbooks/codex-image-payload-size.md) —
+  aggregate image bytes, the 128 MiB override, rolling reload and verification.
 - [Provider forwarding contract](provider-forwarding-contract.md) — headers,
   bodies, endpoints, credential replacement.
 - [Pricing catalog and bounded overrun](pricing-catalog.md) — pricing
