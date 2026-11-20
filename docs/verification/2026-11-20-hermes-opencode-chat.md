@@ -284,10 +284,12 @@ title and PR-mode declaration lines.
   proposed/unconfirmed — human target authority and protected
   execution remain pending, and ``protected.status`` stays
   ``not_run``. Gap (b), the per-obligation ``obligation_mapping`` in the
-  adjacent obligation-manifest JSON, is owned by the secondary
-  component: its reviewed mapping commit is in handoff and is **not yet
-  integrated** into this branch; this record must not claim it
-  completed before that handoff lands.
+  adjacent obligation-manifest JSON, is **integrated**: the accepted
+  secondary-owned mapping commit ``c9035be723700605a534360c432156acf06e6097``
+  (19 required groups / 140 test-node/fixture/evidence refs, collection-checked
+  once against 606 collected nodes at primary head ``902a6e33`` — a
+  collection check, NOT a pass count) was cherry-picked by the PRIMARY coding
+  agent as ``cf62d28b``. JSON ownership has transferred back to primary.
 
 - **Base ancestry note (factual, no rebase/merge performed):** remote
   ``main`` advanced past this branch's base ``0940d8a2`` to

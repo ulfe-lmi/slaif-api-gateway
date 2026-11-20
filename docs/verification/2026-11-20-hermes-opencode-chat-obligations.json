@@ -132,14 +132,15 @@
       "other_governance_result": "5 passed, exit 0",
       "oap_governance_file": "tests/unit/test_oap_governance.py",
       "oap_governance_result": "10 passed, exit 0 (new active 227-b state; canonical order title + PR-mode declaration present)",
-      "failed_tests": [
+      "historical_227_a_failed_tests": [
         "test_active_identifier_resolves_exactly_one_matching_order",
         "test_initial_round_declares_new_pr_and_one_objective_one_pr"
       ],
       "cause": "activated 227-a order format (title line; prose PR-mode declaration), not a code or test regression",
-      "resolution": "canonical 227-b AMEND_EXISTING_PR on the same PR corrects the order format; no source/runtime change or rerun",
+      "resolution": "canonical 227-b AMEND_EXISTING_PR on the same PR corrects the order format; no app/unit/native rerun; the focused governance run against the NEW active 227-b state DID run and passed 10/10 (exit 0)",
       "oap_governance_failed_tests": [],
-      "oap_governance_note": "focused rerun justified by active-state change to 227-b; the two historical 227-a format failures are resolved by the canonical order, not by weakening tests"
+      "oap_governance_note": "focused rerun justified by active-state change to 227-b; the two historical 227-a format failures are resolved by the canonical order, not by weakening tests",
+      "current_failed_tests": []
     },
     "coverage_note": "This manifest is now the required per-obligation verified test-node-ID mapping: 19 records over the order's 19 coverage groups, each linking real executed test node IDs (with class/parameter scope) to the accepted commands/results/checkpoint plus native receipts and manually reviewed contract evidence. Collection-verified (not executed) at primary head 902a6e33. It is not a pass count.",
     "collection_check": {
@@ -607,7 +608,7 @@
       "id": "native-fake-peer-captures-reused",
       "required": true,
       "status": "verified",
-      "evidence_level": "native_loopback_reused (Hermes) + unit_fixture_facts (OpenCode)",
+      "evidence_level": "native_fake_peer_loopback + fixture_unit (both clients; OpenCode native verifier receipt linked)",
       "requirement": "Native-loopback capture facts (Hermes tool loop/reasoning-replay/terminal/cleanup) and OpenCode structural capture facts (tool loop/multi-call/title-aux/compaction/reasoning/session identity/text envelope) match the accepted profile behavior without any live provider or rerun.",
       "verified_test_node_ids": [
         "tests/unit/test_verify_hermes_chat_capture.py::test_toolloop_clean_terminal_result_qualifies",
