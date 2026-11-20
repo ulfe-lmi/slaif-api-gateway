@@ -288,7 +288,10 @@ async def handle_chat_completion(
             param="messages",
         )
 
-    policy = ChatCompletionRequestPolicy(settings=settings)
+    policy = ChatCompletionRequestPolicy(
+        settings=settings,
+        chat_client_spec=chat_module.policy_spec if chat_module is not None else None,
+    )
     try:
         policy_result = policy.apply(
             body,
@@ -1076,7 +1079,16 @@ def _revalidate_chat_completion_after_wait(
             raise policy_changed_while_waiting_error()
 
         try:
-            new_policy_result = ChatCompletionRequestPolicy(settings=settings).apply(
+            new_chat_module = _resolve_chat_client_module(new_key)
+        except AgentChatModuleSelectionError as exc:
+            raise _openai_error_from_chat_module_selection_error(exc) from exc
+        try:
+            new_policy_result = ChatCompletionRequestPolicy(
+                settings=settings,
+                chat_client_spec=(
+                    new_chat_module.policy_spec if new_chat_module is not None else None
+                ),
+            ).apply(
                 body,
                 defer_media_limit=True,
                 capability_policy_mode=new_key.capability_policy_mode,
