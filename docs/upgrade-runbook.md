@@ -327,6 +327,48 @@ revision-15 snapshot return to the old engine's singleton law, whose
 incremental-history refusals may reappear for 0.167.1-shaped clients.
 
 
+## Hermes/OpenCode Chat client profile upgrade and rollback (227-a)
+
+Chat client profiles (`hermes-0.22.5-chat-v1`, `opencode-1.19.3-chat-v1`)
+differ from Codex compatibility profiles in two ways: their profile
+DATA is PACKAGED in the gateway image (there is no operator-mounted
+profile file), and key pins have NO migration command. Each process
+loads exactly ONE identity per module id from its packaged DATA, so a
+key pin resolves only when its `fixture_sha256` matches the deployed
+revision; any pin/deployment digest mismatch fails that key's requests
+closed before admission.
+
+**Upgrade (new DATA revision shipped in a new image):**
+
+1. Deploy the new image to API, worker, and scheduler. All workers must
+   use one revision; never serve traffic with mixed revisions.
+2. Re-pin each affected key to the NEW exact tuple through a
+   `schema_version` 1 policy file (`keys policy update --policy-file`
+   with `--reason`). Example, Hermes revision 2: `{"id":
+   "hermes-0.22.5-chat-v1", "version": "2", "fixture_sha256":
+   "c5e34d46270280d7e08639c01c28065380a2a80843c1114ac1f1ad2a2744d327"}`.
+3. Verify with `keys policy export <key-id>`: the version-1 document
+   renders the stored pin.
+
+**Rollback (restore the previous revision):**
+
+1. Re-deploy the PREVIOUS trusted image to API, worker, and scheduler
+   and restart. The previous pin cannot resolve on the new image, so a
+   re-pin alone is NOT a rollback.
+2. Re-pin each key to the previous exact tuple with the matching CLI
+   (same `schema_version` 1 policy-file update as the upgrade).
+3. While a key's pin digest and the deployed DATA digest mismatch, that
+   key's requests fail closed. The previous revision must itself be
+   reviewed and qualified; the gateway makes no automatic
+   compatibility promise.
+
+**Deliberate disable** is distinct from rollback: clearing the pin
+(`"chat_client_module": null` in a `schema_version` 1 policy file)
+returns the key to `openai-default` Chat validation. It is not a
+rollback, and a client tuned to a profile's widened envelope (for
+example Hermes `xhigh` reasoning effort) may fail the default
+validator until the pin is restored.
+
 ## Qwen executable compatibility update (packaged profile 8)
 
 The Qwen schema-label, custom `functions.apply_patch`, sparse Local visible
