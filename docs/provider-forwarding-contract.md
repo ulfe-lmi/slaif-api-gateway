@@ -216,6 +216,17 @@ resolved namespace keeps the same wire identity as the implicit
 binding translation — while `preserve` encodings forward the
 materialized namespace with no codec.
 
+The same profile-selected mode accepts the pinned protocol's optional
+tool-result `name` (function/custom) and `namespace` (function only).
+Non-null identities are bounded and checked against the original call
+binding before routing or reservation, not against the final active tools.
+Null/absent identities add no identity claim. Canonical accepted fields are
+metered and retained transiently. Preserve transports forward them unchanged;
+native/portable codecs map a supplied name to that call's historical wire
+name and remove the separate namespace. A result cannot declare a tool or
+authorize replay, and no output identity is persisted as a new reference.
+Other profiles and ordinary Responses keep their strict field vocabulary.
+
 Instruction placement is part of the SAME shared pure preparation (run
 by the production adapter and the pre-admission estimate preview): a
 lifecycle request (non-`None` bindings) on a

@@ -27,6 +27,12 @@ Shipped 0.16x presets (0.162.1 through 0.167.1) are exact data
 profiles, not a broad client or production-certification claim; packaged
 revision 8 remains the frozen fallback.
 
+The positional-history feature in revision 16 also accepts the pinned
+protocol's [optional tool-result identities](responses-compatibility.md#optional-codex-tool-result-identities),
+checked against each historical call and translated by its selected adapter.
+Unit and PostgreSQL/mock-provider tests cover this boundary; ordinary
+Responses and profiles without that feature retain their field restrictions.
+
 Fully gated Codex routes additionally support explicit top-level
 `codex_context_admission="upstream"` for qualified backends that validate actual
 context and clip generation. Omission retains `gateway_estimate` admission.

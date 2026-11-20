@@ -2472,6 +2472,15 @@ class ResponsesRequestPolicy:
                         "responses_codex_tool_roundtrip_invalid",
                         "Codex tool outputs must match one preceding call of the same kind.",
                     )
+                # Optional result identities corroborate the call's original
+                # binding, never the final catalog after declaration updates.
+                for field, expected in (("namespace", declaration[0]), ("name", declaration[1])):
+                    if item.get(field) is not None and item[field] != expected:
+                        _raise(
+                            f"input[{index}].{field}",
+                            "responses_codex_tool_roundtrip_invalid",
+                            "Codex tool output identity must match its preceding call.",
+                        )
                 pending.remove(call_id)
             elif pending and not (
                 item_type in (None, "message") and item.get("role") == "assistant"
@@ -2620,6 +2629,28 @@ class ResponsesRequestPolicy:
             "call_id": call_id,
             "output": canonical_output,
         }
+        for field in ("name", "namespace"):
+            if field not in item:
+                continue
+            value = item[field]
+            if value is not None:
+                if not isinstance(value, str) or not value:
+                    _raise(
+                        f"{param}.{field}",
+                        "responses_codex_tool_roundtrip_invalid",
+                        "Codex tool output identity must be a bounded non-empty string or null.",
+                    )
+                self._validate_string_bytes(
+                    value,
+                    param=f"{param}.{field}",
+                    max_bytes=(
+                        self._settings.RESPONSES_MAX_CUSTOM_TOOL_NAME_BYTES
+                        if custom and field == "name"
+                        else self._settings.RESPONSES_MAX_FUNCTION_TOOL_NAME_BYTES
+                    ),
+                    code="responses_codex_tool_roundtrip_invalid",
+                )
+            canonical[field] = value
         if "id" in item:
             canonical["id"] = self._validate_codex_message_id(
                 item.get("id"),
