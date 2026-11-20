@@ -213,26 +213,54 @@ these accepted cases are reused as-is.
   + ``test_provider_governance.py`` → **5 passed**, EXIT 0 (recorded
   separately from the 227-a-order governance finding below).
 
-### Governance finding (2 failed / 8 passed) — NOT a code regression
+### Governance (canonical 227-b continuation)
 
-``tests/unit/test_oap_governance.py`` → **2 failed, 8 passed**, EXIT 1.
-Both failures are against the **immutable root-authored 227-a order's
-format**, not a code or test regression:
+**Historical 227-a finding (preserved, not rewritten):** while the
+round-227-a order was active, ``tests/unit/test_oap_governance.py`` →
+**2 failed, 8 passed**, EXIT 1. Both failures were against the
+**immutable root-authored 227-a order's format**, not a code or test
+regression:
 
 - ``test_active_identifier_resolves_exactly_one_matching_order``
 - ``test_initial_round_declares_new_pr_and_one_objective_one_pr``
 
-The gate ``_NEW_PR_DECLARATION_RE`` requires a standalone line
-``PR mode: CREATE_NEW_PR``. The 227-a order declares the PR mode in
-prose (``CREATE_NEW_PR.`` at the start of the "Objective and reason"
-paragraph) and its title line is not the
-``# OAP Work Order — 227-a`` form the validator expects. **During
+The gate requires a standalone ``PR mode: CREATE_NEW_PR`` line; the
+227-a order declared the PR mode in prose and its title line was not
+the ``# OAP Work Order — 227-a`` form the validator expects. **During
 round 227-a the activated order, the ``oap/active`` pointer, and the
-governance tests were not edited, and the validator was not weakened.**
-Root decision: the canonical 227-b ``AMEND_EXISTING_PR`` round on the
-same PR will correct the activated order's format. No
-source/runtime change or unit/native rerun is required for that
-resolution.
+governance tests were not edited, and the validator was not
+weakened.** The 227-a report (immutable) therefore honestly recorded
+``NEEDS_CONTINUATION`` with this as one of three declared gaps.
+
+**Canonical 227-b continuation (current active state):** root published
+the canonical order
+``oap/orders/227-b-preprotected-governance-and-evidence-closure.md``
+(first line ``# OAP Work Order — 227-b``, standalone line
+``PR mode: AMEND_EXISTING_PR``, SHA-256
+``8e6dc2da39ff9a199d5872f68ee3c72dfb68463f8cf807739d7eb2374e36ad90``)
+and set ``oap/active`` to ``227-b`` (SHA-256
+``bd7995dfb437b1b1e083eac24a5bc9de8a768f42256dcddaa542072f99a9e29e``),
+committed and pushed unchanged as ``a9539700`` (sole parent
+``b87ad897``, the 227-a report SELF). This legitimately replaces the
+active selector; the archived 227-a order and report were not touched.
+
+**New focused run against the NEW active state** (justified by the
+state change; the only test rerun in this round):
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -m pytest \
+  tests/unit/test_oap_governance.py -q -o addopts= -p no:cacheprovider
+```
+
+Result: **10 passed**, EXIT 0 (0.33s; only the ``pytest_asyncio``
+``asyncio_default_fixture_loop_scope`` deprecation notice). No skips,
+xfails, or special exceptions; the two historical 227-a format
+failures are gone because the active order now carries the canonical
+title and PR-mode declaration lines.
+
+**Other governance files (reused, recorded separately):**
+``test_agentic_client_integration_governance.py`` +
+``test_provider_governance.py`` → **5 passed**, EXIT 0.
 
 ## Honesty disclosures
 
@@ -243,19 +271,164 @@ resolution.
 - ``setupfail1`` receipt cleanup is unverified/retained; manual cleanup
   only, not automated.
 - The protected live gate is **``not_run``**: no production live
-  inference, key mutation, or deploy is recorded. The report is
-  **NEEDS_CONTINUATION** (see the adjacent obligation-manifest JSON)
-  because (a) the two governance assertions above remain failed
-  against the activated 227-a order, (b) the per-obligation verified
-  test-node-ID mapping required by the order's obligation-manifest duty
-  is not yet produced (the manifest is currently an evidence index),
-  and (c) the bounded protected live test plan carries placeholder
-  requirements only — no actual target route/model/backend and no
-  numeric ceilings are declared. ``preprotected.missing`` lists all
-  three and is deliberately **not** ``[]`` and not a false READY.
+  inference, key mutation, or deploy is recorded. The 227-a report
+  (immutable) was **NEEDS_CONTINUATION** because of the three gaps it
+  declared (order-format governance, obligation mapping, concrete
+  protected plan); the canonical 227-b round resolves (a) by the new
+  active order and its 10/10 governance run, and (b)+(c) by the
+  completed ``obligation_mapping`` and the full **PROPOSED** protected
+  live test plan in the adjacent obligation-manifest JSON. The plan is
+  proposed/unconfirmed — human target authority and protected
+  execution remain pending, and ``protected.status`` stays
+  ``not_run``.
+- **227-a report source-ownership SHA typo (corrected here; the
+  immutable report was not edited):** the 227-a report records the
+  secondary Hermes dossier commit as
+  ``14b4a170983dfac35b34b3d9bd89585ec3d74fd859``; the correct literal
+  is ``14b4a170983dfac35b34b9bd89585ec3d74fd859`` (integrated on the
+  primary branch as ``d5e798bf``). The accepted secondary
+  contract-doc source commit
+  ``2e50035738af24a0cf4b0dcd9f05e5adf7c9fca0`` was integrated as
+  ``d776b92a``. Source ownership and history are preserved; no
+  secondary push or PR was made.
 - Quota/accounting/Redis foundations are **unchanged** versus base
   ``0940d8a2``; the changed services are auth, Chat
   orchestration/request-caps/request-policy, key policy, and key service.
+
+## Proposed protected live test plan (PROPOSED / UNCONFIRMED)
+
+The plan below is a **proposal** drafted in this record (mirrored into the
+adjacent obligation-manifest JSON by the owning component); it is **not** an
+executed, deployed, or approved fact. Root will present the concrete reviewed
+candidate and plan for explicit human target authority and protected
+execution authorization. ``protected.status`` stays **``not_run``** until
+then. No 227-b activity authorizes a deployment, production key binding,
+provider request, real-client launch, live gateway setup, or any read of
+saved real client credentials/configs.
+
+### Proposed topology (planned, not existing resources)
+
+- Exact candidate code in a **task-local loopback gateway** with an isolated
+  task DB and task-owned keys, configured as a generic openai-compatible
+  provider pointing at the reported FULL LAN chain
+  ``http://10.8.132.55:18021/v1`` -> its existing controlled backend.
+- Proposed wire model ``qwen38-27b`` per the supplied historical status
+  reports. This is a proposal from pinned historical reports, **not** current
+  remote health, route-capability, credential, or deployed-version evidence.
+- Planned local provider/route labels ``qualification-227-lan-chain`` /
+  ``qualification-227-chat`` are **planned labels only**, not existing
+  resources. Never bypass the chain (port 18020 / direct model), never
+  remove required signing, and never pretend the Responses-only
+  ``LocalCodingAdapter`` serves Chat. If the approved chain requires
+  unsupported identity/transport behavior, stop and report it; no fallback
+  bypass.
+
+### Proposed numeric ceilings (configured admission/accounting bounds)
+
+- ONE native process launch per profile; NO outer retry/rerun after
+  failure.
+- At most **6 ADMITTED** Chat/model requests per profile including
+  auxiliary traffic, guarded by a finite task-key request quota.
+- Total input+output token quota **1,000,000** per profile.
+- Configured gateway cost quota **EUR 1.00** per profile / **EUR 2.00**
+  aggregate under approved pricing.
+- Outer wall clock **600 s** per profile / **1200 s** aggregate.
+
+These are proposed configured admission/accounting bounds, not an invoice
+and not an exact external no-overrun guarantee. Rejected attempts are
+distinct from admitted requests.
+
+### Retry semantics — strict guarantees are UNSATISFIED (source-proven)
+
+The original strict reading (zero automatic retries; at most 6 total
+admissions per profile) is **not** currently provable and is documented here
+as a **protected human-decision prerequisite, not as passed**:
+
+- **Hermes 0.22.5** (pinned source commit
+  ``bf0203a794a07aac3ff764972ab9087baa4e4f4e``; local review copy
+  ``/tmp/slaif-227-hm/src``):
+  - ``agent/agent_init.py:1444`` — ``api_max_retries`` default 3, clamped
+    ``max(..., 1)``; config ``agent.api_max_retries=1`` gives a single
+    attempt. ``agent/agent_init.py:1451`` — ``auto_recovery_cycles``
+    default 5; ``=0`` disables the post-exhaustion recovery ladder.
+  - ``agent/agent_runtime_helpers.py:2076`` — primary OpenAI SDK clients
+    ``setdefault("max_retries", 0)`` (SDK retries off for the primary path).
+  - ``agent/auxiliary_client.py:200`` and ``:4752`` — auxiliary sync/async
+    clients ``setdefault("max_retries", 0)``; the sync auxiliary path adds
+    ``_transient_retry_count()`` (``auxiliary.transient_retries`` default 2,
+    clamped [0, 6]) → ``transient_retries=0`` yields zero sync-aux retries.
+  - **Caveat — no universal zero-retry claim:** ``_async_call_llm_impl``
+    (``auxiliary_client.py:8337``) hardcodes ONE same-provider retry on
+    transient transport error for the async auxiliary path. Title
+    generation (``title_generator.py``, sync ``call_llm`` task
+    ``"title_generation"``) and compression (``context_compressor.py:3831``,
+    sync ``call_llm`` task ``"compression"``) are sync tasks;
+    ``{"compression","vision","title_generation"}`` ∈
+    ``_TIMEOUT_NO_RETRY_TASKS`` (``auxiliary_client.py:3540``) means TIMEOUT
+    errors skip the same-provider retry, but **fast blips still retry** on
+    those tasks.
+- **OpenCode 1.19.3** (pinned ``anomalyco/opencode`` tag ``v1.19.3``,
+  commit ``e3c4eb242585dcd77be1a867391b7c25fd47ce52``,
+  ``packages/opencode/src``):
+  - ``session/llm.ts:323`` — SDK ``maxRetries = input.retries ?? 0``.
+  - **However** ``processor.ts:674`` applies unconditional
+    ``Effect.retry(SessionRetry.policy)``; ``retry.ts:31``
+    ``RETRY_MAX_RETRIES = 5`` and ``retry.ts:189-193`` make the policy a
+    **hard cap with no override parameter**. Therefore OpenCode's native
+    HTTP retries **cannot be promised off** by configuration alone.
+- **Admission ceiling:** the existing PG 500-release assertions record
+  ``requests_used_total == 0`` after failed attempts, proving
+  ``request_limit_total = 6`` does **not** cap total *admitted attempts*
+  across failures. A strict "≤ 6 total admissions including retries"
+  guarantee is therefore **UNSATISFIED** unless independently proven.
+
+**Proposed relaxed alternative (ROOT/HUMAN decision only; not the same as
+the strict plan):** ONE process, no harness rerun, **stock native retries
+explicitly allowed**; the ceiling becomes **6 SETTLED/charged (admitted and
+finalized) requests per key**, with admitted attempts allowed to exceed 6
+while rejections are not charged; the 1,000,000-token / EUR 1.00-per-profile
+/ EUR 2.00-total and 600 s / 1200 s ceilings are unchanged. This is a
+**relaxed guarantee** requiring explicit human risk approval; it must not be
+executed, and no client patch, accounting change, proxy, or budget framework
+is introduced by 227-b. Root will seek an explicit human risk decision after
+the reviewable B candidate exists.
+
+### Preserved qualified baseline and planned assertions
+
+- Pinned baseline preserved: Hermes native main ``xhigh`` / auxiliary
+  ``none`` with its captured toolsets; OpenCode pure/denied-web 9 tools,
+  Chat-compatible SDK, and its captured auxiliary
+  ``max_tokens=32000`` request envelope. Proposed task-gateway settings
+  ``CHAT_MAX_TOOL_DESCRIPTION_BYTES=8192`` and
+  ``HARD_MAX_OUTPUT_TOKENS=32768`` (deployment-scoped operator settings; the
+  source defaults ``4096``/``4096`` remain untouched) accept the native
+  envelope without widening defaults in source; normal input policy remains
+  authoritative. Efforts, title/compaction, tools, wire-model alias, and
+  legitimate history are not altered to obtain a pass; any deliberate QA
+  variant must be explicit and separately scoped.
+- Planned positive: task-owned unpredictable file read and exact result
+  through actual client/tool/history continuation per profile, auxiliary
+  behavior preserved, isolated task HOME/XDG/workspace, existing approved
+  workflow/native assets, no new harness framework.
+- Planned assertions: exact client/source/package/config and candidate
+  identity; request/call/result correlation; successful final
+  provider-reported usage and one terminal PG settlement per admitted
+  request; no stranded reservations/holds after cleanup; credentials never
+  exposed in logs/artifacts/persisted metadata; owned native
+  runtime/process cleanup. If final usage is missing, the actual
+  estimated/failed outcome is recorded; a client exit or transport close
+  does not prove GPU inference cancellation. Provider-specific
+  pricing/billing limitations remain explicit.
+
+### Required CI gate before any protected traffic
+
+- Per ``AGENTIC_CLIENT_INTEGRATION.md`` §40, all **required external CI
+  checks must be represented, scoped to the exact candidate head, and
+  green** before protected traffic; pending, skipped, or missing checks are
+  not passes. Root owns the final exact-head CI gate after this report.
+- Per §51, the **zero automatic retry** requirement is a protected
+  prerequisite. Given the source facts above, it is recorded as
+  **UNSATISFIED / human-decision pending**, never waived or labeled pass.
 
 ## Operator references
 
