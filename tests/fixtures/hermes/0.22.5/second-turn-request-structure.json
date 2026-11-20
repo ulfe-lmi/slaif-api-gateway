@@ -1,0 +1,53 @@
+{
+  "profile": {
+    "client_module_id": "hermes-0.22.5-chat-v1",
+    "client_module_version": "1",
+    "wire_api": "chat_completions"
+  },
+  "request": {
+    "label": "structural_counterpart_of_native_capture",
+    "method": "POST",
+    "path": "/v1/chat/completions",
+    "top_level_fields": [
+      {"name": "messages", "type": "array", "state": "present"},
+      {"name": "model", "type": "string", "state": "present"},
+      {"name": "reasoning_effort", "type": "string", "state": "present", "observed_value": "xhigh"},
+      {"name": "stream", "type": "boolean", "state": "present", "observed_value": true},
+      {"name": "stream_options", "type": "object", "state": "present", "members": ["include_usage"]},
+      {"name": "tools", "type": "array", "state": "present", "note": "same eight declarations as first turn"}
+    ],
+    "added_messages": [
+      {
+        "role": "assistant",
+        "fields": [
+          {"name": "role", "type": "string"},
+          {"name": "content", "type": "string_or_null"},
+          {"name": "reasoning", "type": "string"},
+          {"name": "reasoning_content", "type": "string"},
+          {"name": "tool_calls", "type": "array"}
+        ]
+      },
+      {
+        "role": "tool",
+        "fields": [
+          {"name": "role", "type": "string"},
+          {"name": "content", "type": "string"},
+          {"name": "tool_call_id", "type": "string"}
+        ]
+      }
+    ],
+    "tool_call_shape": {
+      "fields": ["id", "type", "function.name", "function.arguments"],
+      "id_observed_length": 32,
+      "id_requires_call_prefix": false,
+      "arguments_value_class": "json_string"
+    },
+    "correlation": {
+      "tool_message_tool_call_id_equals_preceding_assistant_call_id": true
+    }
+  },
+  "privacy": {
+    "raw_content_retained": false,
+    "provider_call_performed": false
+  }
+}

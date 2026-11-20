@@ -1,0 +1,13 @@
+{
+  "distribution": "hermes-agent",
+  "distribution_version": "0.22.5",
+  "source_repository": "https://github.com/NousResearch/hermes-agent",
+  "source_tag": "v0.22.5",
+  "source_commit": "bf0203a794a07aac3ff764972ab9087baa4e4f4e",
+  "python": "3.14.9",
+  "sdk_name": "openai-python",
+  "sdk_version": "2.24.0",
+  "uv_lock_sha256": "f1609519f30dac8886b03e60693e36fa75e033fa3e7259c8c8befe8fb6e34460",
+  "evidence": "HERMES-STATUS.md (SHA-256 52862b51f4694b59a54e6619e41aa287f7432a2240b979f54aeb872069a95d2f)",
+  "note": "public provenance facts only; no credentials, sessions, or private paths"
+}

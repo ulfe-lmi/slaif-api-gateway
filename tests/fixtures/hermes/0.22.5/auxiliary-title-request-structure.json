@@ -1,0 +1,24 @@
+{
+  "profile": {
+    "client_module_id": "hermes-0.22.5-chat-v1",
+    "client_module_version": "1",
+    "wire_api": "chat_completions"
+  },
+  "request": {
+    "label": "structural_counterpart_of_native_capture",
+    "method": "POST",
+    "path": "/v1/chat/completions",
+    "note": "auxiliary non-streaming session-title model upgrade; same model and effort as the main run",
+    "top_level_fields": [
+      {"name": "messages", "type": "array", "state": "present"},
+      {"name": "model", "type": "string", "state": "present"},
+      {"name": "reasoning_effort", "type": "string", "state": "present", "observed_value": "xhigh"},
+      {"name": "response_format", "type": "object", "state": "present", "observed_type": "json_schema", "observed_schema_name": "session_title"}
+    ],
+    "absent_fields_not_to_require": ["tools", "stream"]
+  },
+  "privacy": {
+    "raw_content_retained": false,
+    "provider_call_performed": false
+  }
+}

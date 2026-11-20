@@ -9,8 +9,9 @@ document.  Data-only vocabulary upgrades are new document bytes with a new
 digest and a re-pinned operator key; there is no per-tool source path.
 
 Provenance (public facts only): NousResearch hermes-agent v0.22.5, source
-commit ``bf0203a794a07aac3ff764972ab9087baa4e4f4e``, OpenAI Python SDK
-2.24.0, chat_completions wire API.  The captured profile configuration used
+commit ``bf0203a794a07aac3ff764972ab9087baa4e4f4e`` (see
+``tests/fixtures/hermes/0.22.5/provenance.json``), OpenAI Python SDK 2.24.0,
+chat_completions wire API.  The captured profile configuration used
 the ``cli: [terminal, file, todo]`` toolsets with client-local discovery
 (``tool_search`` / ``tool_describe`` / ``tool_call``); the declared
 vocabulary is the bounded union of those toolsets plus the discovery
