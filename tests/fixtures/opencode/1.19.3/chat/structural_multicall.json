@@ -1,0 +1,22 @@
+{
+  "variant": "multiple_tool_calls_single_assistant_response",
+  "config_variant": "denied-web-baseline",
+  "issuance": {
+    "calls_in_one_response": 2,
+    "delta_indexes": [0, 1],
+    "call_ids_distinct": true
+  },
+  "continuation": {
+    "assistant_tool_calls_replayed": 2,
+    "tool_messages": 2,
+    "call_ids_distinct_on_replay": true,
+    "tool_call_ids_match_issued": true,
+    "per_call_marker_verification": "each correlated tool message contained its own unpredictable marker exactly once"
+  },
+  "verification_gate": {
+    "all_calls_verified": true,
+    "final_text_source": "correlated_tool_result (first verified call marker echoed exactly)",
+    "result": "verified: exit 0"
+  },
+  "privacy": { "raw_content_retained": false, "provider_call_performed": false }
+}

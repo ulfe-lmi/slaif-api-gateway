@@ -1,0 +1,27 @@
+{
+  "variant": "session_and_identity_discovery_experiment",
+  "config_variant": "denied-web-baseline",
+  "experiment": {
+    "A1": "new session A, first main request",
+    "A2": "explicit resume of session A (--continue), first main request",
+    "B1": "separate session B under the same installation, first main request"
+  },
+  "candidate_fields": {
+    "headers": {
+      "names": ["x-session-id", "x-opencode-session-id", "x-session-affinity"],
+      "per_request_three_values_equal": true,
+      "format": "ses_[A-Za-z0-9]{26}",
+      "length": 30
+    }
+  },
+  "predicates": {
+    "A1_equals_A2": true,
+    "A1_distinct_from_B1": true,
+    "installation_stable_across_A_B": false,
+    "changes_per_turn": false,
+    "suitable_as_transient_session_hint": true,
+    "rejected_as_authority": true
+  },
+  "authority_note": "raw client session identifier must never become gateway identity or select/widen a profile",
+  "privacy": { "raw_content_retained": false, "provider_call_performed": false, "raw_ids_retained": false }
+}
