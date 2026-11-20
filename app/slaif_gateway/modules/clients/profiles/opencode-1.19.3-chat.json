@@ -1,257 +1,44 @@
 {
-  "schema_version": 2,
-  "profile_kind": "agent_chat",
-  "module_id": "opencode-1.19.3-chat-v1",
-  "module_version": "1",
-  "revision": "1",
-  "endpoint": "/v1/chat/completions",
-  "provenance": {
-    "client_version": "1.19.3",
-    "executable_sha256": "179ca421d61eefeadfa0c50e084a6e79c1623734732f0f4593f81ccfd3ab7ee9",
-    "release": "https://github.com/anomalyco/opencode/releases/tag/v1.19.3",
-    "archive_sha256": "531cff2441129c30f0edd5878af494108ad07f5feb46d7ee29a2a5b830a5765d",
-    "chat_provider_package": "@ai-sdk/openai-compatible 2.0.41",
-    "ai_sdk_version": "6.0.168",
-    "observed_user_agent": "opencode/1.19.3 ai-sdk/provider-utils/4.0.23 runtime/bun/1.3.14"
+  "schema_version": 1,
+  "id": "opencode-1.19.3-chat-v1",
+  "version": "1",
+  "client": {
+    "name": "opencode",
+    "distribution_version": "1.19.3",
+    "source_tag": "v1.19.3",
+    "source_commit": "e3c4eb242585dcd77be1a867391b7c25fd47ce52",
+    "sdk_name": "@ai-sdk/openai-compatible",
+    "sdk_version": "2.0.41",
+    "wire_api": "chat_completions"
   },
-  "envelope": {
-    "top_level_fields": {
-      "model": {
-        "type": "string",
-        "state": "required"
-      },
-      "max_tokens": {
-        "type": "integer",
-        "state": "required",
-        "observed": 32000
-      },
-      "store": {
-        "type": "boolean",
-        "state": "required",
-        "observed": false
-      },
-      "reasoning_effort": {
-        "type": "string",
-        "state": "required",
-        "allowed": [
-          "minimal",
-          "low",
-          "medium",
-          "high",
-          "xhigh"
-        ],
-        "observed": "xhigh",
-        "difference_vs_default": "xhigh is rejected by the generic Chat validator; this profile preserves it for the selected profile only"
-      },
-      "messages": {
-        "type": "array",
-        "state": "required"
-      },
-      "tools": {
-        "type": "array",
-        "state": "required_on_main_requests",
-        "absent_on_auxiliary_requests": true
-      },
-      "tool_choice": {
-        "type": "string",
-        "state": "required_on_main_requests",
-        "observed": "auto",
-        "absent_on_auxiliary_requests": true
-      },
-      "stream": {
-        "type": "boolean",
-        "state": "required",
-        "observed": true
-      },
-      "stream_options": {
-        "type": "object",
-        "state": "required",
-        "observed": {
-          "include_usage": true
-        }
-      }
-    },
-    "unknown_top_level_fields": "fail_closed"
-  },
-  "messages": {
-    "allowed_roles": [
-      "system",
-      "user",
-      "assistant",
-      "tool"
+  "dialect": {
+    "reasoning_efforts": ["minimal", "low", "medium", "high", "xhigh"],
+    "assistant_message_fields": [
+      {"name": "reasoning", "max_bytes": 65536},
+      {"name": "reasoning_content", "max_bytes": 65536}
     ],
-    "content_forms": {
-      "system": [
-        "string"
+    "tools": {
+      "names": [
+        "bash",
+        "edit",
+        "glob",
+        "grep",
+        "read",
+        "skill",
+        "task",
+        "todowrite",
+        "write"
       ],
-      "user": [
-        "string"
-      ],
-      "assistant": [
-        "string",
-        "string_with_tool_calls",
-        "null_with_tool_calls"
-      ],
-      "tool": [
-        "string"
-      ]
+      "max_declarations": 32,
+      "max_description_bytes": 20000,
+      "max_schema_depth": 8,
+      "max_schema_properties": 64,
+      "max_declaration_bytes": 65536
     },
-    "assistant_tool_call_item": {
-      "fields": {
-        "id": {
-          "type": "string",
-          "grammar": "opaque server-issued; observed prefix call_, observed length 34; replayed verbatim"
-        },
-        "type": {
-          "type": "string",
-          "literal": "function"
-        },
-        "function": {
-          "name": {
-            "type": "string"
-          },
-          "arguments": {
-            "type": "json_string"
-          }
-        }
-      }
-    },
-    "tool_message": {
-      "fields": {
-        "role": {
-          "type": "string",
-          "literal": "tool"
-        },
-        "tool_call_id": {
-          "type": "string",
-          "must_match_prior_assistant_call_id": true
-        },
-        "content": {
-          "type": "string"
-        }
-      }
+    "tool_call": {
+      "id_min_length": 1,
+      "id_max_length": 128,
+      "arguments_max_bytes": 65536
     }
-  },
-  "tools": {
-    "declaration_form": {
-      "outer": {
-        "type": {
-          "type": "string",
-          "literal": "function"
-        },
-        "function": {
-          "type": "object"
-        }
-      },
-      "function_fields": {
-        "name": {
-          "type": "string"
-        },
-        "description": {
-          "type": "string"
-        },
-        "parameters": {
-          "type": "json_schema_object"
-        }
-      },
-      "strict_key": "absent"
-    },
-    "baseline_vocabulary": [
-      "bash",
-      "edit",
-      "glob",
-      "grep",
-      "read",
-      "skill",
-      "task",
-      "todowrite",
-      "write"
-    ],
-    "observed_configuration_extensions": {
-      "webfetch": {
-        "condition": "permission.webfetch not denied",
-        "evidence": "task-default config captured 10 declarations"
-      }
-    },
-    "vocabulary_is_configuration_dependent": true,
-    "authority": "local function declarations only; no hosted execution, routing, or connector authority is implied by any name"
-  },
-  "known_tool_arguments": {
-    "read": {
-      "filePath": {
-        "type": "string",
-        "workspace_relative_or_absolute": true
-      }
-    }
-  },
-  "session_hints": {
-    "headers": {
-      "x-session-id": {
-        "format": "ses_[A-Za-z0-9]{26}"
-      },
-      "x-opencode-session-id": {
-        "equals": "x-session-id"
-      },
-      "x-session-affinity": {
-        "equals": "x-session-id"
-      }
-    },
-    "predicates": {
-      "stable_across_explicit_resume": true,
-      "distinct_per_new_session": true,
-      "rejected_as_authority": true
-    }
-  },
-  "auxiliary": {
-    "title_request": {
-      "fields_absent": [
-        "tools",
-        "tool_choice"
-      ],
-      "messages_roles": [
-        "system",
-        "user",
-        "user"
-      ],
-      "suppressed_by_explicit_title": true
-    },
-    "compaction": {
-      "trigger": "reported total usage >= limit.input - compaction.reserved",
-      "summarization_request": {
-        "fields_absent": [
-          "tools",
-          "tool_choice"
-        ],
-        "system_prompt_class": "static context-summarization agent prompt",
-        "user_content_class": "conversation as [User]: / [Assistant]: lines"
-      },
-      "compacted_context_template": {
-        "system": "unchanged original agent system prompt",
-        "user_prompt_1": "What did we do so far?",
-        "assistant_slot": "<summary>",
-        "user_prompt_2": "Continue if you have next steps, or stop and ask for clarification if you are unsure how to proceed.",
-        "new_prompt_append": "quoted user message"
-      },
-      "persists_across_runs": true
-    }
-  },
-  "reasoning": {
-    "request_field": "envelope.reasoning_effort",
-    "response_delta_field": "reasoning_content",
-    "accepted": true,
-    "surface_default": "not surfaced",
-    "surface_with_client_thinking_flag": "single reasoning part"
-  },
-  "limits": {
-    "max_tokens_observed": 32000,
-    "configured_output_limit_reference": 32768,
-    "context_limit_reference": 245760,
-    "max_tool_calls_per_response_observed": 2,
-    "max_message_content_bytes": 131072,
-    "max_tool_call_id_length": 128,
-    "max_tool_description_bytes": 20000,
-    "max_declaration_bytes": 589824
-  },
-  "fixture_digest_rule": "sha256 over, for each structural_*.json in tests/fixtures/opencode/1.19.3/chat sorted by filename: filename + NUL + file bytes (provenance.json excluded)",
-  "fixture_sha256": "c84570f8dbbefb727ec90b17df2de802257951bda65e78b352df4742392208d3"
+  }
 }

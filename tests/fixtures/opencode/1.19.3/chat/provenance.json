@@ -14,7 +14,13 @@
     "observed_user_agent": "opencode/1.19.3 ai-sdk/provider-utils/4.0.23 runtime/bun/1.3.14",
     "observed_runtime": "bun 1.3.14",
     "wire_api": "chat_completions",
-    "version_command_observed": "1.19.3"
+    "version_command_observed": "1.19.3",
+    "source_tag": "v1.19.3",
+    "source_commit": "e3c4eb242585dcd77be1a867391b7c25fd47ce52",
+    "source_commit_note": "direct commit of the official v1.19.3 release tag (type: commit), gh api repos/anomalyco/opencode/git/ref/tags/v1.19.3; independent of the pinned executable SHA-256",
+    "packaged_profile_digest": "2bd4f2599456892bb5d5119a85c9ffe9525796c1aa934ad46b49ce34d18f0e14",
+    "packaged_profile_digest_rule": "canonical_profile_digest: SHA-256 over sorted-key compact ASCII JSON of the validated schema_version 1 document in app/slaif_gateway/modules/clients/profiles/opencode-1.19.3-chat.json",
+    "vocabulary_decision": "v1 ships the 9-tool denied-web-baseline reviewed capture vocabulary; webfetch (observed only under the permissive task-default config variant) is outside v1 and requires a reviewed DATA revision with new digest"
   },
   "capture_environment": {
     "captured_utc_date": "2026-11-20",
@@ -32,7 +38,9 @@
       },
       {
         "label": "denied-web-baseline",
-        "permission": { "webfetch": "deny" },
+        "permission": {
+          "webfetch": "deny"
+        },
         "observed_tool_count": 9,
         "note": "reproduces the student-baseline 9-tool vocabulary from the 2026-10-20 status report"
       }
@@ -45,5 +53,7 @@
     "raw_ids_retained": false,
     "credentials_retained": false,
     "home_workspace_paths_retained": false
-  }
+  },
+  "structural_fixture_digest_rule": "sha256 over, for each structural_*.json in tests/fixtures/opencode/1.19.3/chat sorted by filename: filename + NUL + file bytes (provenance.json excluded)",
+  "structural_fixture_sha256": "c84570f8dbbefb727ec90b17df2de802257951bda65e78b352df4742392208d3"
 }
