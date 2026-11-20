@@ -1346,3 +1346,30 @@ existing ownership and route checks. This classification repair can unblock a
 conversation rejected solely because visible reasoning was misclassified; it
 cannot recover genuinely missing encrypted or tool references. No schema,
 key rotation, compatibility-profile migration, or history editing is required.
+
+### Optional Codex tool-result identities
+
+The explicitly selected positional-history feature (shipped
+`codex-0.167.1`, revision 16) accepts optional `name` on function and custom
+tool outputs, and optional `namespace` on function outputs. These fields
+are already present in the pinned upstream
+[`ResponseItem` protocol](https://github.com/openai/codex/blob/rust-v0.167.1/codex-rs/protocol/src/models.rs).
+Absent or null identities are accepted. Non-null values must be non-empty
+strings within the existing tool-name byte limits and must match the exact
+preceding call's historical binding. A later declaration, removal, or
+same-name tool in another namespace cannot rebind a result. Custom outputs
+do not accept `namespace` in this pinned contract.
+
+Accepted fields remain transient history, are included in input accounting,
+and grant no declaration, execution, or replay authority. Call-ID, ordering,
+kind, uniqueness, capability, and same-key replay-ownership checks still
+apply. Preserve transports retain these fields; native and portable vLLM
+codecs translate a supplied result name to the matching call's wire name
+and remove its separately represented namespace. They do not invent an
+omitted name. Ordinary Responses and frozen profiles without the feature
+retain their existing strict output-field sets.
+
+This corrects an engine omission in revision 16 support. Rebuild and drain/
+restart all API and worker processes; no schema, preset digest, key rotation,
+or key-pin migration is required. It resolves a field-only rejection such as
+`input[322].name`; it does not recover genuinely missing replay references.

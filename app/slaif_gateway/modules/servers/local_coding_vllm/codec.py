@@ -190,6 +190,7 @@ class VLLMToolCodec:
         )
         if "tools" in self.body:
             self.body["tools"] = flat
+        replay_calls = {}
         for item in self.body.get("input", []):
             if not isinstance(item, dict):
                 continue
@@ -204,8 +205,27 @@ class VLLMToolCodec:
                 for part in item["output"]:
                     if isinstance(part, dict) and part.get("type") == "input_image":
                         part.setdefault("detail", "auto")
-            if kind == "custom_tool_call_output":
-                item["type"] = "function_call_output"
+            if kind in {"function_call_output", "custom_tool_call_output"}:
+                if item.get("name") is not None or item.get("namespace") is not None:
+                    call_id = item.get("call_id")
+                    binding = replay_calls.get(call_id) if isinstance(call_id, str) else None
+                    expected = "custom" if kind == "custom_tool_call_output" else "function"
+                    if binding is None:
+                        raise ProviderRequestError(provider="local-coding-vLLM")
+                    namespace, name, call_kind, wire_name = binding
+                    if (
+                        call_kind != expected
+                        or (item.get("name") is not None and item["name"] != name)
+                        or (item.get("namespace") is not None and item["namespace"] != namespace)
+                    ):
+                        raise ProviderRequestError(provider="local-coding-vLLM")
+                    if item.get("name") is not None:
+                        item["name"] = wire_name
+                # The native provider represents namespace in the call's wire
+                # name. Result identities must use the same historical mapping.
+                item.pop("namespace", None)
+                if kind == "custom_tool_call_output":
+                    item["type"] = "function_call_output"
             elif kind in {"custom_tool_call", "function_call"}:
                 namespace_present = "namespace" in item
                 namespace = item.pop("namespace", None)
@@ -221,6 +241,8 @@ class VLLMToolCodec:
                     wire_name = self._bound_wire_name(
                         item, namespace, namespace_present, expected
                     )
+                    namespace = self.tool_call_bindings[item["call_id"]][0]
+                replay_calls[item.get("call_id")] = (namespace, item["name"], expected, wire_name)
                 item["name"] = wire_name
                 if kind == "custom_tool_call":
                     item["type"] = "function_call"

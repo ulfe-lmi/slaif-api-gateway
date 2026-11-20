@@ -453,11 +453,13 @@ def _assert_key_route_consistency(auth_key: AuthenticatedGatewayKey, provider: s
     assert "synthetic-codex-model" in auth_key.allowed_models
 
 
+@pytest.mark.parametrize("output_identity", ["absent", "matching", "mismatch"])
 @pytest.mark.asyncio
 async def test_group_a_ambiguity_candidate_denied_before_route_without_reference(
     async_test_session: AsyncSession,
     rev16_client_module: object,
     monkeypatch: pytest.MonkeyPatch,
+    output_identity: str,
 ) -> None:
     """Positional identity binds the call to its earlier declaration.
 
@@ -484,6 +486,14 @@ async def test_group_a_ambiguity_candidate_denied_before_route_without_reference
         decl(ns("mcp__codex_apps__space2", fn("read")), item_id="d2"),
         out("call-1"),
     ]
+    if output_identity != "absent":
+        body["input"][-1].update(
+            name="read",
+            namespace=(
+                "mcp__codex_apps__space" if output_identity == "matching"
+                else "mcp__codex_apps__space2"
+            ),
+        )
 
     timeline: list[str] = []
     extracted: list[CodexReplayRequestCandidate] = []
@@ -536,19 +546,26 @@ async def test_group_a_ambiguity_candidate_denied_before_route_without_reference
         )
 
     error = exc_info.value
-    assert error.status_code == 404
-    assert error.code == "responses_codex_replay_reference_not_found"
+    if output_identity == "mismatch":
+        assert error.status_code == 400
+        assert error.code == "responses_codex_tool_roundtrip_invalid"
+        assert error.param == "input[3].namespace"
+        assert extracted == []
+    else:
+        assert error.status_code == 404
+        assert error.code == "responses_codex_replay_reference_not_found"
     # The positional identity must survive the later same-name namespace:
     # exactly one call candidate, bound to the earlier declaration.
     calls = [c for c in extracted if c.item_kind in ("function_call", "custom_tool_call")]
-    assert len(calls) == 1
-    candidate = calls[0]
-    assert (candidate.tool_namespace, candidate.tool_name, candidate.call_id) == (
-        "mcp__codex_apps__space",
-        "read",
-        "call-1",
-    )
-    assert candidate.item_id == "fc-1"
+    if output_identity != "mismatch":
+        assert len(calls) == 1
+        candidate = calls[0]
+        assert (candidate.tool_namespace, candidate.tool_name, candidate.call_id) == (
+            "mcp__codex_apps__space",
+            "read",
+            "call-1",
+        )
+        assert candidate.item_id == "fc-1"
     # Ownership denial precedes every later side effect.
     assert timeline == []
     after_reservations = await session.scalar(
@@ -742,7 +759,7 @@ async def test_group_a_other_key_reference_denied_before_route(
     body["input"] = [
         decl(ns("mcp__codex_apps__space", fn("read")), item_id="d1"),
         call("read", f"call_226b_{suffix}", id_=f"fc_226b_{suffix}"),
-        out(f"call_226b_{suffix}"),
+        {**out(f"call_226b_{suffix}"), "name": "read", "namespace": "mcp__codex_apps__space"},
     ]
 
     timeline: list[str] = []
@@ -1502,6 +1519,7 @@ def _route_probe(route_id: uuid.UUID, provider: str, capabilities: dict):
 
 @pytest.mark.parametrize("kind", sorted(_SUCCESS_KINDS))
 @pytest.mark.parametrize("historical_other_route", [False, True])
+@pytest.mark.parametrize("output_identity", [False, True])
 @pytest.mark.asyncio
 async def test_group_b_owned_history_success_settles_through_real_workflow(
     async_test_session: AsyncSession,
@@ -1509,6 +1527,7 @@ async def test_group_b_owned_history_success_settles_through_real_workflow(
     monkeypatch: pytest.MonkeyPatch,
     kind: str,
     historical_other_route: bool,
+    output_identity: bool,
 ) -> None:
     """Every adapter family replays the same removed owned history.
 
@@ -1597,6 +1616,8 @@ async def test_group_b_owned_history_success_settles_through_real_workflow(
     body["model"] = "synthetic-codex-model"
     body["store"] = False
     body["input"] = _success_items()
+    if output_identity:
+        body["input"][2].update(name="read", namespace="functions")
     if kind == "configured-preserve-order":
         # Codex's retained-summary/late-instruction shape after local compaction.
         body["input"] = [
@@ -1647,6 +1668,12 @@ async def test_group_b_owned_history_success_settles_through_real_workflow(
         and item.get("call_id") == "call-1"
     ]
     assert len(hist_outputs) == 1
+    if output_identity:
+        assert hist_outputs[0]["name"] == spec.removed_name
+        if spec.namespace is None:
+            assert "namespace" not in hist_outputs[0]
+        else:
+            assert hist_outputs[0]["namespace"] == spec.namespace
     tool_names = _collect_tool_names(wire.get("tools"))
     assert spec.kept_name in tool_names
     # The removal notice plus the second additional_tools update leave the

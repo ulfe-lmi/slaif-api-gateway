@@ -275,6 +275,17 @@ validators may still require a code change.
 
 ### Codex 226 declaration-history profile upgrade (revision 15 -> 16)
 
+Engine correction for optional result identities: revision 16's pinned
+protocol already defines optional `name` on function/custom outputs and
+`namespace` on function outputs. The corrected engine validates these against
+the original call binding, including after catalog updates, and translates
+them consistently through preserve/native/portable transports. See
+[the compatibility contract](responses-compatibility.md#optional-codex-tool-result-identities).
+For deployments already on revision 16, rebuild and drain/restart every API
+and worker process. Keep the existing profile file, digest, key pins, and
+keys; no database migration or rotation is required. Rolling back only this
+engine correction restores the old field rejection for affected histories.
+
 The 226 declaration-history lifecycle is ENGINE behavior plus profile
 DATA: the new preset (`codex-0.167.1`, revision `16`) requires the NEW
 engine containing the lifecycle validators. Pointing the preset file at

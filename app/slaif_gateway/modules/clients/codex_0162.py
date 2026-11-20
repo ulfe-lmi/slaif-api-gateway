@@ -290,8 +290,19 @@ def _taxonomy_for_profile(profile: CodexProfileData):
 
 
 def _build_policy_spec(profile: CodexProfileData) -> ResponsesClientPolicySpec:
+    positional_history = "codex_tool_history_positional_updates" in profile.dialect.features
     return replace(
         CODEX_0149_POLICY_SPEC,
+        # ResponseItem in the pinned 0.167.1 protocol includes optional
+        # result identities. Frozen pre-history profiles retain their fields.
+        function_call_output_fields=(
+            CODEX_0149_POLICY_SPEC.function_call_output_fields | {"name", "namespace"}
+            if positional_history else CODEX_0149_POLICY_SPEC.function_call_output_fields
+        ),
+        custom_tool_call_output_fields=(
+            CODEX_0149_POLICY_SPEC.custom_tool_call_output_fields | {"name"}
+            if positional_history else CODEX_0149_POLICY_SPEC.custom_tool_call_output_fields
+        ),
         taxonomy_for=_taxonomy_for_profile(profile),
         taxonomy_classifier=lambda namespaces: classify_additional_tools(namespaces, profile),
         taxonomy_id_0148="codex_0_162",
@@ -309,7 +320,7 @@ def _build_policy_spec(profile: CodexProfileData) -> ResponsesClientPolicySpec:
         allow_tool_output_images="tool_output_images" in profile.dialect.features,
         codex_tool_history_mode=(
             MODE_POSITIONAL_UPDATES
-            if "codex_tool_history_positional_updates" in profile.dialect.features
+            if positional_history
             else None
         ),
         dialect_rules=profile.dialect,
