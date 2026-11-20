@@ -1,20 +1,28 @@
 {
-  "objective": "227-a",
+  "objective": "227-b",
   "record": "docs/verification/2026-11-20-hermes-opencode-chat.md",
-  "status": "NEEDS_CONTINUATION",
-  "status_reason": "Two test_oap_governance.py assertions fail against the activated 227-a order's format (title line and PR-mode declaration line). The activated order was not edited, the validator was not weakened; canonical 227-b AMEND_EXISTING_PR on the same PR will correct the order format. No source/runtime change or unit/native rerun is required for that resolution.",
+  "status": "PREPROTECTED_READY",
+  "status_reason": "PREPROTECTED candidate (not mergeable). activated_order/active_pointer now correctly identify the ACTIVE 227-b order/pointer (227-a identities preserved as historical_227_a). The three 227-a gaps are closed honestly: (1) canonical governance now 10/10 against the NEW active 227-b state (test_oap_governance.py 10 passed; agentic+provider governance 5 passed); (2) this manifest is now the required per-obligation verified test-node-ID mapping (19 records over the order's 19 coverage groups; 140 unique mapped refs collection-checked against primary head 902a6e33; 606 nodes collected, collection only - NOT executed/passed); (3) a complete concrete PROPOSED protected live plan artifact is present and manually reviewed (g19 verified_manual_review), with strict zero-retry UNSATISFIED and a separate relaxation proposal requiring human approval. preprotected.missing=[] is DERIVED from required record statuses (19/19 required = verified or verified_manual_review). External CI: all 9 individual required checks + separate CodeQL aggregate SUCCESS at the a953 checkpoint (exact check-run IDs recorded); final exact-head CI gate is PENDING and ROOT's gate, a953 success NOT claimed for future heads. Protected live execution + human target authority + strict zero-retry guarantee remain a separately visible NOT_RUN/UNSATISFIED gate (not a preprotected gap). Review/merge are ROOT's gates. No live/merge/support claim.",
   "branch": "oap/227-hermes-opencode-chat",
   "base": "0940d8a28f3a413d2a2cc6f4962c0efcafd71e13",
   "activated_order": {
-    "path": "oap/orders/227-a-hermes-opencode-chat-preprotected.md",
-    "sha256": "4d24d84bef3b7c7d2f1a4b4f70e380dc84debf95da726c8a922735dcadd0f546",
-    "edited_during_round": false
+    "path": "oap/orders/227-b-preprotected-governance-and-evidence-closure.md",
+    "sha256": "8e6dc2da39ff9a199d5872f68ee3c72dfb68463f8cf807739d7eb2374e36ad90",
+    "edited_during_round": false,
+    "historical_227_a": {
+      "path": "oap/orders/227-a-hermes-opencode-chat-preprotected.md",
+      "sha256": "4d24d84bef3b7c7d2f1a4b4f70e380dc84debf95da726c8a922735dcadd0f546"
+    }
   },
   "active_pointer": {
     "path": "oap/active",
-    "value": "227-a",
-    "sha256": "ea3d8056453a861b46ca727cf55aee5043a1df7b36cde04d49af43688ab17738",
-    "edited_during_round": false
+    "value": "227-b",
+    "sha256": "bd7995dfb437b1b1e083eac24a5bc9de8a768f42256dcddaa542072f99a9e29e",
+    "edited_during_round": false,
+    "historical_227_a": {
+      "value": "227-a",
+      "sha256": "ea3d8056453a861b46ca727cf55aee5043a1df7b36cde04d49af43688ab17738"
+    }
   },
   "source": {
     "changed_services_vs_base": [
@@ -123,15 +131,25 @@
       ],
       "other_governance_result": "5 passed, exit 0",
       "oap_governance_file": "tests/unit/test_oap_governance.py",
-      "oap_governance_result": "2 failed, 8 passed, exit 1",
+      "oap_governance_result": "10 passed, exit 0 (new active 227-b state; canonical order title + PR-mode declaration present)",
       "failed_tests": [
         "test_active_identifier_resolves_exactly_one_matching_order",
         "test_initial_round_declares_new_pr_and_one_objective_one_pr"
       ],
       "cause": "activated 227-a order format (title line; prose PR-mode declaration), not a code or test regression",
-      "resolution": "canonical 227-b AMEND_EXISTING_PR on the same PR corrects the order format; no source/runtime change or rerun"
+      "resolution": "canonical 227-b AMEND_EXISTING_PR on the same PR corrects the order format; no source/runtime change or rerun",
+      "oap_governance_failed_tests": [],
+      "oap_governance_note": "focused rerun justified by active-state change to 227-b; the two historical 227-a format failures are resolved by the canonical order, not by weakening tests"
     },
-    "coverage_note": "This manifest is an evidence INDEX linking executed receipts to identity/digest facts. It is NOT yet the required per-obligation verified test-node-ID mapping; that mapping (and the concrete protected live test plan with actual target and numeric ceilings) remains a declared gap for the canonical 227-b round."
+    "coverage_note": "This manifest is now the required per-obligation verified test-node-ID mapping: 19 records over the order's 19 coverage groups, each linking real executed test node IDs (with class/parameter scope) to the accepted commands/results/checkpoint plus native receipts and manually reviewed contract evidence. Collection-verified (not executed) at primary head 902a6e33. It is not a pass count.",
+    "collection_check": {
+      "head": "902a6e33",
+      "interpreter": "Python 3.12",
+      "command": "pytest --collect-only on the 13 mapping-referenced test files (addopts empty, cacheprovider off)",
+      "result": "EXIT 0; 606 nodes COLLECTED (collection only - no tests executed/passed)",
+      "mapped_refs_checked": 140,
+      "note": "140 unique mapped node refs checked against actual pytest IDs/base names incl exact bracketed PG params. The only unresolved ref was the wrong OpenCode-none path/class, now replaced with tests/unit/test_hermes_aux_reasoning_effort.py::TestOpenCodeProfileUnchanged::test_opencode_none_still_denied (present in collection). NOT to be read as 606 passing tests."
+    }
   },
   "honesty_disclosures": [
     "historical secondary full-unit run (Python 3.13) failed one named OpenRouter audio test; aggregate counts and causality unknown; no fix made, no full matrix rerun claimed",
@@ -139,28 +157,567 @@
     "protected live gate not_run: no live inference, key mutation, or deploy recorded"
   ],
   "preprotected": {
-    "missing": [
-      "governance:227-a-order-format (2 test_oap_governance failures against the activated 227-a order format: title line and PR-mode declaration line; to resolve via canonical 227-b AMEND_EXISTING_PR on the same PR; no source/runtime change or rerun)",
-      "obligation-mapping: per-obligation verified test-node-ID mapping not yet produced (manifest currently an evidence index only; required by the order's obligation-manifest duty)",
-      "protected-live-test-plan: bounded protected live test plan currently carries ceiling_requirements placeholders only \u2014 no actual target route/model/backend and no numeric request/token/cost/time caps declared (order forbids inventing them; root review/authority supplies the concrete gate)"
-    ]
+    "missing": [],
+    "derived_from": "required record statuses in obligation_mapping: 19/19 required records are verified or verified_manual_review; g19 (proposed-protected-live-plan) PROPOSED plan artifact = verified_manual_review, with strict-guarantee/human-authority/execution tracked separately in the protected block (not as preprotected gaps)",
+    "note": "All required PREPROTECTED obligations satisfied with honest evidence. Former 227-a gaps closed: (a) governance 10/10 on new active 227-b state; (b) per-obligation verified test-node-ID mapping (19 records / 140 refs collection-checked at primary head 902a6e33); (c) concrete PROPOSED protected plan artifact present and reviewed (verified_manual_review). Protected live execution + human target authority + strict zero-retry guarantee remain a separately visible NOT_RUN/UNSATISFIED gate. External CI final exact-head gate = ROOT gate, a953 checkpoint SUCCESS not claimed for future heads."
   },
   "protected": {
     "status": "not_run",
     "proposed_live_test": {
-      "scope": "one zero-retry process per profile against a real authorized route/model/backend",
+      "status": "PROPOSED/UNCONFIRMED; protected execution + human target authority NOT_RUN; human target-preference question pending; root presents for human authority; not executed/deployed/approved.",
+      "scope": "ONE native process launch per profile, NO outer retry/rerun after failure; task-local loopback gateway with isolated task DB and task-owned keys, generic openai-compatible provider pointed at the reported FULL LAN chain; strict zero-native-retry guarantee is UNSATISFIED (source-proven) and a protected human-decision prerequisite.",
       "profiles": [
         "hermes-0.22.5-chat-v1 (pinned doc version \"2\", fixture c5e34d46270280d7e08639c01c28065380a2a80843c1114ac1f1ad2a2744d327)",
         "opencode-1.19.3-chat-v1 (pinned doc version \"1\", fixture 2bd4f2599456892bb5d5119a85c9ffe9525796c1aa934ad46b49ce34d18f0e14)"
       ],
-      "ceiling_requirements": [
-        "request count ceiling per profile (placeholder \u2014 numeric cap not yet declared)",
-        "token/cost ceiling (placeholder \u2014 numeric cap not yet declared)",
-        "wall-clock time ceiling (placeholder \u2014 numeric cap not yet declared)",
-        "task-owned process cleanup (requirement, no cap)",
-        "PG reservation/finalization accounting assertions, zero stranded reservations (requirement, no cap)"
+      "topology": {
+        "provider_route": "generic openai-compatible provider -> http://10.8.132.55:18021/v1 -> its existing controlled backend (FULL LAN chain)",
+        "wire_model": "qwen38-27b (proposal from pinned historical status reports; NOT current remote health/route-capability/credential/deployed-version evidence)",
+        "planned_labels": [
+          "qualification-227-lan-chain",
+          "qualification-227-chat (PLANNED labels only, not existing resources)"
+        ],
+        "never": [
+          "bypass the chain (port 18020 / direct model)",
+          "remove required signing",
+          "pretend the Responses-only LocalCodingAdapter serves Chat",
+          "fall back to any unsupported identity/transport behavior (stop and report)"
+        ]
+      },
+      "ceilings": {
+        "process": "ONE process per profile; NO outer retry/rerun",
+        "request_admission_strict": "at most 6 ADMITTED Chat/model requests per profile incl auxiliary traffic, guarded by finite task-key request quota - UNSATISFIED as a guarantee (native retries cannot be promised off; PG 500-release proves request_limit_total=6 does not cap total admitted attempts across failures); recorded as UNSATISFIED / protected human-decision pending, not an enforced bound",
+        "request_settled_relaxed_alternative": "6 SETTLED/charged (admitted and finalized) requests per key, admitted attempts may exceed 6 while rejections are not charged - appears ONLY in the unapproved relaxed alternative; stock native retries explicitly allowed; requires explicit human risk approval",
+        "tokens": "1,000,000 total input+output tokens per profile",
+        "cost_eur": "EUR 1.00 per profile / EUR 2.00 aggregate under approved pricing",
+        "wall_clock_seconds": "600 s per profile / 1200 s aggregate",
+        "notes": "proposed configured admission/accounting bounds, not an invoice and not an exact external no-overrun guarantee; rejected attempts are distinct from admitted requests"
+      },
+      "retry_semantics": {
+        "status": "strict zero-automatic-retry guarantee UNSATISFIED (source-proven) - protected human-decision prerequisite, never waived or labeled pass",
+        "hermes_0_22_5": "pinned source commit bf0203a794a07aac3ff764972ab9087baa4e4f4e; api_max_retries default 3 (config=1 single attempt), auto_recovery_cycles default 5 (=0 disables ladder); primary + auxiliary SDK clients setdefault max_retries=0; async auxiliary _async_call_llm_impl hardcodes ONE same-provider retry on transient transport error; title/compression are sync tasks in _TIMEOUT_NO_RETRY_TASKS so TIMEOUT skips the same-provider retry but fast blips still retry",
+        "opencode_1_19_3": "pinned anomalyco/opencode tag v1.19.3 commit e3c4eb242585dcd77be1a867391b7c25fd47ce52; session/llm.ts maxRetries=input.retries??0 BUT processor.ts applies unconditional Effect.retry(SessionRetry.policy); retry.ts RETRY_MAX_RETRIES=5 with no override parameter -> native HTTP retries cannot be promised off by configuration alone",
+        "admission_ceiling": "PG 500-release assertions record requests_used_total==0 after failed attempts, proving request_limit_total=6 does not cap total admitted attempts across failures; strict <=6 total admissions incl retries is UNSATISFIED unless independently proven"
+      },
+      "preserved_baseline": {
+        "hermes": "native main xhigh / auxiliary none with its captured toolsets",
+        "opencode": "pure/denied-web 9 tools, Chat-compatible SDK, captured auxiliary max_tokens=32000 request envelope",
+        "task_gateway_settings": "CHAT_MAX_TOOL_DESCRIPTION_BYTES=8192 and HARD_MAX_OUTPUT_TOKENS=32768 (deployment-scoped operator settings; source defaults 4096/4096 remain untouched) accept the native envelope without widening source defaults; normal input policy remains authoritative",
+        "no_alteration": "efforts, title/compaction, tools, wire-model alias, and legitimate history are not altered to obtain a pass; any deliberate QA variant must be explicit and separately scoped"
+      },
+      "planned_positive": "task-owned unpredictable file read and exact result through actual client/tool/history continuation per profile, auxiliary behavior preserved, isolated task HOME/XDG/workspace, existing approved workflow/native assets, no new harness framework",
+      "planned_assertions": [
+        "exact client/source/package/config and candidate identity",
+        "request/call/result correlation",
+        "successful final provider-reported usage and one terminal PG settlement per admitted request",
+        "no stranded reservations/holds after cleanup",
+        "credentials never exposed in logs/artifacts/persisted metadata",
+        "owned native runtime/process cleanup",
+        "if final usage missing, the actual estimated/failed outcome is recorded; a client exit or transport close does NOT prove GPU inference cancellation",
+        "provider-specific pricing/billing limitations remain explicit"
       ],
-      "status": "plan incomplete by design: no actual target route/model/backend or numeric ceilings are declared here; they require root review and protected authority. Not to be read as an executable plan."
+      "ci_gate_before_protected_traffic": {
+        "requirement": "all required external CI checks must be represented, scoped to the exact candidate head, and green before protected traffic; pending/skipped/missing checks are not passes (AGENTIC_CLIENT_INTEGRATION.md section 40). Root owns the final exact-head CI gate after this report.",
+        "status": "final exact-head CI gate is ROOT's gate; a953 CI success NOT claimed for future heads",
+        "final_head_gate_status": "PENDING (ROOT gate for the final exact candidate head; a953 checkpoint SUCCESS is NOT claimed for future heads; never treated as a future pass)",
+        "external_ci_a953_checkpoint": {
+          "head": "a953970009b85a8024f220f8e5ccecbb40014a1d",
+          "source": "one gh api repos/ulfe-lmi/slaif-api-gateway/commits/a953970009b85a8024f220f8e5ccecbb40014a1d/check-runs read (read-only; no push)",
+          "checkpoint_status": "all 9 individual required checks SUCCESS + separate CodeQL aggregate SUCCESS",
+          "checks": [
+            {
+              "name": "Unit, lint, and migration head",
+              "check_run_id": 136303178676,
+              "conclusion": "success",
+              "completed_at": "2026-11-20T13:07:56Z"
+            },
+            {
+              "name": "PostgreSQL integration tests",
+              "check_run_id": 136303178748,
+              "conclusion": "success",
+              "completed_at": "2026-11-20T13:13:31Z"
+            },
+            {
+              "name": "OpenAI-compatible E2E tests",
+              "check_run_id": 136303178392,
+              "conclusion": "success",
+              "completed_at": "2026-11-20T13:03:30Z"
+            },
+            {
+              "name": "Playwright browser smoke",
+              "check_run_id": 136303178834,
+              "conclusion": "success",
+              "completed_at": "2026-11-20T13:07:56Z"
+            },
+            {
+              "name": "Docker Compose smoke",
+              "check_run_id": 136303178996,
+              "conclusion": "success",
+              "completed_at": "2026-11-20T13:03:01Z"
+            },
+            {
+              "name": "Documentation hygiene",
+              "check_run_id": 136303179014,
+              "conclusion": "success",
+              "completed_at": "2026-11-20T13:01:34Z"
+            },
+            {
+              "name": "CodeQL > Analyze Python",
+              "check_run_id": 136303178075,
+              "conclusion": "success",
+              "completed_at": "2026-11-20T13:02:48Z"
+            },
+            {
+              "name": "CodeQL - Code Quality > Analyze (javascript-typescript)",
+              "check_run_id": 136303157108,
+              "conclusion": "success",
+              "completed_at": "2026-11-20T13:01:56Z"
+            },
+            {
+              "name": "CodeQL - Code Quality > Analyze (python)",
+              "check_run_id": 136303157388,
+              "conclusion": "success",
+              "completed_at": "2026-11-20T13:04:28Z"
+            }
+          ],
+          "codeql_aggregate": {
+            "name": "CodeQL (aggregate)",
+            "check_run_id": 136303788355,
+            "conclusion": "success",
+            "completed_at": "2026-11-20T13:02:43Z"
+          },
+          "note": "a953 checkpoint success only. Final exact-head CI gate for any future candidate head remains PENDING (root gate); pending/skipped/missing are never passes. No push performed."
+        }
+      }
     }
-  }
+  },
+  "obligation_mapping": [
+    {
+      "id": "default-preservation",
+      "required": true,
+      "status": "verified",
+      "evidence_level": "unit",
+      "requirement": "Keys without a chat_client_module pin keep existing openai-default Chat behavior; no profile selected or widened by headers/UA/model/client metadata.",
+      "verified_test_node_ids": [
+        "tests/unit/test_agent_chat_profiles.py::TestNeutralEngine::test_absent_pin_resolves_to_none_default",
+        "tests/unit/test_agent_chat_dispatch.py::TestSelectionHelpers::test_resolve_absent_pin_returns_none",
+        "tests/unit/test_agent_chat_dispatch.py::TestChatPairQualification::test_default_pin_native_route_unchanged",
+        "tests/unit/test_agent_chat_dispatch.py::TestHandlerPayloadBoundary::test_default_unknown_null_retains_historical_strip",
+        "tests/unit/test_auth_service.py::test_chat_pin_absent_projects_none_default",
+        "tests/unit/test_agent_chat_profiles.py::TestNeutralEngine::test_hints_never_select_or_widen_profile",
+        "tests/integration/test_agent_chat_profiles_postgres.py::test_chat_absent_pin_default_behavior_unaffected"
+      ],
+      "receipt_refs": [
+        "unit:5c2bacf8(557 passed)",
+        "pg:fd086c95(absent-pin default)"
+      ],
+      "notes": "absent pin -> None default; default dialect normalization and native-route behavior unchanged; hints never select/widen."
+    },
+    {
+      "id": "chat-pin-strict-selection",
+      "required": true,
+      "status": "verified",
+      "evidence_level": "unit",
+      "requirement": "Chat profile selected ONLY from authenticated server-side key metadata tuple {id,version,fixture_sha256}; malformed/unknown(incl Responses-only)/stale/digest-mismatch fail closed before profile normalization/admission with 400; never degrades; never affects Responses.",
+      "verified_test_node_ids": [
+        "tests/unit/test_agent_chat_profiles.py::TestNeutralEngine::test_pin_selection_and_fail_closed",
+        "tests/unit/test_agent_chat_profiles.py::TestCanonicalizeChatClientModulePin::test_registered_pin_returns_exact_canonical_tuple",
+        "tests/unit/test_agent_chat_profiles.py::TestCanonicalizeChatClientModulePin::test_none_is_absent_and_returns_none",
+        "tests/unit/test_agent_chat_profiles.py::TestCanonicalizeChatClientModulePin::test_malformed_pins_are_rejected_fail_closed",
+        "tests/unit/test_agent_chat_profiles.py::TestCanonicalizeChatClientModulePin::test_stale_version_and_digest_mismatch_are_rejected",
+        "tests/unit/test_agent_chat_profiles.py::TestCanonicalizeChatClientModulePin::test_unknown_id_is_rejected_fail_closed",
+        "tests/unit/test_agent_chat_dispatch.py::TestChatPairQualification::test_selected_pin_signed_localcoding_route_denied_before_admission",
+        "tests/integration/test_agent_chat_profiles_postgres.py::test_chat_pin_stale_fixture_denied_before_admission",
+        "tests/integration/test_agent_chat_profiles_postgres.py::test_chat_pin_unknown_module_denied_before_admission",
+        "tests/integration/test_agent_chat_profiles_postgres.py::test_chat_pin_malformed_metadata_denied_before_admission"
+      ],
+      "receipt_refs": [
+        "unit:5c2bacf8(557 passed)",
+        "pg:fd086c95(pre-upstream denial battery)"
+      ],
+      "notes": "strict canonical tuple; exact fail-closed codes; Responses-only module ids cannot be selected as Chat; pre-upstream denials confirmed on PG/HTTP."
+    },
+    {
+      "id": "pin-key-route-capability-provider-denials",
+      "required": true,
+      "status": "verified",
+      "evidence_level": "unit",
+      "requirement": "Key/route/capability/provider pairing denials: tampered/revoked keys, model/endpoint/provider not-allowed, streaming-disabled route, and native/signed non-openai-compatible pair all denied before admission; default never gated by the selected-pair check.",
+      "verified_test_node_ids": [
+        "tests/unit/test_agent_chat_dispatch.py::TestChatPairQualification::test_reviewed_chat_pairs_are_declared",
+        "tests/unit/test_agent_chat_dispatch.py::TestChatPairQualification::test_unreviewed_chat_pairs_are_denied",
+        "tests/unit/test_agent_chat_dispatch.py::TestChatPairQualification::test_selected_pin_native_route_denied_before_admission",
+        "tests/unit/test_agent_chat_dispatch.py::TestChatPairQualification::test_selected_pin_openai_compatible_route_reaches_quota",
+        "tests/integration/test_agent_chat_profiles_postgres.py::test_chat_pin_native_provider_pair_denied_before_admission",
+        "tests/integration/test_agent_chat_profiles_postgres.py::test_tampered_gateway_key_denied_before_upstream",
+        "tests/integration/test_agent_chat_profiles_postgres.py::test_revoked_gateway_key_denied_before_upstream",
+        "tests/integration/test_agent_chat_profiles_postgres.py::test_chat_pin_model_not_allowed_denied_before_upstream",
+        "tests/integration/test_agent_chat_profiles_postgres.py::test_chat_pin_endpoint_not_allowed_denied_before_upstream",
+        "tests/integration/test_agent_chat_profiles_postgres.py::test_chat_pin_provider_not_allowed_denied_before_upstream",
+        "tests/integration/test_agent_chat_profiles_postgres.py::test_chat_pin_streaming_disabled_route_denied_before_upstream"
+      ],
+      "receipt_refs": [
+        "unit:5c2bacf8(557 passed)",
+        "pg:fd086c95",
+        "pg:e6e166c2(8 passed: model/endpoint/provider/streaming denials, 4 cases x 2 profile params)"
+      ],
+      "notes": "model_not_allowed node is parametrized over [hermes, opencode] module ids (e6e166c2 ran both). Pre-upstream 401/403/400; no forwarding/accounting on denial."
+    },
+    {
+      "id": "finite-tool-schema-field-rules",
+      "required": true,
+      "status": "verified",
+      "evidence_level": "unit",
+      "requirement": "Finite tool name/type grammar, tool/schema count and size caps, strict unknown-field and legacy-dialect rejection with no raw-value echo.",
+      "verified_test_node_ids": [
+        "tests/unit/test_agent_chat_profiles.py::TestProfileDataLoader::test_tool_name_grammar_admits_observed_forms",
+        "tests/unit/test_agent_chat_profiles.py::TestProfileDataLoader::test_tool_name_grammar_rejects_out_of_form",
+        "tests/unit/test_agent_chat_profiles.py::TestProfileDataLoader::test_strict_document_rejections",
+        "tests/unit/test_agent_chat_profiles.py::TestProfileDataLoader::test_oversized_file_rejected_with_bounded_read",
+        "tests/unit/test_agent_chat_profiles.py::TestProfileDataLoader::test_invalid_file_payloads_rejected",
+        "tests/unit/test_agent_chat_profiles.py::TestNeutralEngine::test_unknown_top_level_field_fails_closed",
+        "tests/unit/test_agent_chat_profiles.py::TestLegacyDialectRejected::test_top_level_functions_rejected",
+        "tests/unit/test_agent_chat_profiles.py::TestLegacyDialectRejected::test_function_role_rejected",
+        "tests/unit/test_request_policy_service.py::test_large_tools_schema_over_hard_max_fails_without_raw_payload",
+        "tests/unit/test_request_policy_service.py::test_tool_count_and_schema_caps_are_enforced_without_echoing_schema",
+        "tests/unit/test_request_policy_service.py::test_input_messages_over_hard_max_fails",
+        "tests/unit/test_request_policy_service.py::test_unknown_extra_field_is_rejected_without_mutating_original",
+        "tests/unit/test_request_policy_service.py::test_message_count_and_content_caps_are_enforced_without_echoing_content"
+      ],
+      "receipt_refs": [
+        "unit:5c2bacf8(557 passed)"
+      ],
+      "notes": "count/size/unknown-field bounds fail closed without echoing raw payloads/schemas; legacy function/function_call/function-role surfaces rejected."
+    },
+    {
+      "id": "exact-tool-history-linkage",
+      "required": true,
+      "status": "verified",
+      "evidence_level": "unit",
+      "requirement": "In-request tool call/result linkage positional and exact: pending->consumed once->all resolved; duplicate, reuse of resolved/pending, unlinked, and unresolved calls fail closed; named-function tool_choice must name a current same-request declaration (auto/none/required strings also allowed).",
+      "verified_test_node_ids": [
+        "tests/unit/test_agent_chat_profiles.py::TestCallResultLinkage::test_sequential_multi_call_loop_accepted",
+        "tests/unit/test_agent_chat_profiles.py::TestCallResultLinkage::test_duplicate_result_rejected",
+        "tests/unit/test_agent_chat_profiles.py::TestCallResultLinkage::test_reuse_of_still_pending_call_id_rejected",
+        "tests/unit/test_agent_chat_profiles.py::TestCallResultLinkage::test_reuse_of_resolved_call_id_rejected",
+        "tests/unit/test_agent_chat_profiles.py::TestCallResultLinkage::test_unresolved_call_rejected",
+        "tests/unit/test_agent_chat_profiles.py::TestNamedToolChoiceDeclarationMembership::test_named_choice_fails_closed_without_declarations",
+        "tests/unit/test_agent_chat_profiles.py::TestNamedToolChoiceDeclarationMembership::test_named_choice_fails_for_undeclared_name",
+        "tests/unit/test_agent_chat_profiles.py::TestNamedToolChoiceDeclarationMembership::test_named_choice_accepted_for_declared_name",
+        "tests/unit/test_agent_chat_profiles.py::TestNamedToolChoiceDeclarationMembership::test_string_choices_never_require_declarations"
+      ],
+      "receipt_refs": [
+        "unit:5c2bacf8(557 passed)"
+      ],
+      "notes": "multi-call loop accepted; duplicate/reuse/unlinked/unresolved rejected; named tool_choice bound to current declarations; auto/none/require string choices need no declarations."
+    },
+    {
+      "id": "presence-null-reasoning-preservation",
+      "required": true,
+      "status": "verified",
+      "evidence_level": "unit",
+      "requirement": "Profile path is presence-preserving: explicit client nulls survive strict shape/unknown-field checks (no null-smuggling of unknown fields; omitted optional fields stay absent); assistant reasoning/reasoning_content and null content preserved exactly under ordinary client-trust model (no Responses HMAC/item-ID/cross-request snapshot).",
+      "verified_test_node_ids": [
+        "tests/unit/test_agent_chat_dispatch.py::TestPayloadDumpPresence::test_selected_dump_preserves_explicit_null_extra",
+        "tests/unit/test_agent_chat_dispatch.py::TestPayloadDumpPresence::test_selected_engine_denies_null_smuggled_unknown_field",
+        "tests/unit/test_agent_chat_dispatch.py::TestPayloadDumpPresence::test_selected_engine_accepts_omitted_unknown_field",
+        "tests/unit/test_agent_chat_dispatch.py::TestPayloadDumpPresence::test_selected_dump_preserves_explicit_null_declared_field",
+        "tests/unit/test_agent_chat_dispatch.py::TestHandlerPayloadBoundary::test_selected_explicit_null_declared_field_preserved",
+        "tests/unit/test_agent_chat_dispatch.py::TestHandlerPayloadBoundary::test_selected_omitted_optional_field_stays_absent",
+        "tests/unit/test_opencode_1193_chat.py::test_assistant_reasoning_fields_and_null_content",
+        "tests/unit/test_verify_hermes_chat_capture.py::test_reasoning_replayed_in_second_request",
+        "tests/unit/test_verify_hermes_chat_capture.py::test_reasoning_in_first_request_never_counts"
+      ],
+      "receipt_refs": [
+        "unit:5c2bacf8(557 passed)"
+      ],
+      "notes": "presence-preserving body on profile path; default path normalization unchanged; reasoning shape/preservation asserted at profile + capture-verifier level. Per-profile reasoning field byte caps (<=65536 each) asserted by profile schema, not a dedicated node id."
+    },
+    {
+      "id": "selected-effort-vs-default-and-revalidation",
+      "required": true,
+      "status": "verified",
+      "evidence_level": "unit",
+      "requirement": "Per-profile reasoning_effort vocabulary enforced (Hermes 6-value incl xhigh/none; OpenCode no none); unchanged default still rejects xhigh; R4 held-slot revalidation re-resolves the pin from the refreshed key, identity change fails closed, refreshed route must keep the pair, post-acquisition denial releases the slot once. R4 is UNIT fake-slot proof only.",
+      "verified_test_node_ids": [
+        "tests/unit/test_request_policy_service.py::TestSelectedProfileReasoningEffort::test_default_policy_still_rejects_xhigh",
+        "tests/unit/test_request_policy_service.py::TestSelectedProfileReasoningEffort::test_selected_profile_spec_accepts_xhigh",
+        "tests/unit/test_request_policy_service.py::TestSelectedProfileReasoningEffort::test_selected_profile_spec_keeps_ordinary_efforts",
+        "tests/unit/test_request_policy_service.py::TestSelectedProfileReasoningEffort::test_selected_profile_spec_rejects_unreviewed_efforts",
+        "tests/unit/test_hermes_aux_reasoning_effort.py::TestHermesAuxEffortAcceptance::test_title_shape_none_is_accepted",
+        "tests/unit/test_hermes_aux_reasoning_effort.py::TestHermesAuxEffortAcceptance::test_main_shape_xhigh_is_unchanged",
+        "tests/unit/test_hermes_aux_reasoning_effort.py::TestHermesDataIdentity::test_effort_vocabulary_is_finite_six_value_set",
+        "tests/unit/test_opencode_1193_chat.py::test_observed_envelope_accepted_with_xhigh",
+        "tests/unit/test_hermes_aux_reasoning_effort.py::TestOpenCodeProfileUnchanged::test_opencode_none_still_denied",
+        "tests/unit/test_agent_chat_dispatch.py::TestR4ChatBindingRevalidation::test_binding_cleared_while_waiting_refuses",
+        "tests/unit/test_agent_chat_dispatch.py::TestR4ChatBindingRevalidation::test_binding_added_while_waiting_refuses",
+        "tests/unit/test_agent_chat_dispatch.py::TestR4ChatBindingRevalidation::test_malformed_refreshed_pin_fails_closed",
+        "tests/unit/test_agent_chat_dispatch.py::TestR4ChatBindingRevalidation::test_unchanged_binding_reaches_quota_reservation",
+        "tests/unit/test_agent_chat_dispatch.py::TestR4ChatBindingRevalidation::test_held_slot_pair_denied_on_refreshed_route_releases_once",
+        "tests/unit/test_agent_chat_dispatch.py::TestR4ChatBindingRevalidation::test_held_slot_cleared_binding_releases_once",
+        "tests/unit/test_agent_chat_dispatch.py::TestR4ChatBindingRevalidation::test_held_slot_malformed_refreshed_pin_releases_once",
+        "tests/unit/test_agent_chat_dispatch.py::TestR4ChatBindingRevalidation::test_held_slot_unchanged_binding_releases_once_at_quota"
+      ],
+      "receipt_refs": [
+        "unit:5c2bacf8(557 passed)"
+      ],
+      "notes": "effort nodes parametrized over profile spec/effort values as declared in the source; R4 held-slot cases use fake rate-limiter/quota seams (UNIT FAKE-SLOT proof) - they do NOT prove real Redis held-slot behavior; see held-slot-proof and pg does_not_prove."
+    },
+    {
+      "id": "forwarded-input-estimation-and-output-caps",
+      "required": true,
+      "status": "verified",
+      "evidence_level": "unit",
+      "requirement": "Admission-time input estimate + cost pre-reservation cover all retained forwarded material (messages incl per-profile reasoning fields, tool declarations + serialized schemas, in-request tool-call args/results, other retained object/list fields); output cap clipped to hard max without losing requested value; no new billing category/pricing row/ledger column.",
+      "verified_test_node_ids": [
+        "tests/unit/test_request_policy_service.py::test_input_estimate_handles_plain_text_messages",
+        "tests/unit/test_request_policy_service.py::test_input_estimate_handles_text_content_blocks",
+        "tests/unit/test_request_policy_service.py::test_large_tools_schema_over_hard_max_fails_without_raw_payload",
+        "tests/unit/test_request_policy_service.py::test_output_limit_above_hard_max_is_clipped_without_losing_requested_value",
+        "tests/unit/test_request_policy_service.py::test_input_messages_over_hard_max_fails"
+      ],
+      "receipt_refs": [
+        "unit:5c2bacf8(557 passed)"
+      ],
+      "notes": "Manual source review of the shared estimator (estimate_message_input_tokens + estimate_non_message_input_tokens) confirms ALL retained forwarded values are metered; the listed unit nodes are narrow assertions on that same neutral shared path (plain/text-block/tool-schema messages, over-cap fail, output-cap clip-not-drop), not a per-field enumeration. Output cap clipped to hard max without losing requested value; no new billing category/pricing row/ledger column.",
+      "source_review_refs": [
+        "app/slaif_gateway/services/input_token_estimation.py::estimate_message_input_tokens (all retained message values incl per-profile reasoning/tool fields)",
+        "app/slaif_gateway/services/input_token_estimation.py::estimate_non_message_input_tokens (retained non-message object/list fields)"
+      ]
+    },
+    {
+      "id": "key-lifecycle-pin-preservation",
+      "required": true,
+      "status": "verified",
+      "evidence_level": "unit",
+      "requirement": "Chat pin create/update/omit/null/dry-run/projection/export/repair/rotation/audit preservation: pin validated before write; null clears only the Chat binding; projection/dry-run makes no writes; stale/forged/malformed export denied then repairable; rotation preserves persisted pin and audits; audit never copies unknown stored fields.",
+      "verified_test_node_ids": [
+        "tests/unit/test_key_service_create.py::test_create_gateway_key_validates_chat_pin_before_any_write",
+        "tests/unit/test_key_policy_configuration.py::test_create_input_wires_chat_pin_through_authoring_canonicalization",
+        "tests/unit/test_key_policy_configuration.py::test_schema_chat_client_module_absent_null_and_object_semantics",
+        "tests/unit/test_key_policy_configuration.py::test_schema_chat_client_module_export_allowlist_and_roundtrip",
+        "tests/unit/test_key_policy_configuration.py::test_export_emits_explicit_nulls_and_round_trips_compatible_target",
+        "tests/unit/test_key_policy_configuration.py::test_export_bound_round_trip_keeps_same_identity",
+        "tests/unit/test_key_policy_configuration.py::test_export_malformed_stored_policy_fails_explicitly",
+        "tests/unit/test_key_policy_configuration.py::test_export_stale_stored_pin_fails_explicitly",
+        "tests/unit/test_key_policy_configuration.py::test_configuration_audit_never_copies_unknown_stored_fields",
+        "tests/integration/test_agent_chat_profiles_postgres.py::test_chat_pin_binding_round_trip_on_persisted_state",
+        "tests/integration/test_agent_chat_profiles_postgres.py::test_chat_pin_projection_dry_run_makes_no_writes",
+        "tests/integration/test_agent_chat_profiles_postgres.py::test_chat_pin_stale_forged_malformed_export_denied_repair_still_possible",
+        "tests/integration/test_agent_chat_profiles_postgres.py::test_chat_pin_rotation_preserves_persisted_pin_and_existing_audits"
+      ],
+      "receipt_refs": [
+        "unit:5c2bacf8(557 passed)",
+        "pg:b63c4ec7(binding round trip)",
+        "pg:2475bb71(projection/dry-run, export strictness, rotation pin preservation)"
+      ],
+      "notes": "PG receipt 2475bb71 reran the first-binding case; rotation preserves pin and existing audits on PG; unit nodes cover create/update/omit/null/audit semantics."
+    },
+    {
+      "id": "credential-isolation-no-leakage",
+      "required": true,
+      "status": "verified",
+      "evidence_level": "unit+pg_http_mocked_provider",
+      "requirement": "Credential isolation and no internal-fact or default-content leakage: upstream provider key substituted server-side and never returned; auth exposes only safe responses-policy metadata; error/diagnostic output does not echo raw keys, schemas, or message content.",
+      "verified_test_node_ids": [
+        "tests/unit/test_auth_service.py::test_authenticate_exposes_only_safe_responses_policy_metadata",
+        "tests/unit/test_agent_chat_profiles.py::TestSafeDiagnostics::test_unknown_field_param_does_not_echo_raw_key",
+        "tests/unit/test_agent_chat_profiles.py::TestSafeDiagnostics::test_disallowed_message_field_param_does_not_echo_raw_key",
+        "tests/unit/test_agent_chat_profiles.py::TestSafeDiagnostics::test_schema_recursion_params_are_positional_only",
+        "tests/unit/test_request_policy_service.py::test_large_tools_schema_over_hard_max_fails_without_raw_payload",
+        "tests/unit/test_key_policy_configuration.py::test_validator_rejects_unknown_fields_without_echoing_them",
+        "tests/unit/test_key_policy_configuration.py::test_configuration_audit_rejects_unknown_stored_capability_values",
+        "tests/integration/test_agent_chat_profiles_postgres.py::test_chat_pin_runtime_success_finalizes_pg_usage",
+        "tests/integration/test_agent_chat_profiles_postgres.py::test_chat_pin_stream_success_finalizes_pg_usage"
+      ],
+      "receipt_refs": [
+        "unit:5c2bacf8(557 passed)",
+        "pg:a5edb7ab(runtime success Hermes+OpenCode)",
+        "pg:c9434f6f(stream success)"
+      ],
+      "notes": "no raw provider credential surfaced; diagnostics/validator/export are content-free. Stronger already-accepted PG proof (pg:a5edb7ab runtime success, pg:c9434f6f stream success): test asserts substituted upstream Authorization == Bearer FAKE_COMPATIBLE_UPSTREAM_KEY (runtime ~line903, stream ~line1506) and persisted-secret absence (runtime ~lines932-960: upstream key + plaintext key absent from persisted set; sk-slaif- prefix deliberately retained as key_hint). Request-capture facility remains operator-armed, default OFF, out of scope (unchanged)."
+    },
+    {
+      "id": "held-slot-cleanup-unit-proof",
+      "required": true,
+      "status": "verified",
+      "evidence_level": "unit",
+      "requirement": "R4 held-slot cleanup: on revalidation denial after slot acquisition the concurrency slot is released exactly once (pair denied, binding cleared, malformed refreshed pin, and unchanged-binding-at-quota). UNIT FAKE-SLOT proof only; not real Redis.",
+      "verified_test_node_ids": [
+        "tests/unit/test_agent_chat_dispatch.py::TestR4ChatBindingRevalidation::test_held_slot_pair_denied_on_refreshed_route_releases_once",
+        "tests/unit/test_agent_chat_dispatch.py::TestR4ChatBindingRevalidation::test_held_slot_cleared_binding_releases_once",
+        "tests/unit/test_agent_chat_dispatch.py::TestR4ChatBindingRevalidation::test_held_slot_malformed_refreshed_pin_releases_once",
+        "tests/unit/test_agent_chat_dispatch.py::TestR4ChatBindingRevalidation::test_held_slot_unchanged_binding_releases_once_at_quota"
+      ],
+      "receipt_refs": [
+        "unit:5c2bacf8(557 passed)"
+      ],
+      "notes": "fake rate-limiter/quota seams drive held-slot release-once. PG does NOT prove real Redis/R4 held-slot behavior (recorded in postgres_lifecycle.does_not_prove)."
+    },
+    {
+      "id": "stream-nonstream-actual-usage-settlement",
+      "required": true,
+      "status": "verified",
+      "evidence_level": "pg_http_mocked_provider",
+      "requirement": "Non-stream and stream success finalize PG usage with provider-reported tokens and one terminal settlement per admitted request (reservation finalized, counters advanced, cost recorded).",
+      "verified_test_node_ids": [
+        "tests/integration/test_agent_chat_profiles_postgres.py::test_chat_pin_runtime_success_finalizes_pg_usage",
+        "tests/integration/test_agent_chat_profiles_postgres.py::test_chat_pin_stream_success_finalizes_pg_usage"
+      ],
+      "receipt_refs": [
+        "pg:9fe29e23(Hermes runtime dispatch + PG accounting success)",
+        "pg:a5edb7ab(2 passed: runtime success parametrized Hermes+OpenCode; Hermes param reruns 9fe29e23 case)",
+        "pg:c9434f6f(2 passed: stream success finalizes PG usage, one case per profile)"
+      ],
+      "notes": "stream node executed separately per profile (Hermes, OpenCode); non-stream runtime success parametrized. Reused chronological receipts; not rerun."
+    },
+    {
+      "id": "http-error-release-hermes-only-scope",
+      "required": true,
+      "status": "verified",
+      "evidence_level": "pg_http_mocked_provider",
+      "requirement": "Shared provider HTTP-error release path: HTTP 500 non-stream and HTTP 500 stream release the pending reservation with a failed ledger row (zero charged). CURRENTLY HERMES-ONLY execution scope: no OpenCode parameters exist for these two tests yet.",
+      "verified_test_node_ids": [
+        "tests/integration/test_agent_chat_profiles_postgres.py::test_chat_pin_provider_http_error_releases_reservation",
+        "tests/integration/test_agent_chat_profiles_postgres.py::test_chat_pin_stream_provider_error_after_admission_releases_reservation"
+      ],
+      "receipt_refs": [
+        "pg:7821f944(2 passed: HTTP500 non-stream + HTTP500 stream; both Hermes-only parameters currently)"
+      ],
+      "notes": "Honesty: these two release tests are Hermes-only currently; OpenCode HTTP-500 release is a declared coverage gap (see postgres_lifecycle.does_not_prove). Shared release path asserted on the neutral seam."
+    },
+    {
+      "id": "disconnect-actual-cancellation-and-quota-429",
+      "required": true,
+      "status": "verified",
+      "evidence_level": "pg_http_mocked_provider",
+      "requirement": "Client disconnect after admission aborts the MOCKED upstream transport (the fake httpx transport's close/aclose is invoked, proving the in-flight provider request is cancelled at the transport boundary) and settles the stream; a quota-exhausted request is denied 429 BEFORE any upstream call (no reservation, no provider hit).",
+      "verified_test_node_ids": [
+        "tests/integration/test_agent_chat_profiles_postgres.py::test_chat_pin_client_disconnect_proves_actual_cancellation[hermes-0.22.5-chat-v1-read_file]",
+        "tests/integration/test_agent_chat_profiles_postgres.py::test_chat_pin_client_disconnect_proves_actual_cancellation[opencode-1.19.3-chat-v1-read]",
+        "tests/integration/test_agent_chat_profiles_postgres.py::test_chat_pin_request_quota_exhausted_denied_429_before_upstream"
+      ],
+      "receipt_refs": [
+        "pg:e645b381(disconnect2+quota429)",
+        "pg:e3e97918(disconnect-hardened, supersedes e645b381 disconnect2)"
+      ],
+      "notes": "Cancellation is asserted against the MOCKED upstream transport (respx/fake close+aclose invoked); it is NOT a claim of real provider/GPU cancellation. Disconnect node parametrized per profile (hermes read_file / opencode read). A partial-output disconnect settles ESTIMATED usage (not reservation release) for the streamed portion; the 429 path is a pre-upstream denial (zero upstream calls, zero reservation). Reused chronological PG receipts; no rerun."
+    },
+    {
+      "id": "native-fake-peer-captures-reused",
+      "required": true,
+      "status": "verified",
+      "evidence_level": "native_loopback_reused (Hermes) + unit_fixture_facts (OpenCode)",
+      "requirement": "Native-loopback capture facts (Hermes tool loop/reasoning-replay/terminal/cleanup) and OpenCode structural capture facts (tool loop/multi-call/title-aux/compaction/reasoning/session identity/text envelope) match the accepted profile behavior without any live provider or rerun.",
+      "verified_test_node_ids": [
+        "tests/unit/test_verify_hermes_chat_capture.py::test_toolloop_clean_terminal_result_qualifies",
+        "tests/unit/test_verify_hermes_chat_capture.py::test_text_clean_terminal_result_qualifies",
+        "tests/unit/test_verify_hermes_chat_capture.py::test_toolloop_reasoning_requested_but_not_replayed",
+        "tests/unit/test_verify_hermes_chat_capture.py::test_finish_core_verified_removes_root_and_qualifies",
+        "tests/unit/test_verify_hermes_chat_capture.py::test_reasoning_replayed_in_second_request",
+        "tests/unit/test_opencode_1193_chat.py::test_toolloop_gate_and_read_wrap_facts",
+        "tests/unit/test_opencode_1193_chat.py::test_multicall_facts",
+        "tests/unit/test_opencode_1193_chat.py::test_title_aux_classification_facts",
+        "tests/unit/test_opencode_1193_chat.py::test_compaction_template_facts",
+        "tests/unit/test_opencode_1193_chat.py::test_reasoning_facts",
+        "tests/unit/test_opencode_1193_chat.py::test_session_identity_predicates",
+        "tests/unit/test_opencode_1193_chat.py::test_observed_tool_continuation_accepted",
+        "tests/unit/test_opencode_1193_chat.py::test_text_stream_envelope_facts"
+      ],
+      "receipt_refs": [
+        "native-loopback:Hermes loop7(7 POST)",
+        "native-loopback:Hermes timeout4(11 POST, watchdog -15 @120s)",
+        "native-loopback:Hermes error3(11 POST, 68 err lines)",
+        "native-loopback:Hermes multi1(3 POST, 2 read_file call/result pairs, reasoning replay)",
+        "native-loopback:Hermes entry-final-positive(3 POST/2 calls/CLI 0/verified cleanup/hash-only)",
+        "native:OpenCode verifier 2026-11-20T03:56:22Z all_pass=true (dossier docs/agentic-clients/opencode-1.19.3-chat-v1.md section3; verifier scripts/verify_agent_chat/verify_opencode_chat_capture.py; text probe exact sentinel, 46-byte correlated native read tool result unverified_calls=[], 9 declarations + xhigh both main requests, session hint stable/d distinct, run root cleaned, fake peer only)"
+      ],
+      "notes": "Hermes native loopback captures REUSED (not rerun), hash-only provenanced. OpenCode has BOTH unit fixture facts over tests/fixtures/opencode/1.19.3/chat/ AND the accepted native loopback verifier receipt (docs/agentic-clients/opencode-1.19.3-chat-v1.md section3, 2026-11-20T03:56:22Z all_pass=true) linked to that fixture source and verifier. Native capture is a synthetic fake peer only: no gateway admission, no PG settlement, no live provider, no new artifact, no rerun."
+    },
+    {
+      "id": "trusted-data-identity-and-file-only-upgrade",
+      "required": true,
+      "status": "verified",
+      "evidence_level": "unit + contract_doc",
+      "requirement": "Pinned DATA identity per profile (Hermes DATA2 version 2 + canonical digest; OpenCode DATA1 digest binding + immutability + module registration) is enforced. Supported vocabulary/fixture changes are delivered as reviewed DATA (new doc bytes + new canonical digest + re-pinned operator key + restart); ordinary image/container upgrades are separately documented. Never allowed: per-tool source upgrade, auto upgrade, or silent key rotation.",
+      "verified_test_node_ids": [
+        "tests/unit/test_hermes_aux_reasoning_effort.py::TestHermesDataIdentity::test_version_bumped_to_two_with_new_digest",
+        "tests/unit/test_hermes_aux_reasoning_effort.py::TestHermesDataIdentity::test_exported_module_version_derives_from_data",
+        "tests/unit/test_hermes_aux_reasoning_effort.py::TestHermesDataIdentity::test_current_pin_tuple_resolves",
+        "tests/unit/test_opencode_1193_chat.py::test_profile_digest_binding_and_immutability",
+        "tests/unit/test_opencode_1193_chat.py::test_module_identity_and_registration",
+        "tests/unit/test_opencode_1193_chat.py::test_provenance_fixture_integrity"
+      ],
+      "receipt_refs": [
+        "data:Hermes DATA2 fixture c5e34d46270280d7e08639c01c28065380a2a80843c1114ac1f1ad2a2744d327 (raw ecd9aa5d5474a140ba0b4969f539bba526d7366296d116e1a6acb956476aba58, doc_version 2)",
+        "data:OpenCode DATA1 fixture 2bd4f2599456892bb5d5119a85c9ffe9525796c1aa934ad46b49ce34d18f0e14 (raw 302c5469d048c7037bac76ba1f40dc2f9ce78e214b133c1e414c928181d9af07, structural c84570f8dbbefb727ec90b17df2de802257951bda65e78b352df4742392208d3, doc_version 1)"
+      ],
+      "notes": "Upgrade/runbook (docs/upgrade-runbook.md, Hermes/OpenCode section) documents BOTH the DATA-only vocabulary path and ordinary image upgrades; the data-only path is one sanctioned path, not the only one. Digests are the pinned DATA identities, distinct from the raw source-file digests."
+    },
+    {
+      "id": "exact-docs-provenance-and-limitations",
+      "required": true,
+      "status": "verified",
+      "evidence_level": "unit (OpenCode provenance) + manual_review/contract_doc (Hermes provenance + honesty disclosures)",
+      "requirement": "Provenance and limitations are exact and honest: OpenCode structural fixtures present, private, and digest-bound; Hermes provenance and the recorded honesty disclosures (historical 3.13 secondary full-unit failure on one named OpenRouter audio test; setupfail1 receipt cleanup unverified/retained; protected not_run) are preserved without overclaim.",
+      "verified_test_node_ids": [
+        "tests/unit/test_opencode_1193_chat.py::test_provenance_fixture_integrity",
+        "tests/unit/test_opencode_1193_chat.py::test_all_structural_fixtures_present_and_private",
+        "tests/unit/test_opencode_1193_chat.py::test_structural_fixture_digest_binding"
+      ],
+      "receipt_refs": [
+        "provenance:tests/fixtures/opencode/1.19.3/chat/provenance.json (structural digest c84570f8dbbefb727ec90b17df2de802257951bda65e78b352df4742392208d3)",
+        "provenance:tests/fixtures/hermes/0.22.5/provenance.json (manual review; no dedicated unit node)"
+      ],
+      "notes": "OpenCode provenance/structural-fixture presence+privacy+digest-binding is unit-verified. Hermes provenance (provenance.json) and the .md honesty disclosures are manual_review/contract_doc (no dedicated node — marked honestly). Preserved disclosures: historical Python 3.13 secondary full-unit failure on one named OpenRouter audio test (counts/causality unknown, no fix/rerun); setupfail1 receipt cleanup unverified/retained; protected not_run."
+    },
+    {
+      "id": "canonical-active-order-and-single-pr-report-integrity",
+      "required": true,
+      "status": "verified",
+      "evidence_level": "unit",
+      "requirement": "OAP governance is satisfied against the NEW active 227-b state: canonical active-order shape law, required governance files present, exactly-one matching active order, one-objective-one-PR, coding agent never merge authority, exact FIFO OK wire payload, report uses implementation head + self, project-local state ignored, strategic dirs not repo transcript content; plus agentic-client and provider governance fail-closed checks.",
+      "verified_test_node_ids": [
+        "tests/unit/test_oap_governance.py::test_active_identifier_shape_law_with_224aa_exception",
+        "tests/unit/test_oap_governance.py::test_required_oap_governance_files_exist",
+        "tests/unit/test_oap_governance.py::test_active_identifier_resolves_exactly_one_matching_order",
+        "tests/unit/test_oap_governance.py::test_initial_round_declares_new_pr_and_one_objective_one_pr",
+        "tests/unit/test_oap_governance.py::test_new_pr_declaration_accepts_both_forms_and_rejects_informal_text",
+        "tests/unit/test_oap_governance.py::test_coding_agent_is_never_merge_authority",
+        "tests/unit/test_oap_governance.py::test_fifo_wire_payload_is_exact_ok_without_newline",
+        "tests/unit/test_oap_governance.py::test_report_publication_uses_implementation_head_and_self",
+        "tests/unit/test_oap_governance.py::test_project_local_state_is_ignored",
+        "tests/unit/test_oap_governance.py::test_strategic_directories_are_not_repository_transcript_content",
+        "tests/unit/test_agentic_client_integration_governance.py::test_agentic_client_contract_is_explicitly_adopted",
+        "tests/unit/test_agentic_client_integration_governance.py::test_agentic_client_contract_links_resolve",
+        "tests/unit/test_provider_governance.py::test_allows_matching_region_and_zdr",
+        "tests/unit/test_provider_governance.py::test_denies_wrong_region_or_training",
+        "tests/unit/test_provider_governance.py::test_stale_or_invalid_evidence_fails_closed"
+      ],
+      "receipt_refs": [
+        "unit:oap_governance 10 passed (new active 227-b state)",
+        "unit:agentic+provider governance 5 passed"
+      ],
+      "notes": "test_oap_governance.py is 10/10 against the NEW active 227-b state (the 227-a-order-format failures are resolved by activation, not by editing the immutable order or weakening the validator). Agentic-client (2) + provider governance (3) = 5 passed. No order/report weakened; coding agent remains never-merge-authority."
+    },
+    {
+      "id": "proposed-protected-live-plan",
+      "required": true,
+      "status": "verified_manual_review",
+      "evidence_level": "manual_review (PROPOSED plan artifact present and reviewed); live target proposed_unconfirmed",
+      "requirement": "A bounded PROPOSED protected live qualification plan exists with concrete (proposed, unconfirmed) target route/model/backend and numeric request/token/cost/time caps, strict zero-retry status, and a clearly separated relaxation proposal requiring separate human approval. Execution and human target authority are NOT_RUN.",
+      "verified_test_node_ids": [],
+      "receipt_refs": [
+        "plan:docs/verification/2026-11-20-hermes-opencode-chat.md (PROPOSED section)",
+        "protected:ceiling block in this JSON",
+        "ci:external_ci_a953_checkpoint block in this JSON (a953 checkpoint SUCCESS; final exact-head gate PENDING)"
+      ],
+      "notes": "PROPOSED (not current health/cred/route/deploy): LAN chain 10.8.132.55:18021 + qwen38-27b. Ceilings per profile: strict = 6 admitted requests (relaxed alt = 6 SETTLED); 1,000,000 tokens; EUR1.00 profile + EUR2.00 aggregate; 600s/1200s. ONE process, no outer retry. Strict zero-native-retry is UNSATISFIED (OpenCode SessionRetry hardcoded 5; no zero-retry override) and is an explicit human-decision RELAXATION PROPOSAL (relaxed alt: one process, no outer retry, 6 SETTLED requests, 1M tokens, EUR1/profile, 600s; admitted attempts may exceed 6) requiring separate human approval. Planned provider/route labels qualification-227-lan-chain/-chat are PLANNED only. Human target preference PENDING; execution + human target authority NOT_RUN. Never bypass the chain/port 18020/direct model; never pretend LocalCodingAdapter serves Chat. PROPOSED PLAN ARTIFACT is complete (verified_manual_review) after strict-unsatisfied/relaxation warnings; the strict zero-retry guarantee, human target authority, and protected execution remain separately UNSATISFIED/not_run (tracked in the protected block), so this record is not a preprotected.missing gap.",
+      "separately_unsatisfied": {
+        "strict_zero_native_retry_guarantee": "UNSATISFIED (source-proven: OpenCode SessionRetry hardcoded RETRY_MAX_RETRIES=5, no zero-retry override; Hermes same-provider retry path)",
+        "human_target_authority": "PENDING (root presents the human target-preference question; not an artifact gap)",
+        "protected_execution": "NOT_RUN (separate authorization/execution gate, not a preprotected gap)"
+      }
+    }
+  ]
 }
