@@ -336,10 +336,12 @@ default), and key pins have NO migration command. Each process loads
 exactly ONE identity per module id from its packaged DATA, so a key pin
 resolves only when its `fixture_sha256` matches the deployed revision;
 any pin/deployment digest mismatch fails that key's requests closed
-before admission. The exported module `version` and the `fixture_sha256`
-are both derived from that document's bytes, so a reviewed DATA-only
-revision needs only the new document bytes and a re-pin; only the module
-ID remains a source literal.
+before admission. The REGISTERED RUNTIME module `version` and the
+`fixture_sha256` are both derived from that document's bytes (the module's
+exported `VERSION` constant is a separate source literal that is not the
+runtime identity), so a reviewed DATA-only revision needs only the new
+document bytes and a re-pin; the module ID remains the one source
+constant.
 
 Two distinct file locations must not be conflated:
 
@@ -362,11 +364,24 @@ can stay on the SAME code and image:
    `fixture_sha256` and the version string it declares.
 2. Bind-mount that reviewed JSON **read-only** at its exact packaged
    path, identically on API, worker, and scheduler (all must see the
-   same bytes), e.g. add to each of those services:
-   `/path/to/hermes-0.22.5-chat.json:
-   /app/app/slaif_gateway/modules/clients/profiles/hermes-0.22.5-chat.json:ro`
-   (and the same for `opencode-1.19.3-chat.json`). The CLI runs in the
-   API service, so the API container carries the mount the CLI uses.
+   same bytes). Append to the `volumes` list of EACH of those three
+   services (do not replace their existing mounts); in YAML long syntax:
+
+   ```yaml
+   volumes:
+     # existing service volumes stay above these two lines
+     - type: bind
+       source: /path/to/hermes-0.22.5-chat.json
+       target: /app/app/slaif_gateway/modules/clients/profiles/hermes-0.22.5-chat.json
+       read_only: true
+     - type: bind
+       source: /path/to/opencode-1.19.3-chat.json
+       target: /app/app/slaif_gateway/modules/clients/profiles/opencode-1.19.3-chat.json
+       read_only: true
+   ```
+
+   The CLI runs in the API service, so the API container carries the
+   mount the CLI uses.
 3. **Recreate** the API, worker, and scheduler containers. Restart alone
    never changes bytes baked into the image; the read-only bind mount is
    what overrides them.
