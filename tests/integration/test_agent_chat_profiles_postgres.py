@@ -48,6 +48,7 @@ from slaif_gateway.modules.clients.agent_chat import (
 from slaif_gateway.schemas.key_configuration import KeyConfiguration
 from slaif_gateway.schemas.keys import (
     CreateGatewayKeyInput,
+    RevokeGatewayKeyInput,
     RotateGatewayKeyInput,
     UpdateGatewayKeyConfigurationInput,
 )
@@ -75,6 +76,7 @@ TEST_ONE_TIME_SECRET_KEY = "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY"
 RUNTIME_MODEL = "gpt-227-agent-chat-runtime"
 HERMES227_SVC_KEY_ENV = "HERMES227_SVC_KEY"
 FAKE_COMPATIBLE_UPSTREAM_KEY = "fake-227-hermes-compatible-upstream-key"
+FAKE_NATIVE_OPENAI_UPSTREAM_KEY = "fake-227-native-openai-upstream-key"
 
 _SEED_CACHE: dict[str, dict[str, uuid.UUID]] = {}
 
@@ -945,3 +947,410 @@ async def test_chat_pin_runtime_success_finalizes_pg_usage(
     # Note: the persisted ``key_hint`` intentionally retains the public key
     # prefix, so the ``sk-slaif-`` prefix absence is NOT asserted on the
     # persisted set; exact full-key and provider-secret absence are.
+
+
+# ---------------------------------------------------------------------------
+# Round 3: pre-upstream denials (pair gate, pin validation, auth state)
+# ---------------------------------------------------------------------------
+
+
+async def _provider_forwarding(database_url: str, provider: str) -> tuple[str, str]:
+    """(base_url, api_key_env_var) for a stored provider, read at runtime."""
+    engine = create_async_engine(database_url, future=True)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    try:
+        async with factory() as session:
+            row = await ProviderConfigsRepository(session).get_provider_config_by_provider(
+                provider
+            )
+            return row.base_url, row.api_key_env_var
+    finally:
+        await engine.dispose()
+
+
+async def _create_chat_key(
+    database_url: str,
+    seed: dict[str, uuid.UUID],
+    now: datetime,
+    *,
+    allowed_models: list[str],
+    chat_client_module: dict[str, str] | None,
+    note: str,
+) -> tuple[str, uuid.UUID]:
+    """Create a Chat-endpoint key; return (plaintext_key, gateway_key_id)."""
+    engine = create_async_engine(database_url, future=True)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    try:
+        async with factory() as session:
+            created = await _service(session).create_gateway_key(
+                CreateGatewayKeyInput(
+                    owner_id=seed["owner_id"],
+                    cohort_id=seed["cohort_id"],
+                    valid_from=now - timedelta(minutes=5),
+                    valid_until=now + timedelta(days=1),
+                    cost_limit_eur=Decimal("10.000000000"),
+                    token_limit_total=100_000,
+                    request_limit_total=100,
+                    allowed_models=allowed_models,
+                    allowed_endpoints=[CHAT_ENDPOINT],
+                    note=note,
+                    chat_client_module=chat_client_module,
+                )
+            )
+            await session.commit()
+            return created.plaintext_key, created.gateway_key_id
+    finally:
+        await engine.dispose()
+
+
+async def _inject_pin(database_url: str, key_id: uuid.UUID, pin_value: object) -> None:
+    engine = create_async_engine(database_url, future=True)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    try:
+        async with factory() as session:
+            row = await session.get(GatewayKey, key_id)
+            await _inject_chat_pin(session, row, pin_value)
+    finally:
+        await engine.dispose()
+
+
+def _deny_response(response, expected_code: str) -> None:
+    assert response.status_code == 400, response.text
+    assert response.json()["error"]["code"] == expected_code, response.text
+
+
+async def _assert_no_forwarding_no_accounting(
+    database_url: str, key_id: uuid.UUID, upstream
+) -> None:
+    """Denials must fail closed before upstream, admission, and accounting."""
+    assert len(upstream.calls) == 0
+    _, reservations, ledgers = await _runtime_state(database_url, key_id)
+    assert reservations == []
+    assert ledgers == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("module_id", [HERMES_MODULE_ID, OPENCODE_MODULE_ID])
+async def test_chat_pin_native_provider_pair_denied_before_admission(
+    migrated_postgres_url: str, respx_mock, monkeypatch, module_id: str
+) -> None:
+    """A valid Chat pin never resolves to the native 'openai' slug.
+
+    The TEST_MODEL seed route belongs to the native 'openai' provider; the
+    finite pair gate must reject before admission and before the upstream,
+    leaving no reservation or ledger row.
+    """
+    seed = await _seed(migrated_postgres_url)
+    base_url, env_var = await _provider_forwarding(migrated_postgres_url, "openai")
+    upstream = respx_mock.post(f"{base_url}/chat/completions").mock(
+        return_value=httpx.Response(200, json={"id": "must-not-be-called"})
+    )
+    monkeypatch.setenv(env_var, FAKE_NATIVE_OPENAI_UPSTREAM_KEY)
+
+    pin = _module_pin(module_id)
+    plaintext_key, key_id = await _create_chat_key(
+        migrated_postgres_url,
+        seed,
+        datetime.now(UTC),
+        allowed_models=[TEST_MODEL],
+        chat_client_module=pin,
+        note=f"227 agent Chat profile native pair denial {module_id}",
+    )
+
+    app = create_app(_runtime_settings(migrated_postgres_url))
+    with TestClient(app) as client:
+        response = client.post(
+            CHAT_ENDPOINT,
+            headers={"Authorization": f"Bearer {plaintext_key}"},
+            json={"model": TEST_MODEL, "messages": [{"role": "user", "content": "hi"}]},
+        )
+
+    _deny_response(response, "incompatible_client_server_pair")
+    await _assert_no_forwarding_no_accounting(migrated_postgres_url, key_id, upstream)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [("version", "0.0.0"), ("fixture_sha256", "0" * 64)],
+)
+async def test_chat_pin_stale_fixture_denied_before_admission(
+    migrated_postgres_url: str, respx_mock, monkeypatch, field: str, value: str
+) -> None:
+    """A stored pin whose fixture tuple no longer matches fails closed."""
+    seed = await _seed(migrated_postgres_url)
+    base_url, env_var = await _provider_forwarding(migrated_postgres_url, "openai")
+    upstream = respx_mock.post(f"{base_url}/chat/completions").mock(
+        return_value=httpx.Response(200, json={"id": "must-not-be-called"})
+    )
+    monkeypatch.setenv(env_var, FAKE_NATIVE_OPENAI_UPSTREAM_KEY)
+
+    pin = _module_pin(HERMES_MODULE_ID)
+    stale = dict(pin)
+    stale[field] = value
+    plaintext_key, key_id = await _create_chat_key(
+        migrated_postgres_url,
+        seed,
+        datetime.now(UTC),
+        allowed_models=[TEST_MODEL],
+        chat_client_module=None,
+        note=f"227 agent Chat profile stale fixture denial {field}",
+    )
+    await _inject_pin(migrated_postgres_url, key_id, stale)
+
+    app = create_app(_runtime_settings(migrated_postgres_url))
+    with TestClient(app) as client:
+        response = client.post(
+            CHAT_ENDPOINT,
+            headers={"Authorization": f"Bearer {plaintext_key}"},
+            json={"model": TEST_MODEL, "messages": [{"role": "user", "content": "hi"}]},
+        )
+
+    _deny_response(response, "chat_client_module_fixture_mismatch")
+    await _assert_no_forwarding_no_accounting(migrated_postgres_url, key_id, upstream)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "module_id",
+    ["not-a-registered-chat-module", "codex-0.149-responses-v1"],
+)
+async def test_chat_pin_unknown_module_denied_before_admission(
+    migrated_postgres_url: str, respx_mock, monkeypatch, module_id: str
+) -> None:
+    """Unknown IDs, including Responses-only modules, are not Chat pins."""
+    seed = await _seed(migrated_postgres_url)
+    base_url, env_var = await _provider_forwarding(migrated_postgres_url, "openai")
+    upstream = respx_mock.post(f"{base_url}/chat/completions").mock(
+        return_value=httpx.Response(200, json={"id": "must-not-be-called"})
+    )
+    monkeypatch.setenv(env_var, FAKE_NATIVE_OPENAI_UPSTREAM_KEY)
+
+    forged = {"id": module_id, "version": "1.0.0", "fixture_sha256": "f" * 64}
+    plaintext_key, key_id = await _create_chat_key(
+        migrated_postgres_url,
+        seed,
+        datetime.now(UTC),
+        allowed_models=[TEST_MODEL],
+        chat_client_module=None,
+        note="227 agent Chat profile unknown module denial",
+    )
+    await _inject_pin(migrated_postgres_url, key_id, forged)
+
+    app = create_app(_runtime_settings(migrated_postgres_url))
+    with TestClient(app) as client:
+        response = client.post(
+            CHAT_ENDPOINT,
+            headers={"Authorization": f"Bearer {plaintext_key}"},
+            json={"model": TEST_MODEL, "messages": [{"role": "user", "content": "hi"}]},
+        )
+
+    _deny_response(response, "unsupported_client_module")
+    await _assert_no_forwarding_no_accounting(migrated_postgres_url, key_id, upstream)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "pin_value",
+    [
+        {"id": HERMES_MODULE_ID},
+        {**_module_pin(HERMES_MODULE_ID), "extra": "x"},
+        {"id": 1, "version": "1", "fixture_sha256": "x"},
+        HERMES_MODULE_ID,
+    ],
+    ids=["missing-keys", "extra-key", "non-string-values", "not-a-mapping"],
+)
+async def test_chat_pin_malformed_metadata_denied_before_admission(
+    migrated_postgres_url: str, respx_mock, monkeypatch, pin_value: object
+) -> None:
+    """Only the exact {id, version, fixture_sha256} string tuple resolves."""
+    seed = await _seed(migrated_postgres_url)
+    base_url, env_var = await _provider_forwarding(migrated_postgres_url, "openai")
+    upstream = respx_mock.post(f"{base_url}/chat/completions").mock(
+        return_value=httpx.Response(200, json={"id": "must-not-be-called"})
+    )
+    monkeypatch.setenv(env_var, FAKE_NATIVE_OPENAI_UPSTREAM_KEY)
+
+    plaintext_key, key_id = await _create_chat_key(
+        migrated_postgres_url,
+        seed,
+        datetime.now(UTC),
+        allowed_models=[TEST_MODEL],
+        chat_client_module=None,
+        note="227 agent Chat profile malformed pin denial",
+    )
+    await _inject_pin(migrated_postgres_url, key_id, pin_value)
+
+    app = create_app(_runtime_settings(migrated_postgres_url))
+    with TestClient(app) as client:
+        response = client.post(
+            CHAT_ENDPOINT,
+            headers={"Authorization": f"Bearer {plaintext_key}"},
+            json={"model": TEST_MODEL, "messages": [{"role": "user", "content": "hi"}]},
+        )
+
+    _deny_response(response, "chat_client_module_metadata_invalid")
+    await _assert_no_forwarding_no_accounting(migrated_postgres_url, key_id, upstream)
+
+
+@pytest.mark.asyncio
+async def test_chat_absent_pin_default_behavior_unaffected(
+    migrated_postgres_url: str, respx_mock, monkeypatch
+) -> None:
+    """Absent pin keeps the existing default Chat dialect end to end.
+
+    The same native 'openai' seed that is denied to a Chat-pinned key still
+    serves the pinless key through the default path with normal PG
+    finalization.
+    """
+    seed = await _seed(migrated_postgres_url)
+    base_url, env_var = await _provider_forwarding(migrated_postgres_url, "openai")
+    monkeypatch.setenv(env_var, FAKE_NATIVE_OPENAI_UPSTREAM_KEY)
+    upstream = respx_mock.post(f"{base_url}/chat/completions").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl_227_default",
+                "object": "chat.completion",
+                "model": TEST_MODEL,
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {"role": "assistant", "content": "ok"},
+                        "finish_reason": "stop",
+                    }
+                ],
+                "usage": {
+                    "prompt_tokens": 5,
+                    "completion_tokens": 6,
+                    "total_tokens": 11,
+                },
+            },
+        )
+    )
+
+    plaintext_key, key_id = await _create_chat_key(
+        migrated_postgres_url,
+        seed,
+        datetime.now(UTC),
+        allowed_models=[TEST_MODEL],
+        chat_client_module=None,
+        note="227 agent Chat profile absent-pin default",
+    )
+
+    app = create_app(_runtime_settings(migrated_postgres_url))
+    with TestClient(app) as client:
+        response = client.post(
+            CHAT_ENDPOINT,
+            headers={"Authorization": f"Bearer {plaintext_key}"},
+            json={"model": TEST_MODEL, "messages": [{"role": "user", "content": "hi"}]},
+        )
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["id"] == "chatcmpl_227_default"
+    assert body["usage"]["total_tokens"] == 11
+
+    assert len(upstream.calls) == 1
+    headers = {
+        name.lower(): value for name, value in upstream.calls[0].request.headers.items()
+    }
+    assert headers.get("authorization") == f"Bearer {FAKE_NATIVE_OPENAI_UPSTREAM_KEY}"
+    assert plaintext_key not in upstream.calls[0].request.content.decode("utf-8", "replace")
+
+    gateway_key, reservations, ledgers = await _runtime_state(
+        migrated_postgres_url, key_id
+    )
+    assert len(reservations) == 1
+    assert len(ledgers) == 1
+    assert reservations[0].status == "finalized"
+    assert gateway_key.tokens_reserved_total == 0
+    assert gateway_key.requests_reserved_total == 0
+    assert gateway_key.cost_reserved_eur == Decimal("0")
+    assert gateway_key.tokens_used_total == 11
+    assert gateway_key.requests_used_total == 1
+    assert gateway_key.cost_used_eur == Decimal("0.000011")
+    assert (gateway_key.metadata_json or {}).get("chat_client_module") is None
+
+
+@pytest.mark.asyncio
+async def test_tampered_gateway_key_denied_before_upstream(
+    migrated_postgres_url: str, respx_mock, monkeypatch
+) -> None:
+    """A syntactically valid but digest-mismatched key is 401, pre-upstream."""
+    seed = await _seed(migrated_postgres_url)
+    base_url, env_var = await _provider_forwarding(migrated_postgres_url, "openai")
+    upstream = respx_mock.post(f"{base_url}/chat/completions").mock(
+        return_value=httpx.Response(200, json={"id": "must-not-be-called"})
+    )
+    monkeypatch.setenv(env_var, FAKE_NATIVE_OPENAI_UPSTREAM_KEY)
+
+    plaintext_key, key_id = await _create_chat_key(
+        migrated_postgres_url,
+        seed,
+        datetime.now(UTC),
+        allowed_models=[TEST_MODEL],
+        chat_client_module=None,
+        note="227 agent Chat profile tampered key denial",
+    )
+    chars = list(plaintext_key)
+    chars[-10] = "b" if chars[-10] != "b" else "a"
+    tampered_key = "".join(chars)
+
+    app = create_app(_runtime_settings(migrated_postgres_url))
+    with TestClient(app) as client:
+        response = client.post(
+            CHAT_ENDPOINT,
+            headers={"Authorization": f"Bearer {tampered_key}"},
+            json={"model": TEST_MODEL, "messages": [{"role": "user", "content": "hi"}]},
+        )
+
+    assert response.status_code == 401, response.text
+    assert response.json()["error"]["code"] == "gateway_key_invalid_digest", response.text
+    await _assert_no_forwarding_no_accounting(migrated_postgres_url, key_id, upstream)
+
+
+@pytest.mark.asyncio
+async def test_revoked_gateway_key_denied_before_upstream(
+    migrated_postgres_url: str, respx_mock, monkeypatch
+) -> None:
+    """A revoked key is 403 before admission, upstream, or accounting."""
+    seed = await _seed(migrated_postgres_url)
+    base_url, env_var = await _provider_forwarding(migrated_postgres_url, "openai")
+    upstream = respx_mock.post(f"{base_url}/chat/completions").mock(
+        return_value=httpx.Response(200, json={"id": "must-not-be-called"})
+    )
+    monkeypatch.setenv(env_var, FAKE_NATIVE_OPENAI_UPSTREAM_KEY)
+
+    plaintext_key, key_id = await _create_chat_key(
+        migrated_postgres_url,
+        seed,
+        datetime.now(UTC),
+        allowed_models=[TEST_MODEL],
+        chat_client_module=None,
+        note="227 agent Chat profile revoked key denial",
+    )
+    engine = create_async_engine(migrated_postgres_url, future=True)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    try:
+        async with factory() as session:
+            await _service(session).revoke_gateway_key(
+                RevokeGatewayKeyInput(
+                    gateway_key_id=key_id, reason="227 test revocation"
+                )
+            )
+            await session.commit()
+    finally:
+        await engine.dispose()
+
+    app = create_app(_runtime_settings(migrated_postgres_url))
+    with TestClient(app) as client:
+        response = client.post(
+            CHAT_ENDPOINT,
+            headers={"Authorization": f"Bearer {plaintext_key}"},
+            json={"model": TEST_MODEL, "messages": [{"role": "user", "content": "hi"}]},
+        )
+
+    assert response.status_code == 403, response.text
+    assert response.json()["error"]["code"] == "gateway_key_revoked", response.text
+    await _assert_no_forwarding_no_accounting(migrated_postgres_url, key_id, upstream)
