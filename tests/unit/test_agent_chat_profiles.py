@@ -379,6 +379,70 @@ class TestNeutralEngine:
 
 
 # ----------------------------------------------------------------------
+# Named tool_choice must reference the CURRENT request's declarations
+# ----------------------------------------------------------------------
+
+
+def _named_choice(name: str) -> dict[str, object]:
+    return {"type": "function", "function": {"name": name}}
+
+
+class TestNamedToolChoiceDeclarationMembership:
+    def setup_method(self):
+        self.module = AGENT_CHAT_CLIENT_MODULE_REGISTRY["hermes-0.22.5-chat-v1"]
+
+    @pytest.mark.parametrize(
+        "tools_value",
+        [None, [], "missing"],
+        ids=["tools_null", "tools_empty", "tools_absent"],
+    )
+    def test_named_choice_fails_closed_without_declarations(self, tools_value):
+        body = {"model": "m", "messages": [{"role": "user", "content": "x"}]}
+        if tools_value != "missing":
+            body["tools"] = tools_value
+        body["tool_choice"] = _named_choice("read_file")
+        with pytest.raises(AgentChatRequestError) as excinfo:
+            self.module.normalize_chat(body)
+        assert excinfo.value.error_code == "agent_chat_tool_choice_not_declared"
+
+    def test_named_choice_fails_for_undeclared_name(self):
+        body = {
+            "model": "m",
+            "messages": [{"role": "user", "content": "x"}],
+            "tools": [
+                {"type": "function", "function": {"name": "write_file"}},
+            ],
+            "tool_choice": _named_choice("read_file"),
+        }
+        with pytest.raises(AgentChatRequestError) as excinfo:
+            self.module.normalize_chat(body)
+        assert excinfo.value.error_code == "agent_chat_tool_choice_not_declared"
+
+    def test_named_choice_accepted_for_declared_name(self):
+        body = {
+            "model": "m",
+            "messages": [{"role": "user", "content": "x"}],
+            "tools": [
+                {"type": "function", "function": {"name": "read_file"}},
+                {"type": "function", "function": {"name": "write_file"}},
+            ],
+            "tool_choice": _named_choice("read_file"),
+        }
+        result = self.module.normalize_chat(body)
+        assert result.body["tool_choice"] == _named_choice("read_file")
+
+    @pytest.mark.parametrize("choice", ["auto", "none", "required"])
+    def test_string_choices_never_require_declarations(self, choice):
+        body = {
+            "model": "m",
+            "messages": [{"role": "user", "content": "x"}],
+            "tool_choice": choice,
+        }
+        result = self.module.normalize_chat(body)
+        assert result.body["tool_choice"] == choice
+
+
+# ----------------------------------------------------------------------
 # Demonstrated pre-checkpoint gap regressions
 # ----------------------------------------------------------------------
 

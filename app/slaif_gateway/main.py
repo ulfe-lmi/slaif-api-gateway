@@ -52,6 +52,7 @@ from slaif_gateway.api.openai_compat import router as openai_compat_router
 from slaif_gateway.config import Settings, get_settings
 from slaif_gateway.lifespan import build_lifespan
 from slaif_gateway.logging import configure_logging
+from slaif_gateway.modules.clients.agent_chat import bootstrap_agent_chat_client_modules
 from slaif_gateway.modules.clients.codex_0162 import bootstrap_codex_compatibility_profile
 from slaif_gateway.modules.servers.upstream_llm.profiles import bootstrap_upstream_llm_profiles
 from slaif_gateway.startup_warnings import emit_startup_configuration_warnings
@@ -65,6 +66,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     codex_profile = bootstrap_codex_compatibility_profile(
         app_settings.CODEX_COMPATIBILITY_PROFILE_FILE
     )
+    # Statically shipped Chat client modules register at import; the
+    # bootstrap call makes production startup independent of test import
+    # order (idempotent no-op under repeated same-config initialization).
+    bootstrap_agent_chat_client_modules()
     upstream_llm_profiles = bootstrap_upstream_llm_profiles(app_settings.UPSTREAM_LLM_PROFILES_FILE)
 
     @asynccontextmanager

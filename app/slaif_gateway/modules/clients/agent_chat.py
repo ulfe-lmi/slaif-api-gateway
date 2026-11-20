@@ -507,7 +507,10 @@ class _DefaultAgentChatClientModule:
                 error_code="agent_chat_tool_choice_invalid",
                 param="tool_choice.function.name",
             )
-        if declared_tool_names is not None and name not in declared_tool_names:
+        # Absent/null tools mean NO functions are declared in this request,
+        # so a named choice can never be satisfied and fails closed.
+        declared = declared_tool_names if declared_tool_names is not None else frozenset()
+        if name not in declared:
             raise AgentChatRequestError(
                 "A named 'tool_choice' must reference a tool declared in this request.",
                 error_code="agent_chat_tool_choice_not_declared",
@@ -957,3 +960,19 @@ def agent_chat_profile_metadata(module: AgentChatClientModule) -> dict[str, str]
 def build_agent_chat_client_module(data: AgentChatProfileData) -> AgentChatClientModule:
     """Bind one validated profile document to the neutral engine."""
     return _DefaultAgentChatClientModule(compile_agent_chat_profile_spec(data))
+
+
+def bootstrap_agent_chat_client_modules() -> None:
+    """One-shot process bootstrap: import the statically shipped Chat modules.
+
+    Shared factory boundary used by the HTTP app factory and the operator
+    CLI key commands, mirroring ``bootstrap_codex_compatibility_profile``.
+    Importing a shipped harness module performs its source-literal
+    registration into the finite Chat registry as a side effect; repeated
+    same-config initialization is an idempotent no-op. The imports below
+    are static source literals - there is no dynamic import of
+    operator-supplied module paths, no plugin loader, and no executable
+    rule.
+    """
+    # Static shipped Chat harness bindings (registration side effect):
+    from slaif_gateway.modules.clients import hermes_0225_chat as _hermes_0225_chat  # noqa: F401

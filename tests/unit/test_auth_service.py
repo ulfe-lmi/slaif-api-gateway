@@ -416,3 +416,120 @@ async def test_external_tool_fenced_key_raises_fence_active_error(fence_state: s
     assert exc_info.value.error_type == "rate_limit_error"
     assert exc_info.value.error_code == "external_tool_fence_active"
     assert repo.lookup_calls == ["public1234abcd"]
+
+
+
+# ----------------------------------------------------------------------
+# Chat client-module pin projection (227-a): the EXACT stored value
+# ----------------------------------------------------------------------
+
+
+def _valid_chat_pin() -> dict[str, str]:
+    from slaif_gateway.modules.clients.agent_chat import agent_chat_profile_metadata
+    from slaif_gateway.modules.clients.hermes_0225_chat import (
+        HERMES_0225_CHAT_CLIENT_MODULE,
+    )
+
+    return dict(agent_chat_profile_metadata(HERMES_0225_CHAT_CLIENT_MODULE))
+
+
+def _chat_auth(metadata: dict[str, object]) -> GatewayAuthService:
+    return GatewayAuthService(
+        settings=Settings(
+            TOKEN_HMAC_SECRET_V1="h" * 48, GATEWAY_KEY_ACCEPTED_PREFIXES="sk-slaif-"
+        ),
+        gateway_keys_repository=_FakeGatewayKeysRepository(
+            _FakeGatewayKey(
+                id=uuid.uuid4(),
+                owner_id=uuid.uuid4(),
+                public_key_id="public1234abcd",
+                token_hash=hmac_sha256_token(
+                    f"sk-slaif-public1234abcd.{LONG_SECRET}", "h" * 48
+                ),
+                hmac_key_version=1,
+                status="active",
+                valid_from=datetime.now(UTC) - timedelta(minutes=5),
+                valid_until=datetime.now(UTC) + timedelta(minutes=30),
+                metadata_json=metadata,
+            )
+        ),
+    )
+
+
+@pytest.mark.asyncio
+async def test_chat_pin_absent_projects_none_default() -> None:
+    service = _chat_auth({})
+    result = await service.authenticate_authorization_header(
+        f"Bearer sk-slaif-public1234abcd.{LONG_SECRET}"
+    )
+    assert result.chat_client_module is None
+
+
+@pytest.mark.asyncio
+async def test_chat_pin_stored_null_projects_none_default() -> None:
+    service = _chat_auth({"chat_client_module": None})
+    result = await service.authenticate_authorization_header(
+        f"Bearer sk-slaif-public1234abcd.{LONG_SECRET}"
+    )
+    assert result.chat_client_module is None
+
+
+@pytest.mark.asyncio
+async def test_chat_pin_exact_valid_projects_copied_pin() -> None:
+    pin = _valid_chat_pin()
+    service = _chat_auth({"chat_client_module": pin})
+    result = await service.authenticate_authorization_header(
+        f"Bearer sk-slaif-public1234abcd.{LONG_SECRET}"
+    )
+    assert result.chat_client_module == pin
+    assert result.chat_client_module is not pin  # shallow copy, no aliasing
+    # The projected pin still resolves to the registered module.
+    from slaif_gateway.modules.clients.agent_chat import resolve_chat_client_module
+
+    assert (
+        resolve_chat_client_module(result.chat_client_module).module_id
+        == "hermes-0.22.5-chat-v1"
+    )
+
+
+@pytest.mark.asyncio
+async def test_chat_pin_malformed_extra_fields_stay_invalid() -> None:
+    # A malformed PRESENT value is preserved as-is: sanitization must never
+    # repair it into a valid pin, and unknown/prompt/secret-shaped extras
+    # survive projection so the strict resolver fails closed.
+    malformed = {
+        **_valid_chat_pin(),
+        "messages": [{"role": "user", "content": "synthetic"}],
+        "api_key": "sk-synthetic-not-a-real-key",
+    }
+    service = _chat_auth({"chat_client_module": malformed})
+    result = await service.authenticate_authorization_header(
+        f"Bearer sk-slaif-public1234abcd.{LONG_SECRET}"
+    )
+    assert result.chat_client_module == malformed
+    from slaif_gateway.modules.clients.agent_chat import (
+        AgentChatModuleSelectionError,
+        resolve_chat_client_module,
+    )
+
+    with pytest.raises(AgentChatModuleSelectionError) as excinfo:
+        resolve_chat_client_module(result.chat_client_module)
+    assert excinfo.value.error_code == "chat_client_module_metadata_invalid"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("raw", ["not-a-mapping", ["id"], True])
+async def test_chat_pin_non_dict_values_preserved_for_fail_closed(raw) -> None:
+    service = _chat_auth({"chat_client_module": raw})
+    result = await service.authenticate_authorization_header(
+        f"Bearer sk-slaif-public1234abcd.{LONG_SECRET}"
+    )
+    assert result.chat_client_module == raw
+    from slaif_gateway.modules.clients.agent_chat import (
+        AgentChatModuleSelectionError,
+        resolve_chat_client_module,
+    )
+
+    with pytest.raises(AgentChatModuleSelectionError) as excinfo:
+        resolve_chat_client_module(result.chat_client_module)
+    assert excinfo.value.error_code == "chat_client_module_metadata_invalid"
