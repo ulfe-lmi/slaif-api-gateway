@@ -4794,14 +4794,18 @@ def responses_codex_client_tools_requested(body: Mapping[str, Any]) -> bool:
 
 
 def responses_codex_encrypted_reasoning_replay_requested(body: Mapping[str, Any]) -> bool:
-    """Detect a prior encrypted reasoning item being replayed as request input."""
+    """Detect opaque replay, not a provider's empty visible-reasoning marker.
+
+    Malformed non-null values still trigger the independent capability gate
+    and remain subject to item validation; do not use a truthiness test.
+    """
 
     input_value = body.get("input")
     return isinstance(input_value, list) and any(
         isinstance(item, Mapping)
         and item.get("type") == "reasoning"
         and "encrypted_content" in item
-        and item.get("encrypted_content") is not None
+        and item.get("encrypted_content") not in (None, "")
         for item in input_value
     )
 

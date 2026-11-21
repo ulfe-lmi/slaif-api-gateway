@@ -89,7 +89,7 @@ reasoning dialect on its exact Local pair. A reasoning item may have an absent
 or null ID, bounded `summary`, and bounded visible `content` containing only
 the reviewed text-part types; the gateway never fabricates an ID. An absent or
 null `encrypted_content` value is visible state, not encrypted replay. A
-non-null encrypted value remains on the independent ID-bound encrypted-replay
+nonempty encrypted value remains on the independent ID-bound encrypted-replay
 path, and OpenAI/default/0.147 clients retain their existing strict rules.
 
 This document defines the RC2-beta support boundary for Responses API work.
@@ -1340,6 +1340,22 @@ candidate extraction therefore exclude these items from HMAC ownership lookup,
 consistent with the streaming path, which never persists encrypted-replay
 references for visible reasoning. The existing content shape, size, capability,
 and input-accounting checks still apply.
+
+The request detector and qualified visible-reasoning stream validator use the
+same distinction: absent, null, and empty-string ciphertext do not activate
+opaque replay. A retained empty marker from one backend must not cause another
+backend's null marker to be rejected when reasoning completes. For profiles
+that explicitly enable bounded visible reasoning, the completed item remains
+visible even when other history has enabled encrypted replay; its content,
+identifier, status and lifecycle bounds still apply. Malformed ciphertext
+types are rejected, and visible items never create opaque replay references.
+The original input and output representations are preserved.
+
+This permits changing between allowed model routes with retained visible
+reasoning, including the V100/llama.cpp empty-string and A100/vLLM null
+representations. SDK/PostgreSQL regressions exercise both switch directions
+and switching back, using mocked provider HTTP. Individual route smoke tests
+alone do not establish this mixed-history behavior.
 
 Nonempty encrypted reasoning, compaction, and tool-call references retain their
 existing ownership and route checks. This classification repair can unblock a

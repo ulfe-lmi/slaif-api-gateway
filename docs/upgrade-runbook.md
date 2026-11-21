@@ -275,6 +275,17 @@ validators may still require a code change.
 
 ### Codex 226 declaration-history profile upgrade (revision 15 -> 16)
 
+Visible-reasoning model-switch correction: retained empty-string ciphertext
+must not activate opaque replay, and a qualified backend's null/omitted
+ciphertext remains visible at stream completion. See
+[the classification contract](responses-compatibility.md#visible-reasoning-is-not-an-opaque-replay-reference).
+Deploy a rebuilt engine and drain/restart all API and worker processes. No
+schema, preset file/digest, key pin, key material, route limit or quota change
+is required. The correction preserves input/output fields; existing
+conversations do not need manual edits. Rolling back the engine restores the
+old mixed-history stream rejection; genuine encrypted replay retains its
+existing provider/route/model restrictions in both versions.
+
 Engine correction for optional result identities: revision 16's pinned
 protocol already defines optional `name` on function/custom outputs and
 `namespace` on function outputs. The corrected engine validates these against

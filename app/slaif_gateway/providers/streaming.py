@@ -1945,15 +1945,16 @@ def _validate_reasoning_item(
         allow_visible_reasoning
         and encrypted_replay
         and event_type == "response.output_item.done"
-        and item.get("encrypted_content") == ""
+        and item.get("encrypted_content") in (None, "")
     ):
-        fields = {"type", "id", "summary", "content", "encrypted_content"}
-        if set(item) not in (fields, fields | {"status"}):
+        fields = {"type", "id", "summary", "content"}
+        if not fields.issubset(item) or not _only_fields(item, fields | {"status", "encrypted_content"}):
             return None
         if "status" in item and item["status"] != "completed":
             return None
-        # Empty ciphertext is visible text, never an authenticated encrypted
-        # replay candidate. Reuse the bounded visible-content validator.
+        # Missing/null/empty ciphertext all mean visible text, including when
+        # other history enabled opaque replay. Keep the profile gate, content
+        # bounds and lifecycle checks; this item creates no replay authority.
         return _validate_reasoning_item(item, event_type=event_type, encrypted_replay=False)
     if encrypted_replay:
         if event_type == "response.output_item.done":
@@ -1977,7 +1978,7 @@ def _validate_reasoning_item(
             if not _optional_item_status(item):
                 return None
             encrypted_value = item.get("encrypted_content")
-            if isinstance(encrypted_value, str) and encrypted_value:
+            if encrypted_value not in (None, ""):
                 return None
             encrypted_bytes = 0
     else:
@@ -1988,7 +1989,7 @@ def _validate_reasoning_item(
         if not _optional_item_status(item):
             return None
         encrypted_value = item.get("encrypted_content")
-        if isinstance(encrypted_value, str) and encrypted_value:
+        if encrypted_value not in (None, ""):
             return None
         encrypted_bytes = 0
     summary = item.get("summary")

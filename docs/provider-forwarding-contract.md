@@ -16,6 +16,14 @@ replay ownership, quotas, and accounting remain code-enforced. Presets cannot
 override core fields or teach a backend a new transport. See
 [client compatibility presets](client-compatibility-presets.md).
 
+For qualified Codex visible reasoning, omitted/null/empty `encrypted_content`
+are empty representations, not opaque replay authority. Request detection
+and completed-reasoning SSE validation agree on this distinction across model
+routes without rewriting provider fields. Malformed types and nonempty
+ciphertext remain subject to their existing validation and independent
+capability/ownership rules. See
+[the visible-reasoning contract](responses-compatibility.md#visible-reasoning-is-not-an-opaque-replay-reference).
+
 This document describes exactly how implemented `/v1/chat/completions`,
 standalone `/v1/audio/*`, `/v1/embeddings`, `POST /v1/realtime/client_secrets`,
 and the current `/v1/responses` subset are forwarded to upstream providers. It
