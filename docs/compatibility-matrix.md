@@ -27,6 +27,12 @@ Shipped 0.16x presets (0.162.1 through 0.167.1) are exact data
 profiles, not a broad client or production-certification claim; packaged
 revision 8 remains the frozen fallback.
 
+Qualified visible-reasoning profiles preserve absent/null/empty ciphertext
+across permitted model switches without activating opaque replay. The
+[request and stream classification](responses-compatibility.md#visible-reasoning-is-not-an-opaque-replay-reference)
+has bidirectional SDK/PostgreSQL regression coverage with mocked provider SSE;
+nonempty encrypted references retain their existing ownership and route bounds.
+
 The positional-history feature in revision 16 also accepts the pinned
 protocol's [optional tool-result identities](responses-compatibility.md#optional-codex-tool-result-identities),
 checked against each historical call and translated by its selected adapter.
@@ -56,7 +62,7 @@ Codex 0.149 visible reasoning is a version-owned request dialect on the exact
 `codex-0.149-responses-v1 -> local-coding-v1` pair. Reasoning IDs may be
 absent or explicitly null without fabrication; summary and visible content use
 only the source-derived bounded text shapes and limits. Absent/null
-`encrypted_content` is visible state, while non-null encrypted reasoning keeps
+`encrypted_content` is visible state, while nonempty encrypted reasoning keeps
 the independent ID-bound capability gate. Other clients, servers, and hosted
 routes retain their existing strict behavior. This is source-derived/mock
 regression evidence, not protected or second-turn acceptance.
