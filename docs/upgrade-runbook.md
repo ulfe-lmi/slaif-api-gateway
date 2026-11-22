@@ -6,6 +6,13 @@
 
 ## Before changing a deployment
 
+For large Codex image histories, align both ingress and route adapter byte
+ceilings using the [image-history payload runbook](runbooks/codex-image-payload-size.md).
+The six local Qwen adapter ceilings can be raised from the inherited 64 MiB
+to 128 MiB through existing audited route configuration. That route-only change
+requires no rebuilt image, process restart, schema migration or key rotation;
+the independently configured image allowance and Nginx limits still apply.
+
 The [Codex model-switching update](codex-model-switching.md) changes replay
 compatibility in the engine: verified same-key client-tool history is portable,
 while opaque reasoning/compaction remains source-bound. Deploy the reviewed
