@@ -10,7 +10,6 @@ from slaif_gateway.modules.agent_chat_profile_data import AgentChatProfileDataEr
 from slaif_gateway.modules.clients.codex_0149 import (
     CODEX_0149_POLICY_SPEC,
     codex_0149_declared_tool_taxonomy,
-    codex_0149_zero_argument_function_names,
 )
 from slaif_gateway.modules.clients.opencode_1193_responses import (
     OPENCODE_1193_RESPONSES_CLIENT_MODULE as MODULE,
@@ -377,7 +376,6 @@ def test_normalize_rejects_field_shapes():
 
 
 def test_normalize_rejects_input_items():
-    developer = {"role": "developer", "content": "You are a bounded local tool harness."}
     cases = [
         lambda b: b.update({"input": ["str"]}),
         lambda b: b.update({"input": [{"role": "assistant", "content": "x"}]}),
