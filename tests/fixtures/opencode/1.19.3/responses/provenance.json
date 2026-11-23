@@ -1,0 +1,54 @@
+{
+  "profile": {
+    "client_module_id": "opencode-1.19.3-responses-v1",
+    "client_module_version": "1",
+    "client_name": "OpenCode",
+    "client_version": "1.19.3",
+    "distribution": "opencode-linux-x64-baseline (glibc single-file executable)",
+    "distribution_version": "1.19.3",
+    "release": "https://github.com/anomalyco/opencode/releases/tag/v1.19.3",
+    "archive_sha256": "531cff2441129c30f0edd5878af494108ad07f5feb46d7ee29a2a5b830a5765d",
+    "executable_sha256": "179ca421d61eefeadfa0c50e084a6e79c1623734732f0f4593f81ccfd3ab7ee9",
+    "responses_provider_package": "@ai-sdk/openai (bundled in pinned executable; package entry 3.0.88, nested copy 3.0.84; no runtime npm install observed)",
+    "ai_sdk_version": "6.0.168",
+    "observed_user_agent": "opencode/1.19.3 ai-sdk/provider-utils/4.0.40 runtime/bun/1.3.14",
+    "observed_runtime": "bun 1.3.14",
+    "provider_utils_note": "the pinned executable bundles @ai-sdk/provider-utils copies; the UA reflects the copy that handled the request (Chat capture observed 4.0.23, this Responses capture 4.0.40). No attribution of a specific bundled copy to @ai-sdk/openai is claimed.",
+    "wire_api": "responses",
+    "version_command_observed": "1.19.3",
+    "source_tag": "v1.19.3",
+    "source_commit": "e3c4eb242585dcd77be1a867391b7c25fd47ce52",
+    "source_commit_note": "direct commit of the official v1.19.3 release tag (type: commit), gh api repos/anomalyco/opencode/git/ref/tags/v1.19.3; same pinned commit as the Chat capture",
+    "packaged_profile_digest": null,
+    "packaged_profile_digest_state": "pending primary packaging; no schema_version 1 profile JSON exists yet for this module (fixtures, dossier, and verifier feed primary packaging)",
+    "vocabulary_decision": "v1 ships the 9-tool denied-web-baseline reviewed capture vocabulary; webfetch (configuration-dependent, observed only under the permissive task variant in the Chat capture) is outside v1 and requires a reviewed DATA revision with a new digest"
+  },
+  "capture_environment": {
+    "captured_utc_date": "2026-11-23",
+    "mode": "pinned executable against task-owned 127.0.0.1 loopback fake (Responses wire); isolated task-owned HOME/XDG dirs; task-owned config with synthetic bearer bound to a custom provider entry with explicit npm=@ai-sdk/openai; --pure; bounded 240s timeouts",
+    "user_saved_profiles_touched": false,
+    "user_credentials_read": false,
+    "production_provider_key_used": false,
+    "external_plugins": "disabled via --pure",
+    "config_variants": [
+      {
+        "label": "denied-web-baseline",
+        "permission": {
+          "webfetch": "deny"
+        },
+        "observed_tool_count": 9,
+        "note": "same 9-tool baseline as the Chat capture; verifier report label 'denyweb'"
+      }
+    ],
+    "configuration_difference_note": "single config variant captured for the Responses wire; the custom provider entry must name npm=@ai-sdk/openai explicitly (the built-in 'openai' provider entry selects the OpenAI/Responses default path and would not bind this capture's model selector)."
+  },
+  "privacy": {
+    "raw_content_retained": false,
+    "provider_call_performed": false,
+    "raw_ids_retained": false,
+    "credentials_retained": false,
+    "home_workspace_paths_retained": false
+  },
+  "structural_fixture_digest_rule": "sha256 over, for each structural_*.json in tests/fixtures/opencode/1.19.3/responses sorted by filename: filename + NUL + file bytes (provenance.json excluded)",
+  "structural_fixture_sha256": "5e8eb635b714fb26eccf35fac7ffdc8c9b7f8f8c59030b79138ac10ec131d2b9"
+}

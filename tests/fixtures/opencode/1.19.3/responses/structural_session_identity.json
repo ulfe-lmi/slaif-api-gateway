@@ -1,0 +1,61 @@
+{
+  "variant": "session_hint_headers",
+  "config_variant": "denied-web-baseline",
+  "endpoint": "POST /v1/responses",
+  "candidate_fields": {
+    "location": "request headers",
+    "names": [
+      "x-opencode-session-id",
+      "x-session-affinity",
+      "x-session-id"
+    ],
+    "present_on_every_request": true,
+    "three_values_equal_per_request": true,
+    "value_retention": "sha256_8 only; raw values not retained",
+    "value_format_note": "raw header values were not retained; no format/length claim is made for the Responses capture"
+  },
+  "experiments": {
+    "A": {
+      "probe": "toolloop",
+      "requests": {
+        "A1": {
+          "session_value_sha256_8": "5a080c0a"
+        },
+        "A2": {
+          "session_value_sha256_8": "5a080c0a"
+        }
+      },
+      "note": "two same-session requests of the toolloop probe"
+    },
+    "B": {
+      "probe": "reasoning",
+      "requests": {
+        "B1": {
+          "session_value_sha256_8": "1030d181"
+        }
+      },
+      "note": "first request of the reasoning-replay probe (fresh session)"
+    },
+    "C": {
+      "probe": "text",
+      "requests": {
+        "C1": {
+          "session_value_sha256_8": "2c9610a3"
+        }
+      },
+      "note": "single request of the text probe (fresh session)"
+    }
+  },
+  "predicates": {
+    "A1_equals_A2": true,
+    "A1_distinct_from_B1": true,
+    "distinct_across_all_probes": true,
+    "suitable_as_transient_session_hint": true,
+    "rejected_as_authority": true
+  },
+  "authority_note": "client-generated session hints observed on the wire; the capture records them only as stability/distinctness predicates with sha256-8. No gateway authority, admission, routing, or settlement claim is made from these headers.",
+  "privacy": {
+    "raw_content_retained": false,
+    "provider_call_performed": false
+  }
+}

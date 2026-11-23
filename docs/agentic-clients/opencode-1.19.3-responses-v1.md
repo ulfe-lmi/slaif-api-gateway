@@ -1,0 +1,122 @@
+# OpenCode 1.19.3 native Responses capture — `opencode-1.19.3-responses-v1` (preprotected candidate)
+
+Objective 228-a, secondary-owned OpenCode Responses binding. This dossier
+records the native-client loopback capture from that preprotected candidate
+stage. That loopback evidence is NOT a live qualification, Gateway/
+PostgreSQL settlement, or production claim. The protected gate is `not_run`,
+the packaged profile DATA is pending primary packaging, and no
+`PREPROTECTED_READY` claim is made while either gap remains.
+
+## 1. Pinned client identity
+
+| Fact | Value |
+| --- | --- |
+| Client | OpenCode 1.19.3 (`anomalyco/opencode`) |
+| Release tag / direct commit | `v1.19.3` / `e3c4eb242585dcd77be1a867391b7c25fd47ce52` (tag type: commit, via `gh api repos/anomalyco/opencode/git/ref/tags/v1.19.3`; same pinned commit as the Chat capture) |
+| Distribution | glibc single-file executable, `opencode-linux-x64-baseline` |
+| Archive SHA-256 | `531cff2441129c30f0edd5878af494108ad07f5feb46d7ee29a2a5b830a5765d` |
+| Executable SHA-256 (pinned) | `179ca421d61eefeadfa0c50e084a6e79c1623734732f0f4593f81ccfd3ab7ee9` |
+| Responses provider package | `@ai-sdk/openai` bundled in the pinned executable (package entry 3.0.88, nested copy 3.0.84; no runtime npm install observed) |
+| ai SDK version | 6.0.168 |
+| Observed runtime / UA | bun 1.3.14 / `opencode/1.19.3 ai-sdk/provider-utils/4.0.40 runtime/bun/1.3.14` (the executable bundles multiple provider-utils copies; the UA reflects the copy that handled the request — the Chat capture observed 4.0.23) |
+| Wire API | `responses` (`/v1/responses`, always streaming in `run` mode; nonstreaming never observed) |
+
+## 2. Packaged profile DATA
+
+- **Status: pending primary packaging.** No `schema_version 1` profile JSON
+  and no client module exist yet for `opencode-1.19.3-responses-v1`; this
+  dossier, the sanitized fixtures, and the verifier feed primary packaging.
+- Wire facts proven by this capture (for the future DATA, not claims about
+  packaged behavior): 9 top-level request fields
+  (`include, input, max_output_tokens, model, reasoning, store, stream,
+  tool_choice, tools`); nested `reasoning: {effort: "xhigh"}` (not a
+  top-level `reasoning_effort` string); `max_output_tokens` 32000 emitted
+  from a configured 32768 limit; `store: false`; `stream: true`;
+  `tool_choice: "auto"`; `include: ["reasoning.encrypted_content"]`;
+  flat tool declarations with `strict: true` on all 9 (proven difference vs
+  the Chat wire's nested declarations without `strict`); typeless input
+  message items (`role` + `content`, no `type`/`id`/`status`); ID-less
+  continuation replay of `reasoning`, `function_call`, and
+  `function_call_output` items (verbatim `encrypted_content` replay, no
+  `id`/`status` keys).
+- Vocabulary: the 9-tool **denied-web-baseline** reviewed capture
+  (`bash, edit, glob, grep, read, skill, task, todowrite, write`).
+  `webfetch` is configuration-dependent and deliberately **outside v1**
+  until a reviewed DATA revision with a new digest. Tool names are
+  client-local function declarations and grant no hosted, routing, or
+  execution authority.
+
+## 3. Capture and verification method
+
+- Pinned executable against the task-owned `127.0.0.1` loopback Responses
+  fake (`scripts/verify_agent_chat/loopback_responses_fake.py`), isolated
+  task-owned HOME/XDG, task-owned config with a synthetic bearer bound to a
+  custom provider entry with explicit `npm=@ai-sdk/openai` (the built-in
+  `openai` provider entry must not be used; it selects a different default
+  path), `--pure` (external integrations disabled), bounded 240 s timeouts.
+  No provider, no user profile, no real key, no network beyond loopback.
+- Structural capture facts (sanitized):
+  `tests/fixtures/opencode/1.19.3/responses/` (structural digest
+  `5e8eb635b714fb26eccf35fac7ffdc8c9b7f8f8c59030b79138ac10ec131d2b9`
+  over the four `structural_*.json` files); public provenance in
+  `provenance.json`. Raw content, raw IDs, and credentials are not
+  retained; session values appear only as sha256-8.
+- Verifier:
+  `scripts/verify_agent_chat/verify_opencode_responses_capture.py`
+  (pinned binary identity enforced; bounded fake readiness; per-probe
+  structural facts captured before journal deletion; cross-request
+  session-stability predicates with 8-hex hashes only; owned-process
+  termination; default private artifact cleanup verified before the report
+  is written).
+- Final run (2026-11-23T11:25:50Z, run root cleaned and verified):
+  `all_pass=true`, three probes, ~18.1 s wall total:
+  - text: exit 0, 5.828 s, 1 request, exact final text;
+  - toolloop: exit 0, 5.78 s, 2 requests (session sha8 `5a080c0a` stable),
+    native `read` tool call correlated 1/1, final 38 B exactly equal to the
+    38 B unpredictable marker (`correlated_tool_result`); the wrapped read
+    output (193 B) is not raw file bytes and not byte-equal to the marker;
+  - reasoning replay: exit 0, 5.527 s, 2 requests (session sha8
+    `1030d181` stable), continuation input 5 items
+    (`[null, null, reasoning, function_call, function_call_output]`),
+    reasoning item keys `[encrypted_content, summary, type]` with no
+    `id`/`status`, 64-byte synthetic encrypted content replayed verbatim
+    (`equals_issued`, sha8 `51111738`).
+- SSE consumption: the client consumed the native `@ai-sdk/openai` 3.x
+  event vocabulary without error (envelope keys `type`,
+  `sequence_number`, `response_id`; reasoning summary part/delta events;
+  `response.completed` with `usage.input_tokens/output_tokens/total_tokens`).
+
+## 4. Evidence boundary (what this is and is not)
+
+- **Is**: actual native OpenCode 1.19.3 client behavior against a bounded
+  fake peer on the Responses wire — streaming SSE consumption, native
+  tool-loop execution with call/result correlation, encrypted-reasoning
+  continuation replay, envelope shape, session-hint behavior.
+- **Is not**: Gateway admission, key policy/quota reservation/finalization,
+  or PostgreSQL settlement. The loopback fake is a synthetic peer; no
+  gateway request was processed and no ledger row exists. Fake-SDK usage
+  must never be cited as settlement evidence.
+- **Protected gate**: `not_run`. No live LAN or provider run occurred for
+  the Responses wire in 228-a (preprotected candidate stage only). No
+  `PREPROTECTED_READY` claim is made while the module DATA is unpackaged
+  and the protected gate remains `not_run`.
+
+## 5. Known limits and follow-ups
+
+- The captured `encrypted_content` is synthetic (64 B base64, fake-issued);
+  no format, length, or codec claim about real provider encrypted reasoning
+  is made.
+- Nonstreaming Responses was never emitted by the client in `run` mode;
+  this capture claims streaming only.
+- Session-hint headers (`x-opencode-session-id`, `x-session-affinity`,
+  `x-session-id`; three equal values per request) are client-generated
+  hints: stability/distinctness predicates only, rejected as authority.
+- Retry posture: the strict zero-retry rule is a separate concern from the
+  human-approved 100-LAN-launch stock-retry exception used in 227-c; the
+  native OpenCode client retry constant was pinned at 5 in source
+  inspection, and a zero-native-retry configuration is unproven/unsupported
+  in stock. Any future live Responses plan must reference the 227-c totals
+  (5 launches / 41,021 tokens / EUR 0.041021) without resetting them.
+- Primary owns the packaged profile DATA, the module binding, the combined
+  qualification, and the consolidated verification record; this dossier's
+  evidence is pre-integration.
