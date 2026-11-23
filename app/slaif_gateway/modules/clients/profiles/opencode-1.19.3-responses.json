@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "id": "opencode-1.19.3-responses-v1",
+  "version": "1",
+  "client": {
+    "name": "opencode",
+    "distribution_version": "1.19.3",
+    "source_tag": "v1.19.3",
+    "source_commit": "e3c4eb242585dcd77be1a867391b7c25fd47ce52",
+    "sdk_name": "@ai-sdk/openai",
+    "sdk_version": "3.0.88",
+    "wire_api": "responses"
+  },
+  "dialect": {
+    "reasoning_efforts": ["minimal", "low", "medium", "high", "xhigh"],
+    "tools": {
+      "names": ["bash", "edit", "glob", "grep", "read", "skill", "task", "todowrite", "write"],
+      "max_declarations": 32,
+      "max_description_bytes": 20000,
+      "max_schema_depth": 8,
+      "max_schema_properties": 64,
+      "max_declaration_bytes": 65536
+    },
+    "tool_call": {"id_min_length": 1, "id_max_length": 128, "arguments_max_bytes": 65536}
+  }
+}
