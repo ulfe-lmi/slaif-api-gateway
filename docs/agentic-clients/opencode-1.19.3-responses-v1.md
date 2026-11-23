@@ -57,7 +57,7 @@ the packaged profile DATA is pending primary packaging, and no
   No provider, no user profile, no real key, no network beyond loopback.
 - Structural capture facts (sanitized):
   `tests/fixtures/opencode/1.19.3/responses/` (structural digest
-  `5e8eb635b714fb26eccf35fac7ffdc8c9b7f8f8c59030b79138ac10ec131d2b9`
+  `b8d6f6c3ca61806b68d980286144a870e71099c36a0713c07ca85b99e16639b6`
   over the four `structural_*.json` files); public provenance in
   `provenance.json`. Raw content, raw IDs, and credentials are not
   retained; session values appear only as sha256-8.
@@ -68,19 +68,40 @@ the packaged profile DATA is pending primary packaging, and no
   session-stability predicates with 8-hex hashes only; owned-process
   termination; default private artifact cleanup verified before the report
   is written).
-- Final run (2026-11-23T11:25:50Z, run root cleaned and verified):
-  `all_pass=true`, three probes, ~18.1 s wall total:
-  - text: exit 0, 5.828 s, 1 request, exact final text;
-  - toolloop: exit 0, 5.78 s, 2 requests (session sha8 `5a080c0a` stable),
+- Corrected final run (2026-11-23T12:04:07Z, run root cleaned and
+  verified; the earlier 11:25:50Z run remains as the provisional
+  pre-correction receipt at
+  `/home/janezp/codex-work/slaif-228-task/report-final.json`, fake-only and
+  NOT a Gateway/provider pass): `all_pass=true`, three probes, ~18.5 s
+  wall total, per probe:
+  - text: exit 0, 5.978 s, 1 request, exact final text;
+  - toolloop: exit 0, 5.53 s, 2 requests (session sha8 `2ee98e47` stable),
     native `read` tool call correlated 1/1, final 38 B exactly equal to the
     38 B unpredictable marker (`correlated_tool_result`); the wrapped read
-    output (193 B) is not raw file bytes and not byte-equal to the marker;
-  - reasoning replay: exit 0, 5.527 s, 2 requests (session sha8
-    `1030d181` stable), continuation input 5 items
+    output (192 B) is not raw file bytes and not byte-equal to the marker;
+  - reasoning replay: exit 0, 5.578 s, 2 requests (session sha8
+    `760705ef` stable), continuation input 5 items
     (`[null, null, reasoning, function_call, function_call_output]`),
     reasoning item keys `[encrypted_content, summary, type]` with no
-    `id`/`status`, 64-byte synthetic encrypted content replayed verbatim
-    (`equals_issued`, sha8 `51111738`).
+    `id`/`status`, 64-byte synthetic encrypted content replayed with
+    full-byte equality to the issued value (sha8 `f2719d31`) plus exact
+    issued call_id/tool_name call/output linkage. The verifier now GATES
+    the reasoning sentinel on that full-byte equality AND exact
+    call/output linkage; presence or a short hash alone never passes, and
+    SDK tolerance is not correct producer proof.
+- Wire-correctness fixes in the loopback fake for the corrected run:
+  `response.created` status `in_progress` (valid), text deltas carry
+  `content_index` 0, and the reasoning-probe function call occupies output
+  slot 1 (reasoning item slot 0).
+- Sanitized receipt of the corrected run:
+  `/home/janezp/codex-work/slaif-228-task/report-fix1.json`, produced by
+  `.venv/bin/python scripts/verify_agent_chat/verify_opencode_responses_capture.py
+  --run-root /home/janezp/codex-work/slaif-228-task/run-fix1
+  --report /home/janezp/codex-work/slaif-228-task/report-fix1.json` against
+  the correction commit on `oap/228-opencode-responses-qual` (parent
+  `3c61d6c3`; source SHA in the handoff notice). Cleanup predicates
+  `artifacts.run_root_cleaned=true`, `artifacts.cleanup_verified=true`,
+  `fake_process_terminated=true` are in the report.
 - SSE consumption: the client consumed the native `@ai-sdk/openai` 3.x
   event vocabulary without error (envelope keys `type`,
   `sequence_number`, `response_id`; reasoning summary part/delta events;
@@ -90,8 +111,9 @@ the packaged profile DATA is pending primary packaging, and no
 
 - **Is**: actual native OpenCode 1.19.3 client behavior against a bounded
   fake peer on the Responses wire — streaming SSE consumption, native
-  tool-loop execution with call/result correlation, encrypted-reasoning
-  continuation replay, envelope shape, session-hint behavior.
+  tool-loop execution with call/result correlation, gated encrypted-reasoning
+  continuation replay (full-byte equality + exact call/output linkage),
+  envelope shape, session-hint behavior.
 - **Is not**: Gateway admission, key policy/quota reservation/finalization,
   or PostgreSQL settlement. The loopback fake is a synthetic peer; no
   gateway request was processed and no ledger row exists. Fake-SDK usage

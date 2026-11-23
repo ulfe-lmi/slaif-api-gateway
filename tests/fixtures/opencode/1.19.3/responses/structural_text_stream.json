@@ -196,7 +196,7 @@
     "nonstreaming_responses_observed": false,
     "final_text_exact_match": true,
     "exit_code": 0,
-    "elapsed_s": 5.828
+    "elapsed_s": 5.978
   },
   "privacy": {
     "raw_content_retained": false,

@@ -12,9 +12,11 @@ Probes (each in its own session):
             marker extracted from the correlated native function_call_output
             (never an unconditional file read)
   reasoning turn one emits reasoning (synthetic encrypted_content) + tool
-            call; the continuation records per-item encrypted-reasoning
-            replay FACTS (presence/shape/short hash/equality) without gating
-            the sentinel on them
+            call; the continuation is GATED on full-byte equality of the
+            replayed encrypted_content with the issued value AND on exact
+            issued call_id/tool_name call/output linkage (presence or a
+            short hash alone never passes; SDK tolerance is not correct
+            producer proof)
 
 Gates and honesty rules mirror verify_opencode_chat_capture.py:
   - pinned binary SHA-256 preflight; overrides labelled override_unqualified
@@ -438,6 +440,96 @@ def _ua_facts(ua: str | None) -> dict:
     }
 
 
+def verify_reasoning_replay(issued: dict, input_items: list) -> dict:
+    """Gate the reasoning continuation on full-byte replay + exact linkage.
+
+    ``issued`` is the fake's private first-turn record (call_id, tool_name,
+    full issued encrypted_content). ``input_items`` are raw dict items of
+    the continuation request's ``input`` array (in memory only; never
+    written to the report). Full-string equality is required; a short
+    hash, mere presence, or the SDK's tolerance is not correct producer
+    proof. Raw bytes are never emitted.
+    """
+    issued = issued if isinstance(issued, dict) else {}
+    items = [i for i in input_items if isinstance(i, dict)]
+    issued_call_id = issued.get("call_id")
+    issued_tool = issued.get("tool_name")
+    issued_enc = issued.get("encrypted_content_issued")
+    reasoning_items = []
+    full_equal = False
+    for i in items:
+        if i.get("type") != "reasoning":
+            continue
+        enc = i.get("encrypted_content")
+        f = {
+            "encrypted_content_present": enc is not None,
+            "encrypted_sha256_8": (hashlib.sha256(str(enc).encode())
+                                   .hexdigest()[:8]
+                                   if enc is not None else None),
+            "encrypted_byte_length": (len(str(enc))
+                                      if enc is not None else None),
+            "full_equals_issued": (enc is not None
+                                   and issued_enc is not None
+                                   and str(enc) == str(issued_enc)),
+        }
+        if f["full_equals_issued"]:
+            full_equal = True
+        reasoning_items.append(f)
+    call_linkage_exact = (
+        issued_call_id is not None
+        and any(i.get("type") == "function_call"
+                and i.get("call_id") == issued_call_id
+                and i.get("name") == issued_tool for i in items)
+        and any(i.get("type") == "function_call_output"
+                and i.get("call_id") == issued_call_id for i in items))
+    return {
+        "reasoning_item_count": len(reasoning_items),
+        "reasoning_items": reasoning_items,
+        "encrypted_replay_verified": full_equal,
+        "issued_call_id_present": issued_call_id is not None,
+        "issued_encrypted_content_present": issued_enc is not None,
+        "call_linkage_exact": call_linkage_exact,
+        "pass": full_equal and call_linkage_exact,
+    }
+
+
+def _raw_input_items(run_root: Path) -> list:
+    """Raw items of the LAST continuation request (in memory; never reported).
+
+    The continuation is the last POST /v1/responses request whose items
+    contain a function_call_output or reasoning item. Empty list when the
+    journal is absent or unparseable.
+    """
+    journal = run_root / "run" / "requests.jsonl"
+    try:
+        lines = journal.read_text(errors="replace").splitlines()
+    except OSError:
+        return []
+    result: list = []
+    for line in lines:
+        try:
+            e = json.loads(line)
+        except Exception:
+            continue
+        if not isinstance(e, dict) or e.get("method") != "POST" \
+                or e.get("path") != "/v1/responses":
+            continue
+        try:
+            b = json.loads(e["body"])
+        except Exception:
+            continue
+        if not isinstance(b, dict):
+            continue
+        raw_input = b.get("input")
+        if not isinstance(raw_input, list):
+            continue
+        items = [i for i in raw_input if isinstance(i, dict)]
+        if any(i.get("type") in ("function_call_output", "reasoning")
+               for i in items):
+            result = items
+    return result
+
+
 def sdk_provenance(run_root: Path, exe: str, observed_ua: str | None) -> dict:
     """SDK provenance: the pinned bun-compiled exe bundles @ai-sdk/openai.
 
@@ -607,17 +699,22 @@ def main() -> None:
                 rc_facts = state.get("reasoning_continuation", {})
                 if not isinstance(rc_facts, dict):
                     rc_facts = {}
+                replay = verify_reasoning_replay(state.get("issued") or {},
+                                                 _raw_input_items(run_root))
                 structural = per_request_structural(run_root)
                 session = session_facts(structural)
                 gates["reasoning"] = {
                     "exit_code": rc, "error": err_label, "elapsed_s": elapsed,
                     "final_text_exact": final == REASONING_SENTINEL,
                     "reasoning_continuation": rc_facts,
+                    "replay": replay,
                     "session": session,
                     "structural": structural,
                     "contract_facts": contract_facts(structural),
                     "pass": rc == 0 and final == REASONING_SENTINEL
-                            and state.get("reasoning_continuation") is not None,
+                            and state.get("reasoning_continuation") is not None
+                            and replay.get("encrypted_replay_verified") is True
+                            and replay.get("call_linkage_exact") is True,
                 }
                 if session["session_value_sha256_8_first"]:
                     session_hashes.append(session["session_value_sha256_8_first"])
@@ -635,6 +732,8 @@ def main() -> None:
 
     if not pinned_identity:
         global_errors.append("pinned_identity_override")
+    if args.skip_reasoning:
+        global_errors.append("reasoning_gate_skipped")
     if not fake_terminated:
         global_errors.append("fake_process_not_terminated")
     if "toolloop" in gates:

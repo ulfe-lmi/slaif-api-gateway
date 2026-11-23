@@ -50,5 +50,5 @@
     "home_workspace_paths_retained": false
   },
   "structural_fixture_digest_rule": "sha256 over, for each structural_*.json in tests/fixtures/opencode/1.19.3/responses sorted by filename: filename + NUL + file bytes (provenance.json excluded)",
-  "structural_fixture_sha256": "5e8eb635b714fb26eccf35fac7ffdc8c9b7f8f8c59030b79138ac10ec131d2b9"
+  "structural_fixture_sha256": "b8d6f6c3ca61806b68d980286144a870e71099c36a0713c07ca85b99e16639b6"
 }

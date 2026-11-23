@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import ast
 import hashlib
+import importlib.util
 import json
 from pathlib import Path
 
@@ -143,7 +144,7 @@ def test_text_stream_envelope_facts():
     assert beh["exit_code"] == 0
     assert beh["final_text_exact_match"] is True
     assert beh["nonstreaming_responses_observed"] is False
-    assert beh["elapsed_s"] == 5.828
+    assert beh["elapsed_s"] == 5.978
 
 
 def test_toolloop_wire_facts():
@@ -164,7 +165,7 @@ def test_toolloop_wire_facts():
     wrap = data["read_tool"]["native_output_wrap"]
     assert wrap["marker_present"] is True
     assert wrap["marker_occurrences_in_output"] == 1
-    assert wrap["content_byte_length"] == 193
+    assert wrap["content_byte_length"] == 192
     assert wrap["marker_byte_length"] == 38
     assert wrap["content_equals_marker"] is False
     gate = data["verification_gate"]
@@ -172,10 +173,10 @@ def test_toolloop_wire_facts():
     assert gate["final_text_source"] == "correlated_tool_result"
     assert gate["final_text_length"] == 38
     assert data["session"]["stable_across_two_requests"] is True
-    assert data["session"]["session_value_sha256_8"] == "5a080c0a"
+    assert data["session"]["session_value_sha256_8"] == "2ee98e47"
     beh = data["client_behavior"]
     assert beh["exit_code"] == 0
-    assert beh["elapsed_s"] == 5.78
+    assert beh["elapsed_s"] == 5.53
 
 
 def test_reasoning_replay_wire_facts():
@@ -203,18 +204,18 @@ def test_reasoning_replay_wire_facts():
     assert ri["id_state"] == "absent"
     assert ri["status_state"] == "absent"
     assert ri["encrypted_byte_length"] == 64
-    assert ri["encrypted_sha256_8"] == "51111738"
-    assert ri["equals_issued"] is True
+    assert ri["encrypted_sha256_8"] == "f2719d31"
+    assert ri["full_byte_equals_issued"] is True
     assert added["function_call"]["name"] == "read"
     assert added["function_call"]["id_state"] == "absent"
     assert added["function_call_output"]["id_state"] == "absent"
     assert cont["issued_call_id_correlated"] is True
     assert data["session"]["stable_across_two_requests"] is True
-    assert data["session"]["session_value_sha256_8"] == "1030d181"
+    assert data["session"]["session_value_sha256_8"] == "760705ef"
     beh = data["client_behavior"]
     assert beh["exit_code"] == 0
     assert beh["final_text_exact"] is True
-    assert beh["elapsed_s"] == 5.527
+    assert beh["elapsed_s"] == 5.578
 
 
 def test_session_identity_predicates():
@@ -226,9 +227,9 @@ def test_session_identity_predicates():
     assert cf["value_retention"].startswith("sha256_8 only")
     exp = data["experiments"]
     assert exp["A"]["requests"]["A1"] == exp["A"]["requests"]["A2"]
-    assert exp["A"]["requests"]["A1"]["session_value_sha256_8"] == "5a080c0a"
-    assert exp["B"]["requests"]["B1"]["session_value_sha256_8"] == "1030d181"
-    assert exp["C"]["requests"]["C1"]["session_value_sha256_8"] == "2c9610a3"
+    assert exp["A"]["requests"]["A1"]["session_value_sha256_8"] == "2ee98e47"
+    assert exp["B"]["requests"]["B1"]["session_value_sha256_8"] == "760705ef"
+    assert exp["C"]["requests"]["C1"]["session_value_sha256_8"] == "74551a8e"
     pred = data["predicates"]
     assert pred["A1_equals_A2"] is True
     assert pred["A1_distinct_from_B1"] is True
@@ -251,3 +252,89 @@ def test_harness_scripts_present_and_compile():
     vsrc = verifier.read_text()
     assert PINNED_EXECUTABLE_SHA256 in vsrc
     assert "@ai-sdk/openai" in vsrc
+
+
+# -- pure encrypted-replay gate (verify_reasoning_replay) -------------------
+
+_ISSUED_ENC = "a1b2c3d4e5" * 8  # 64 synthetic chars, never a real cipher
+
+
+def _load_verifier_module():
+    p = (ROOT / "scripts" / "verify_agent_chat"
+         / "verify_opencode_responses_capture.py")
+    spec = importlib.util.spec_from_file_location(
+        "verify_opencode_responses_capture", p)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def _issued(call_id="call_synthetic_1", tool_name="read",
+            encrypted=_ISSUED_ENC):
+    return {"call_id": call_id, "tool_name": tool_name,
+            "encrypted_sha256_8": "deadbeef",
+            "encrypted_byte_length": len(encrypted),
+            "encrypted_content_issued": encrypted}
+
+
+def _items(encrypted=_ISSUED_ENC, call_id="call_synthetic_1",
+           fc_name="read", out_call_id="call_synthetic_1"):
+    items = [{"role": "developer", "content": "x"},
+             {"role": "user", "content": [{"type": "input_text", "text": "x"}]}]
+    if encrypted is not None:
+        items.append({"type": "reasoning", "encrypted_content": encrypted})
+    items.append({"type": "function_call", "call_id": call_id,
+                  "name": fc_name, "arguments": "{}"})
+    items.append({"type": "function_call_output", "call_id": out_call_id,
+                  "output": "x"})
+    return items
+
+
+def test_replay_gate_positive():
+    mod = _load_verifier_module()
+    r = mod.verify_reasoning_replay(_issued(), _items())
+    assert r["pass"] is True
+    assert r["encrypted_replay_verified"] is True
+    assert r["call_linkage_exact"] is True
+    assert r["reasoning_item_count"] == 1
+    assert r["reasoning_items"][0]["full_equals_issued"] is True
+    assert r["issued_call_id_present"] is True
+    assert r["issued_encrypted_content_present"] is True
+    assert _ISSUED_ENC not in json.dumps(r)  # raw bytes never emitted
+
+
+def test_replay_gate_missing_cipher_fails():
+    mod = _load_verifier_module()
+    r = mod.verify_reasoning_replay(_issued(), _items(encrypted=None))
+    assert r["encrypted_replay_verified"] is False
+    assert r["pass"] is False
+
+
+def test_replay_gate_changed_cipher_fails():
+    mod = _load_verifier_module()
+    enc = _ISSUED_ENC[:-1] + ("0" if _ISSUED_ENC[-1] != "0" else "1")
+    r = mod.verify_reasoning_replay(_issued(), _items(encrypted=enc))
+    assert r["reasoning_items"][0]["full_equals_issued"] is False
+    assert r["pass"] is False
+    assert "equals_issued" not in r["reasoning_items"][0]
+
+
+def test_replay_gate_wrong_linkage_fails():
+    mod = _load_verifier_module()
+    r = mod.verify_reasoning_replay(_issued(), _items(out_call_id="call_other"))
+    assert r["call_linkage_exact"] is False
+    assert r["encrypted_replay_verified"] is True
+    assert r["pass"] is False
+    r2 = mod.verify_reasoning_replay(_issued(), _items(fc_name="write"))
+    assert r2["call_linkage_exact"] is False
+    assert r2["pass"] is False
+
+
+def test_replay_gate_empty_issued_fails_closed():
+    mod = _load_verifier_module()
+    r = mod.verify_reasoning_replay({}, _items())
+    assert r["issued_call_id_present"] is False
+    assert r["issued_encrypted_content_present"] is False
+    assert r["encrypted_replay_verified"] is False
+    assert r["call_linkage_exact"] is False
+    assert r["pass"] is False

@@ -130,10 +130,10 @@
       "content_is_raw_file_bytes": false,
       "marker_present": true,
       "marker_occurrences_in_output": 1,
-      "content_byte_length": 193,
+      "content_byte_length": 192,
       "marker_byte_length": 38,
       "content_equals_marker": false,
-      "note": "the native read tool wraps file content in an envelope (193 B observed for the 38 B marker); the wrapped output is not raw file bytes and is not byte-equal to the marker"
+      "note": "the native read tool wraps file content in an envelope (192 B observed for the 38 B marker); the wrapped output is not raw file bytes and is not byte-equal to the marker"
     }
   },
   "verification_gate": {
@@ -146,11 +146,11 @@
   },
   "session": {
     "stable_across_two_requests": true,
-    "session_value_sha256_8": "5a080c0a"
+    "session_value_sha256_8": "2ee98e47"
   },
   "client_behavior": {
     "exit_code": 0,
-    "elapsed_s": 5.78
+    "elapsed_s": 5.53
   },
   "privacy": {
     "raw_content_retained": false,

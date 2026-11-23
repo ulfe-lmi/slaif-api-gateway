@@ -25,11 +25,12 @@ input item whose ``call_id`` equals a server-issued call id AND whose string
 the marker extracted from that correlated native tool result (never an
 unconditional file read).
 
-Reasoning mode: turn one emits a reasoning item (synthetic base64
-encrypted_content) plus a function_call; the continuation records per-item
-replay facts (presence, shape, short hash, equality with the issued value)
-as FACTS without gating the final sentinel on them, because the SDK may
-legitimately omit unencrypted reasoning items from replay.
+Reasoning mode: turn one emits a reasoning item at output slot 0 (synthetic
+base64 encrypted_content) plus a function_call at output slot 1; the
+continuation records per-item replay facts with FULL-BYTE equality against
+the issued encrypted_content and exact call_id/tool_name call/output
+linkage. The verifier gates the final sentinel on those facts; presence,
+a short hash, or SDK tolerance alone is not correct producer proof.
 """
 
 from __future__ import annotations
@@ -122,7 +123,7 @@ class Handler(BaseHTTPRequestHandler):
     def _created(self, resp_id, model):
         return _ev(resp_id, 0, "response.created",
                    response={"id": resp_id, "object": "response",
-                             "status": "created",
+                             "status": "in_progress",
                              "created_at": int(time.time()),
                              "model": model})
 
@@ -132,7 +133,8 @@ class Handler(BaseHTTPRequestHandler):
             _ev(resp_id, seq0, "response.output_item.added", output_index=0,
                 item={"type": "message", "id": msg_id}),
             _ev(resp_id, seq0 + 1, "response.output_text.delta",
-                item_id=msg_id, output_index=0, delta=text),
+                item_id=msg_id, output_index=0, content_index=0,
+                delta=text),
             _ev(resp_id, seq0 + 2, "response.output_item.done", output_index=0,
                 item={"type": "message", "id": msg_id, "role": "assistant",
                       "content": [{"type": "output_text", "text": text}]}),
@@ -141,14 +143,17 @@ class Handler(BaseHTTPRequestHandler):
             {"type": "message", "id": msg_id, "role": "assistant",
              "content": [{"type": "output_text", "text": text}]}]
 
-    def _function_call_events(self, resp_id, seq0, call_id, name, args_obj):
+    def _function_call_events(self, resp_id, seq0, call_id, name, args_obj,
+                              output_index=0):
         fc_id = "fc_fake_" + uuid.uuid4().hex[:20]
         item = {"type": "function_call", "id": fc_id, "call_id": call_id,
                 "name": name, "arguments": json.dumps(args_obj)}
         out = [
-            _ev(resp_id, seq0, "response.output_item.added", output_index=0,
+            _ev(resp_id, seq0, "response.output_item.added",
+                output_index=output_index,
                 item=item),
-            _ev(resp_id, seq0 + 1, "response.output_item.done", output_index=0,
+            _ev(resp_id, seq0 + 1, "response.output_item.done",
+                output_index=output_index,
                 item={**item, "status": "completed"}),
         ]
         return out, seq0 + 2, [{**item, "status": "completed"}]
@@ -396,11 +401,14 @@ class Handler(BaseHTTPRequestHandler):
             created = self._created(resp_id, model)
             r_events, nxt, enc, r_items = self._reasoning_events(resp_id, 1)
             f_events, nxt2, f_items = self._function_call_events(
-                resp_id, nxt, call_id, tool_name, {arg_key: tool_file})
+                resp_id, nxt, call_id, tool_name, {arg_key: tool_file},
+                output_index=1)
             st["issued"] = {"call_id": call_id, "path": tool_file,
+                            "tool_name": tool_name,
                             "encrypted_sha256_8":
                                 hashlib.sha256(enc.encode()).hexdigest()[:8],
-                            "encrypted_byte_length": len(enc)}
+                            "encrypted_byte_length": len(enc),
+                            "encrypted_content_issued": enc}
             with LOCK:
                 save(STATE, st)
             if stream:
@@ -413,7 +421,8 @@ class Handler(BaseHTTPRequestHandler):
                 self._nonstream(model, scenario.get("first_usage") or [30, 6],
                                 r_items + f_items)
             return
-        # Continuation: record per-item replay facts (not a gate).
+        # Continuation: record per-item replay facts; the verifier gates the
+        # sentinel on full-byte replay + exact issued call linkage.
         issued = st.get("issued", {})
         per_item = []
         for i in items:
@@ -449,9 +458,9 @@ class Handler(BaseHTTPRequestHandler):
                     f["encrypted_sha256_8"] = hashlib.sha256(
                         str(enc).encode()).hexdigest()[:8]
                     f["encrypted_byte_length"] = len(str(enc))
-                    f["equals_issued"] = (
-                        f["encrypted_sha256_8"]
-                        == issued.get("encrypted_sha256_8"))
+                    issued_enc = issued.get("encrypted_content_issued")
+                    f["full_byte_equals_issued"] = (
+                        issued_enc is not None and str(enc) == str(issued_enc))
             per_item.append(f)
         rc_facts = {
             "input_item_count": len(items),
@@ -465,10 +474,15 @@ class Handler(BaseHTTPRequestHandler):
             "message_items": [f for f in per_item
                               if f.get("role") is not None
                               and f["type"] in (None, "message")],
-            "issued_call_id_correlated": any(
-                f.get("call_id_present")
-                for f in per_item if f["type"] in
-                ("function_call", "function_call_output")),
+            "issued_call_id_correlated": (
+                issued.get("call_id") is not None
+                and any(i.get("type") == "function_call"
+                        and i.get("call_id") == issued.get("call_id")
+                        and i.get("name") == issued.get("tool_name")
+                        for i in items)
+                and any(i.get("type") == "function_call_output"
+                        and i.get("call_id") == issued.get("call_id")
+                        for i in items)),
         }
         st["reasoning_continuation"] = rc_facts
         with LOCK:
