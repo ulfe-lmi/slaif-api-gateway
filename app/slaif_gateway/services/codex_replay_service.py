@@ -35,6 +35,7 @@ class CodexReplayCandidate(Protocol):
     call_id: str | None
     tool_namespace: str | None
     tool_name: str | None
+    encrypted_content: str | None
 
 
 class _CodexReplayRepository(Protocol):
