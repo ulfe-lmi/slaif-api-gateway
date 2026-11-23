@@ -450,7 +450,10 @@ def test_encrypted_reasoning_replay_is_canonical_metered_and_id_only_for_lookup(
     assert len(candidates) == 1
     assert candidates[0].item_kind == "reasoning"
     assert candidates[0].item_id == "rs_1"
-    assert not hasattr(candidates[0], "encrypted_content")
+    # ID-bearing candidates remain ID-only lookups: the ciphertext field
+    # exists on the shared candidate type (for the qualified id-less
+    # path) but must carry no value here.
+    assert candidates[0].encrypted_content is None
     assert not hasattr(candidates[0], "summary")
 
 

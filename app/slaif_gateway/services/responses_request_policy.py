@@ -198,6 +198,7 @@ class CodexReplayRequestCandidate:
     call_id: str | None
     tool_namespace: str | None
     tool_name: str | None
+    encrypted_content: str | None = None
 
 
 @dataclass(frozen=True, slots=True, repr=False)
@@ -363,6 +364,10 @@ class ResponsesRequestPolicy:
                     allow_idless_tool_call_replay=(
                         self._codex_spec is not None
                         and self._codex_spec.allow_idless_tool_call_replay
+                    ),
+                    allow_idless_encrypted_reasoning=(
+                        self._codex_spec is not None
+                        and self._codex_spec.allow_idless_encrypted_reasoning
                     ),
                     top_level_tool_taxonomy=continuation_taxonomy,
                     codex_tool_call_bindings=(
@@ -1957,12 +1962,22 @@ class ResponsesRequestPolicy:
             )
         item_id_value = item.get("id")
         if item_id_value is None:
-            _raise(
-                f"{param}.id",
-                "responses_codex_encrypted_reasoning_replay_invalid",
-                "Codex encrypted reasoning replay requires a bounded item ID.",
-            )
-        item_id = self._validate_codex_message_id(item_id_value, param=f"{param}.id")
+            if not self._codex_spec.allow_idless_encrypted_reasoning:
+                _raise(
+                    f"{param}.id",
+                    "responses_codex_encrypted_reasoning_replay_invalid",
+                    "Codex encrypted reasoning replay requires a bounded item ID.",
+                )
+            if set(item) != {"type", "summary", "encrypted_content"}:
+                _raise(
+                    f"{param}.id",
+                    "responses_codex_encrypted_reasoning_replay_invalid",
+                    "Id-less Codex encrypted reasoning requires the exact "
+                    "type, summary and encrypted_content shape.",
+                )
+            item_id = None
+        else:
+            item_id = self._validate_codex_message_id(item_id_value, param=f"{param}.id")
         encrypted_content = item.get("encrypted_content")
         if not isinstance(encrypted_content, str) or not encrypted_content:
             _raise(
@@ -2020,12 +2035,11 @@ class ResponsesRequestPolicy:
                     "Codex reasoning summaries exceed the gateway size limit.",
                 )
             canonical_summary.append({"type": "summary_text", "text": text_value})
-        canonical = {
-            "type": "reasoning",
-            "id": item_id,
-            "summary": canonical_summary,
-            "encrypted_content": encrypted_content,
-        }
+        canonical: dict[str, Any] = {"type": "reasoning"}
+        if item_id is not None:
+            canonical["id"] = item_id
+        canonical["summary"] = canonical_summary
+        canonical["encrypted_content"] = encrypted_content
         if "content" in item:
             canonical["content"] = None
         text_bytes = len(encrypted_content.encode("utf-8")) + summary_bytes
@@ -4841,6 +4855,7 @@ def _codex_positional_replay_candidates(
     codex_tool_call_bindings: Mapping[str, tuple[str | None, str, str]],
     *,
     allow_idless_tool_call_replay: bool,
+    allow_idless_encrypted_reasoning: bool = False,
 ) -> tuple[CodexReplayRequestCandidate | CodexCompactionReplayCandidate, ...]:
     """New lifecycle mode: emit every actual call from its positional identity.
 
@@ -4891,6 +4906,21 @@ def _codex_positional_replay_candidates(
                         tool_name=None,
                     )
                 )
+            elif item_id is None and allow_idless_encrypted_reasoning:
+                # Id-less encrypted reasoning is referenced by its bounded
+                # ciphertext digest, never by a fabricated protocol ID.
+                encrypted_content = item.get("encrypted_content")
+                if isinstance(encrypted_content, str) and encrypted_content:
+                    candidates.append(
+                        CodexReplayRequestCandidate(
+                            item_kind="reasoning",
+                            item_id=None,
+                            call_id=None,
+                            tool_namespace=None,
+                            tool_name=None,
+                            encrypted_content=encrypted_content,
+                        )
+                    )
             continue
         if item_type not in {"function_call", "custom_tool_call"}:
             continue
@@ -4944,6 +4974,7 @@ def codex_replay_request_candidates(
     *,
     top_level_tool_taxonomy: frozenset[tuple[str, str, str]] | None = None,
     allow_idless_tool_call_replay: bool = False,
+    allow_idless_encrypted_reasoning: bool = False,
     codex_tool_call_bindings: Mapping[str, tuple[str | None, str, str]] | None = None,
     require_call_completeness: bool = False,
 ) -> tuple[CodexReplayRequestCandidate | CodexCompactionReplayCandidate, ...]:
@@ -4966,6 +4997,7 @@ def codex_replay_request_candidates(
             input_value,
             codex_tool_call_bindings,
             allow_idless_tool_call_replay=allow_idless_tool_call_replay,
+            allow_idless_encrypted_reasoning=allow_idless_encrypted_reasoning,
         )
     input_declarations = _codex_declarations_from_input_items(
         [dict(item) for item in input_value if isinstance(item, Mapping)]
@@ -5014,6 +5046,21 @@ def codex_replay_request_candidates(
                         tool_name=None,
                     )
                 )
+            elif item_id is None and allow_idless_encrypted_reasoning:
+                # Id-less encrypted reasoning is referenced by its bounded
+                # ciphertext digest, never by a fabricated protocol ID.
+                encrypted_content = item.get("encrypted_content")
+                if isinstance(encrypted_content, str) and encrypted_content:
+                    candidates.append(
+                        CodexReplayRequestCandidate(
+                            item_kind="reasoning",
+                            item_id=None,
+                            call_id=None,
+                            tool_namespace=None,
+                            tool_name=None,
+                            encrypted_content=encrypted_content,
+                        )
+                    )
             continue
         if item_type not in {"function_call", "custom_tool_call"}:
             continue
