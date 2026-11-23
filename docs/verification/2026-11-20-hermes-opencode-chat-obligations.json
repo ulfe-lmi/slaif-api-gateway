@@ -1,27 +1,50 @@
 {
-  "objective": "227-b",
+  "objective": "227-c",
+  "historical_objectives": {
+    "227_a": {
+      "objective": "227-a",
+      "status": "NEEDS_CONTINUATION (superseded in-round by canonical 227-b on the same PR)",
+      "report": "oap/reports/227-a-hermes-opencode-chat-preprotected.md"
+    },
+    "227_b": {
+      "objective": "227-b",
+      "status": "PREPROTECTED_READY",
+      "report": "oap/reports/227-b-preprotected-governance-and-evidence-closure.md"
+    }
+  },
   "record": "docs/verification/2026-11-20-hermes-opencode-chat.md",
-  "status": "PREPROTECTED_READY",
-  "status_reason": "PREPROTECTED candidate (not mergeable). activated_order/active_pointer now correctly identify the ACTIVE 227-b order/pointer (227-a identities preserved as historical_227_a). The three 227-a gaps are closed honestly: (1) canonical governance now 10/10 against the NEW active 227-b state (test_oap_governance.py 10 passed; agentic+provider governance 5 passed); (2) this manifest is now the required per-obligation verified test-node-ID mapping (19 records over the order's 19 coverage groups; 140 unique mapped refs collection-checked against primary head 902a6e33; 606 nodes collected, collection only - NOT executed/passed); (3) a complete concrete PROPOSED protected live plan artifact is present and manually reviewed (g19 verified_manual_review), with strict zero-retry UNSATISFIED and a separate relaxation proposal requiring human approval. preprotected.missing=[] is DERIVED from required record statuses (19/19 required = verified or verified_manual_review). External CI: all 9 individual required checks + separate CodeQL aggregate SUCCESS at the a953 checkpoint (exact check-run IDs recorded); final exact-head CI gate is PENDING and ROOT's gate, a953 success NOT claimed for future heads. Protected live execution + human target authority + strict zero-retry guarantee remain a separately visible NOT_RUN/UNSATISFIED gate (not a preprotected gap). Review/merge are ROOT's gates. No live/merge/support claim.",
+  "status": "LIVE_EXECUTED_REPORT_PUBLISHED_PENDING_ROOT_GATE",
+  "status_reason": "227-c live LAN qualification executed on frozen root-accepted candidate b2a0d950e122d612594f55ba54e18fe80d2644c7; both native cases terminal positive with ALL historical failures preserved; docs+manifest committed; immutable report published as report-only SELF; pending root final exact-head CI recheck, review, and guarded merge on DRAFT PR #395",
   "branch": "oap/227-hermes-opencode-chat",
   "base": "0940d8a28f3a413d2a2cc6f4962c0efcafd71e13",
   "activated_order": {
-    "path": "oap/orders/227-b-preprotected-governance-and-evidence-closure.md",
-    "sha256": "8e6dc2da39ff9a199d5872f68ee3c72dfb68463f8cf807739d7eb2374e36ad90",
+    "path": "oap/orders/227-c-lan-chat-qualification.md",
+    "sha256": "1e77d9754e1082d772fbc64247b74f62269c07a35ac7d8a677510e743ba4be81",
     "edited_during_round": false,
-    "historical_227_a": {
-      "path": "oap/orders/227-a-hermes-opencode-chat-preprotected.md",
-      "sha256": "4d24d84bef3b7c7d2f1a4b4f70e380dc84debf95da726c8a922735dcadd0f546"
+    "historical_227_b": {
+      "path": "oap/orders/227-b-preprotected-governance-and-evidence-closure.md",
+      "sha256": "8e6dc2da39ff9a199d5872f68ee3c72dfb68463f8cf807739d7eb2374e36ad90",
+      "edited_during_round": false,
+      "historical_227_a": {
+        "path": "oap/orders/227-a-hermes-opencode-chat-preprotected.md",
+        "sha256": "4d24d84bef3b7c7d2f1a4b4f70e380dc84debf95da726c8a922735dcadd0f546"
+      }
     }
   },
   "active_pointer": {
     "path": "oap/active",
-    "value": "227-b",
-    "sha256": "bd7995dfb437b1b1e083eac24a5bc9de8a768f42256dcddaa542072f99a9e29e",
+    "value": "227-c",
+    "sha256": "b91d46f38f58b5e9decda71476f498d9400bc6d5846d3287d6b42f0deea1b7eb",
     "edited_during_round": false,
-    "historical_227_a": {
-      "value": "227-a",
-      "sha256": "ea3d8056453a861b46ca727cf55aee5043a1df7b36cde04d49af43688ab17738"
+    "historical_227_b": {
+      "path": "oap/active",
+      "value": "227-b",
+      "sha256": "bd7995dfb437b1b1e083eac24a5bc9de8a768f42256dcddaa542072f99a9e29e",
+      "edited_during_round": false,
+      "historical_227_a": {
+        "value": "227-a",
+        "sha256": "ea3d8056453a861b46ca727cf55aee5043a1df7b36cde04d49af43688ab17738"
+      }
     }
   },
   "source": {
@@ -40,9 +63,23 @@
       "redis foundations",
       "provider-forwarding contract/repository foundations"
     ],
-    "tested_implementation_head_sha": "5c2bacf83578f5a23b6e9700656e8bfd26dc373c",
-    "tested_implementation_head_tree_sha": "430aae04aaa2f4dbaf4ff529623d022ff3a09278",
-    "tested_implementation_head_app_slaif_gateway_tree_sha": "0ab1e80ad89a6578b17b0bfcaa99fa5e8ccab21e"
+    "historical_227_b_tested_implementation_head": {
+      "note": "227-b unit/Ruff/governance receipts cite this head",
+      "tested_implementation_head_sha": "5c2bacf83578f5a23b6e9700656e8bfd26dc373c",
+      "tested_implementation_head_tree_sha": "430aae04aaa2f4dbaf4ff529623d022ff3a09278",
+      "tested_implementation_head_app_slaif_gateway_tree_sha": "0ab1e80ad89a6578b17b0bfcaa99fa5e8ccab21e"
+    },
+    "tested_implementation_head_sha": "b2a0d950e122d612594f55ba54e18fe80d2644c7",
+    "tested_implementation_head_tree_sha": "f7dd2d382d7aa674ff8f2c8e97911df280b7e6e5",
+    "tested_implementation_head_app_slaif_gateway_tree_sha": "17a9caadc83aa1603bfef62bc1f43fab59f3a80f",
+    "tested_implementation_head_note": "frozen executable candidate actually run for the 227-c live task Gateway (repo checkout cwd of the task Gateway); app tree differs from the 227-b tested head because the origin/main merge changed app code (e.g., PR #399); NOT claimed byte-identical",
+    "executable_candidate_sha": "b2a0d950e122d612594f55ba54e18fe80d2644c7",
+    "executable_candidate_parents": {
+      "227c_order_publish_and_activate": "4d5597220b14651f4355115c56c491c2174867be",
+      "merged_origin_main": "8cb35eb7dd12fb3454915fe334fafa115da6cbfa"
+    },
+    "main_integration_sha": "8cb35eb7dd12fb3454915fe334fafa115da6cbfa",
+    "candidate_ci_gate": "All 9 required jobs across the 3 workflow identities + separate CodeQL aggregate SUCCESS on the exact candidate (root independently verified) before any native launch"
   },
   "fixture_and_data_digests": {
     "hermes_profile_raw_file_sha256": "ecd9aa5d5474a140ba0b4969f539bba526d7366296d116e1a6acb956476aba58",
@@ -150,12 +187,179 @@
       "result": "EXIT 0; 606 nodes COLLECTED (collection only - no tests executed/passed)",
       "mapped_refs_checked": 140,
       "note": "140 unique mapped node refs checked against actual pytest IDs/base names incl exact bracketed PG params. The only unresolved ref was the wrong OpenCode-none path/class, now replaced with tests/unit/test_hermes_aux_reasoning_effort.py::TestOpenCodeProfileUnchanged::test_opencode_none_still_denied (present in collection). NOT to be read as 606 passing tests."
+    },
+    "live_227_c": {
+      "authorized_by": "Human approval within 227-c: up to 100 bounded LAN native launches with stock client built-in retries allowed (bounded tests only); AGENTIC_CLIENT_INTEGRATION.md 51 no-auto-retry rule unchanged globally; ceilings 600s/launch, 600s cumulative per harness, 1200s aggregate, 1M tokens + EUR1 per harness, 2M + EUR2 aggregate, max 6 settled requests per key",
+      "gateway_identity": {
+        "checkout": "repo cwd /home/janezp/codex-work/slaif-api-gateway at frozen candidate b2a0d950e122d612594f55ba54e18fe80d2644c7",
+        "url": "127.0.0.1:18300/v1",
+        "request_capture": "REQUEST_CAPTURE_ENABLED=False (no ambient operator capture)",
+        "deployment_caps": "CHAT_MAX_TOOL_DESCRIPTION_BYTES=8192, HARD_MAX_OUTPUT_TOKENS=32768 (task deployment only; global defaults unchanged)",
+        "provider": "qwen-student-lan (generic openai-compatible route, route max_retries=0, streaming; upstream http://10.8.132.55:18021/v1 - opaque beyond gateway-to-provider edge, labeled unverified)",
+        "model": "qwen38-27b",
+        "pricing": "EUR 1 per 1M input and output tokens",
+        "keys": "two fresh 1M-token keys, one per client, Chat-only endpoint, strict hosted-tool denial, 6-settled-request cap each"
+      },
+      "hermes": {
+        "client_identity": "Hermes v0.22.5 (source bf0203a794a07aac3ff764972ab9087baa4e4f4e, SDK 2.24.0, python 3.14.9 owned task venv; main effort xhigh, auxiliary session_title none; isolated allowlisted client env; private 0600 logs)",
+        "runs": [
+          {
+            "run": 1,
+            "status": "PRESERVED_FAILURE",
+            "outcome": "setup failure before spawn (driver typo STOUT->STDOUT)",
+            "duration_s": 1.01,
+            "exit": 1,
+            "admitted_requests": 0,
+            "reserved": 0
+          },
+          {
+            "run": 2,
+            "status": "PRESERVED_FAILURE",
+            "outcome": "native config error: task config model.default carried fake provider slug; wire model \"slaif227fake/qwen38-27b\" rejected HTTP 403 model_not_allowed_for_key (gateway gate correct; provider pool custom:slaif227fake unchanged)",
+            "duration_s": 11.0,
+            "admitted_requests": 0,
+            "reserved": 0,
+            "proof": "native request dump (private, under owned task runtime) shows wire model \"slaif227fake/qwen38-27b\""
+          },
+          {
+            "run": 3,
+            "status": "STRICT_PASS",
+            "duration_s": 30.01,
+            "exit": 0,
+            "deadline_s": 587.99,
+            "repair": "single-line config repair to bare model \"qwen38-27b\" (proven by offline resolver demo: wire bare model, pool custom:slaif227fake, base URL unchanged)",
+            "events": {
+              "system": 1,
+              "tool_use": 1,
+              "tool_result": 1,
+              "text": 31,
+              "result": 1
+            },
+            "tool_call": "real local file read with continuation",
+            "final_check": "strict raw-byte final == marker TRUE, 32/32 bytes, no normalization",
+            "marker_sha256": "f26b338c87b60d46fcfd22bfbdfa60f1d07a181e758a80d8633f3a9d806b39c9"
+          }
+        ],
+        "pg_settlement_authoritative": {
+          "rows": [
+            {
+              "input_tokens": 5178,
+              "output_tokens": 76,
+              "total_tokens": 5254,
+              "eur": 0.005254,
+              "finalized_at": "09:05:41.99Z"
+            },
+            {
+              "input_tokens": 5346,
+              "output_tokens": 97,
+              "total_tokens": 5443,
+              "eur": 0.005443,
+              "finalized_at": "09:05:44.66Z"
+            },
+            {
+              "input_tokens": 340,
+              "output_tokens": 438,
+              "total_tokens": 778,
+              "eur": 0.000778,
+              "finalized_at": "09:05:55.24Z"
+            }
+          ],
+          "totals": {
+            "input_tokens": 10864,
+            "output_tokens": 611,
+            "total_tokens": 11475,
+            "eur": 0.011475
+          },
+          "settlement": "3 requests, all 200 FINALIZED, zero pending reservations/holds/fences"
+        },
+        "client_reported_final_event": {
+          "input_tokens": 10524,
+          "output_tokens": 173,
+          "total_tokens": 10697,
+          "cache_read_tokens": 5253,
+          "note": "recorded separately; PostgreSQL is authoritative"
+        },
+        "gateway_log": "3x chat 200 + 3x provider 200 after the run-2 403; one benign GET /v1/models 403 (expected for Chat-only key); request_diagnostics empty; zero pending"
+      },
+      "opencode": {
+        "owner": "secondary (receipts secondary-owned; primary integrates)",
+        "client_identity": "OpenCode 1.19.3 (executable sha256 179ca421d61eefeadfa0c50e084a6e79c1623734732f0f4593f81ccfd3ab7ee9, source e3c4eb242585dcd77be1a867391b7c25fd47ce52, @ai-sdk/openai-compatible SDK 2.0.41; pure/denied-web 9-tool set, effort xhigh, context 245760, cap 32000; same key/config as run1; isolated allowlisted client env; private 0600 logs)",
+        "runs": [
+          {
+            "run": 1,
+            "status": "PRESERVED_FAILURE",
+            "outcome": "trailing-newline framing mismatch: final 32B vs marker 33B (marker sha8 9f4bbeb2, terminal 0x0a); strict raw-byte final_equals_marker=FALSE - NOT relabeled pass",
+            "duration_s": 20.3,
+            "admitted_note": "its 2 requests were admitted and settled (counted in OpenCode totals)"
+          },
+          {
+            "run": 2,
+            "status": "STRICT_PASS",
+            "duration_s": 20.358,
+            "exit": 0,
+            "error_events": 0,
+            "marker": "newline-free 32B marker sha256 a0e716d95646e6b0f8444589303237a97d77a4af2458e9183bae4d96e5f63f2f",
+            "final_check": "final 32B EXACT marker 32B; strict raw-byte final_equals_marker=TRUE (no normalization)",
+            "events": {
+              "step_start": 2,
+              "tool_use": 1,
+              "step_finish": 2,
+              "text": 1
+            },
+            "tool_calls": 1,
+            "tool_call": "native read completed with callID + output",
+            "steps": 2,
+            "observed_retries": 0
+          }
+        ],
+        "pg_settlement_authoritative": {
+          "requests": 4,
+          "settlement": "all 4 requests 200 FINALIZED",
+          "total_tokens": 29546,
+          "eur": 0.029546,
+          "holds": "zero reservations/holds/fences"
+        }
+      },
+      "budget_consumed": {
+        "outer_launches": "5/100 (Hermes 3, OpenCode 2)",
+        "wall_seconds": {
+          "hermes_cumulative": 42.02,
+          "hermes_remaining": 557.98,
+          "opencode_cumulative": 40.658,
+          "opencode_remaining": 559.342,
+          "aggregate": 82.678,
+          "aggregate_remaining": 1117.322
+        },
+        "tokens_eur": {
+          "aggregate_tokens": 41021,
+          "aggregate_eur": 0.041021
+        },
+        "settled_requests_per_key": {
+          "hermes": "3/6",
+          "opencode": "4/6"
+        },
+        "retries": "stock built-in retries authorized by the bounded human exception; none observed"
+      },
+      "hygiene": {
+        "secrets": "no plaintext sk-slaif- in any artifact or CLI log; only intentional 0600 private auth-input files (deleted in final coordinated cleanup); capture False throughout",
+        "filesystem": "/tmp inode exhaustion (1048576/1048576) worked around via owned home task runtime root; all task files under owned root",
+        "worktree": "clean at b2a0d950e122d612594f55ba54e18fe80d2644c7 (frozen)"
+      },
+      "limitations": [
+        "Upstream provider-to-backend hop opaque beyond gateway-to-provider edge; labeled unverified",
+        "Partial-disconnect finalization is ESTIMATED semantics; no partial disconnect occurred in any 227-c run",
+        "Zero-retry guarantee holds only via the human stock-retry exception bound to this order; root final exact-head CI recheck pending"
+      ]
     }
   },
   "honesty_disclosures": [
     "historical secondary full-unit run (Python 3.13) failed one named OpenRouter audio test; aggregate counts and causality unknown; no fix made, no full matrix rerun claimed",
     "setupfail1 receipt cleanup unverified/retained; manual cleanup only",
-    "protected live gate not_run: no live inference, key mutation, or deploy recorded"
+    "protected live gate not_run: no live inference, key mutation, or deploy recorded",
+    "Preserved failures: Hermes run1 (1.01s setup failure before spawn, 0 admitted) and run2 (11.0s HTTP 403 model_not_allowed_for_key on wire model \"slaif227fake/qwen38-27b\", 0 admitted), and OpenCode run1 (20.3s trailing-newline framing mismatch, strict FALSE) are preserved as failures; none relabeled or excluded.",
+    "Hermes client-reported final event totals (10,697 total / 5,253 cache-read) and PostgreSQL authoritative settlement (11,475 total) are both recorded; PostgreSQL is authoritative.",
+    "Stock client built-in retries were authorized only as a bounded exception for these 227-c LAN runs; none were observed in any admitted request.",
+    "Secret auth-input files (0600) under the owned task runtime remain pending final coordinated cleanup; /tmp inode exhaustion was worked around by relocating all task state to the owned home task root."
   ],
   "preprotected": {
     "missing": [],
@@ -163,9 +367,9 @@
     "note": "All required PREPROTECTED obligations satisfied with honest evidence. Former 227-a gaps closed: (a) governance 10/10 on new active 227-b state; (b) per-obligation verified test-node-ID mapping (19 records / 140 refs collection-checked at primary head 902a6e33); (c) concrete PROPOSED protected plan artifact present and reviewed (verified_manual_review). Protected live execution + human target authority + strict zero-retry guarantee remain a separately visible NOT_RUN/UNSATISFIED gate. External CI final exact-head gate = ROOT gate, a953 checkpoint SUCCESS not claimed for future heads."
   },
   "protected": {
-    "status": "not_run",
+    "status": "executed",
     "proposed_live_test": {
-      "status": "PROPOSED/UNCONFIRMED; protected execution + human target authority NOT_RUN; human target-preference question pending; root presents for human authority; not executed/deployed/approved.",
+      "status": "EXECUTED in 227-c (this 227-b proposal retained as reviewed plan of record; executed run used the human-approved 100-launch/stock-retry ceilings instead of the strict one-process/no-rerun proposal; diagnosed config failures repaired within order and recorded as preserved failures)",
       "scope": "ONE native process launch per profile, NO outer retry/rerun after failure; task-local loopback gateway with isolated task DB and task-owned keys, generic openai-compatible provider pointed at the reported FULL LAN chain; strict zero-native-retry guarantee is UNSATISFIED (source-proven) and a protected human-decision prerequisite.",
       "profiles": [
         "hermes-0.22.5-chat-v1 (pinned doc version \"2\", fixture c5e34d46270280d7e08639c01c28065380a2a80843c1114ac1f1ad2a2744d327)",
@@ -288,8 +492,22 @@
             "completed_at": "2026-11-20T13:02:43Z"
           },
           "note": "a953 checkpoint success only. Final exact-head CI gate for any future candidate head remains PENDING (root gate); pending/skipped/missing are never passes. No push performed."
-        }
+        },
+        "satisfied_for_candidate": "all 9 required jobs across the 3 workflow identities + CodeQL aggregate root-verified SUCCESS on exact executable candidate b2a0d950e122d612594f55ba54e18fe80d2644c7 before first native launch; root final exact-head CI recheck on the report commit remains pending (root gate)"
       }
+    },
+    "executed_round": "227-c",
+    "executed_result": "Both native cases terminal positive on frozen candidate b2a0d950e122d612594f55ba54e18fe80d2644c7 (Hermes run3 strict raw-byte pass; OpenCode run2 strict raw-byte pass) with all historical failures preserved; see evidence.live_227_c",
+    "human_authorization": "100 bounded LAN launches with stock client built-in retries (bounded tests only) within 227-c order ceilings",
+    "remaining_budget": {
+      "outer_launches_remaining": 95,
+      "hermes_cumulative_remaining_s": 557.98,
+      "opencode_cumulative_remaining_s": 559.342,
+      "aggregate_remaining_s": 1117.322,
+      "hermes_settled_requests_remaining": 3,
+      "opencode_settled_requests_remaining": 2,
+      "aggregate_tokens_remaining": 1958979,
+      "aggregate_eur_remaining": 1.958979
     }
   },
   "obligation_mapping": [

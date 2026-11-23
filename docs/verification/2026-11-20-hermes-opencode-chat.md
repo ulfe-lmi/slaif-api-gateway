@@ -456,6 +456,138 @@ the reviewable B candidate exists.
   prerequisite. Given the source facts above, it is recorded as
   **UNSATISFIED / human-decision pending**, never waived or labeled pass.
 
+## 227-c live LAN qualification (2026-11-23)
+
+This section records the protected live execution authorized by the 227-c
+work order on the same PR #395. Every failure below is preserved as a
+failure; none is relabeled as a pass.
+
+### Human authorization and exception scope
+
+- The human approved **100 LAN launches with stock built-in retries** for
+  this bounded qualification. The approval is recorded here once and is not
+  re-asked within the order caps.
+- **Exception scope:** stock built-in client retries are authorized *for
+  these bounded 227-c tests only*. The normative zero-automatic-retry
+  requirement (`AGENTIC_CLIENT_INTEGRATION.md` section 51) is unchanged
+  globally and remains a protected prerequisite for any stricter future
+  qualification. No proxy, budget framework, or new machinery was added.
+- Approved ceilings: 600 s per launch, 600 s cumulative per harness,
+  1200 s aggregate; 1,000,000 tokens + EUR 1 per harness, 2,000,000 tokens +
+  EUR 2 aggregate; at most 6 settled requests per key.
+
+### Executable candidate and topology
+
+- Executable candidate: ``b2a0d950e122d612594f55ba54e18fe80d2644c7``
+  (commit tree ``f7dd2d382d7aa674ff8f2c8e97911df280b7e6e5``;
+  ``app/slaif_gateway`` tree ``17a9caadc83aa1603bfef62bc1f43fab59f3a80f``;
+  parents ``4d5597220b14651f4355115c56c491c2174867be`` [227-c order publish +
+  activation] and ``8cb35eb7dd12fb3454915fe334fafa115da6cbfa`` [merged
+  origin/main: PRs #392/#393/#396/#397/#398/#399/#400]). CI gate: all 9
+  required jobs across the 3 workflow identities plus the CodeQL aggregate
+  were independently root-verified SUCCESS on this exact candidate before any
+  native launch.
+- DATA digests unchanged: Hermes doc version "2"
+  ``c5e34d46270280d7e08639c01c28065380a2a80843c1114ac1f1ad2a2744d327``;
+  OpenCode doc version "1"
+  ``2bd4f2599456892bb5d5119a85c9ffe9525796c1aa934ad46b49ce34d18f0e14``.
+- Topology: native pinned client -> task Gateway ``127.0.0.1:18300/v1``
+  (repo checkout cwd at the candidate, ``REQUEST_CAPTURE_ENABLED=False``,
+  ``CHAT_MAX_TOOL_DESCRIPTION_BYTES=8192``, ``HARD_MAX_OUTPUT_TOKENS=32768``)
+  -> provider ``qwen-student-lan`` (generic openai-compatible, route
+  ``max_retries=0``, streaming) -> ``http://10.8.132.55:18021/v1`` -> its
+  controlled backend. The hop beyond the gateway->provider edge is opaque to
+  the client and is labeled **unverified** wherever not directly observed.
+- Task keys (content never printed): per-profile authenticated Chat pins,
+  exact model/endpoint/provider allowlists, strict hosted-tool denial,
+  1,000,000-token quotas, EUR 1/M input and output pricing, six-request
+  settled caps. The provider credential stayed server-side only; each native
+  client received an isolated allowlisted environment (Hermes:
+  HOME/HERMES_HOME/XDG_*/PATH/PYTHON*/TMP* only) with no provider
+  credentials, no ``OPENAI_*`` values, and no capture variables.
+
+### Hermes case (v0.22.5, source ``bf0203a794a07aac3ff764972ab9087baa4e4f4e``, openai-python 2.24.0, Python 3.14.9 task venv)
+
+- Baseline preserved: main xhigh / auxiliary none, captured toolsets,
+  ``chat --oneshot --format stream-json --max-turns 3``; real local file-read
+  tool plus continuation plus final marker equality.
+- **Run 1 (preserved failure):** 1.01 s, exit 1. Driver pre-spawn typo
+  (STOUT->STDOUT) before the CLI started; a setup failure. 0 admitted.
+- **Run 2 (preserved failure):** 11.0 s, exit 1. HTTP 403
+  ``model_not_allowed_for_key``. The native request dump shows the wire model
+  was the provider-qualified slug ``slaif227fake/qwen38-27b`` shipped from the
+  task config ``model.default`` value. The gateway gate behaved correctly;
+  this was a client-side config/model-selection defect, not a gateway, key,
+  route, or cap change. 0 admitted, 0 reserved.
+- **Run 3 (strict PASS):** single-line task-config repair
+  (``model.default`` -> bare ``qwen38-27b``; proven offline by a resolver
+  demo showing wire model bare, pool ``custom:slaif227fake``, base URL
+  unchanged). 30.01 s, exit 0 (deadline 587.99 s). Events: system 1,
+  tool_use 1 (real task-owned file read), tool_result 1, text 31, result 1.
+  **Strict raw-byte final == marker: TRUE (32 B / 32 B, no normalization;
+  marker sha256
+  ``f26b338c87b60d46fcfd22bfbdfa60f1d07a181e758a80d8633f3a9d806b39c9``).**
+- Reconciliation (PostgreSQL authoritative): exactly 3 x
+  ``POST /v1/chat/completions`` 200, all **FINALIZED** - 5178 in / 76 out /
+  5254 total / EUR 0.005254 (09:05:41.99Z), 5346 / 97 / 5443 / EUR 0.005443
+  (09:05:44.66Z), 340 / 438 / 778 / EUR 0.000778 (09:05:55.24Z) ->
+  **10,864 in / 611 out / 11,475 total / EUR 0.011475**. The client-reported
+  final event (10,524 in / 173 out / 10,697 total / 5,253 cache-read) is
+  recorded separately; PG settlement is authoritative. One benign
+  ``GET /v1/models`` 403 (Chat-only key probe) is expected. Zero pending
+  reservations/holds/fences; ``request_diagnostics`` empty.
+
+### OpenCode case (1.19.3, source ``e3c4eb242585dcd77be1a867391b7c25fd47ce52``, executable sha256 ``179ca421d61eefeadfa0c50e084a6e79c1623734732f0f4593f81ccfd3ab7ee9``, @ai-sdk/openai-compatible 2.0.41; secondary-owned execution)
+
+- Baseline preserved: pure/denied-web 9-tool profile, xhigh, context 245760
+  with the captured 32,000 output request.
+- **Run 1 (preserved failure):** 20.3 s. Final 32 B vs marker 33 B (the
+  marker carried a terminal 0x0a; sha8 ``9f4bbeb2``): strict
+  ``final_equals_marker=FALSE`` - a trailing-newline framing mismatch,
+  **not relabeled as a pass**. Its 2 chat requests were admitted and settled.
+- **Run 2 (strict PASS):** newline-free 32 B marker (sha256
+  ``a0e716d95646e6b0f8444589303237a97d77a4af2458e9183bae4d96e5f63f2f``);
+  native read tool completed with callID + output; 2 steps; **final 32 B
+  EXACT marker 32 B (TRUE, no normalization)**; exit 0; error_events 0;
+  20.358 s. Events: step_start x2, tool_use x1, step_finish x2, text x1;
+  tool_calls = 1 (read); no observed retries.
+- Reconciliation: all 4 OpenCode requests 200 **FINALIZED**; **29,546 tokens
+  / EUR 0.029546**; zero reservations/holds/fences.
+
+### Budget and hygiene (227-c live)
+
+- Outer launches: **5 of 100** (Hermes 3, OpenCode 2). Wall time: Hermes
+  cumulative 42.02 s (<= 600; 557.98 s remaining), OpenCode cumulative
+  40.658 s (<= 600; 559.342 s remaining), aggregate 82.678 s (<= 1200;
+  1117.322 s remaining).
+- Tokens/cost (PG ledger, authoritative): aggregate **41,021 tokens /
+  EUR 0.041021** (<= 2,000,000 / <= EUR 2).
+- Requests per key: Hermes **3 of 6 settled** (3 remaining); OpenCode
+  **4 of 6** (2 remaining).
+- Retries: stock built-in retries were authorized for this bounded run;
+  **none were observed** (each admitted chat request corresponds to exactly
+  one 200 FINALIZED settlement at the observed gateway->provider hop).
+- Hygiene: no plaintext ``sk-slaif-`` in any run artifact or CLI log (the
+  only canary hits are the intentional 0600 private auth-input files, to be
+  deleted in final cleanup); ``REQUEST_CAPTURE_ENABLED=False`` throughout;
+  the /tmp inode exhaustion (1048576/1048576) was worked around by keeping
+  every task file under the owned home task root; worktree clean at the
+  frozen candidate.
+
+### Limitations (227-c live)
+
+- The upstream hop beyond ``http://10.8.132.55:18021/v1`` is opaque; no
+  full-chain proof is claimed from proxy-only observation.
+- A partial-output disconnect would finalize **ESTIMATED** usage and would
+  not prove GPU cancellation; no such disconnect occurred in the passing
+  runs, but the semantic limitation stands.
+- The zero-retry guarantee holds only via the human's stock-retry exception
+  for these bounded tests; stricter qualifications still require the section
+  51 prerequisite. Root's final exact-head CI recheck on the report commit
+  remains pending (root gate).
+- Final cleanup of the private 0600 secret auth-input files is pending
+  coordinated cleanup after evidence integration.
+
 ## Operator references
 
 - Chat profile selection: ``docs/module-architecture.md``.
