@@ -160,6 +160,12 @@ CLIENT_SERVER_COMPATIBILITY = frozenset(
         # stays denied for selected Chat profiles.
         ClientServerPair("hermes-0.22.5-chat-v1", OPENAI_COMPATIBLE_SERVER_MODULE_ID),
         ClientServerPair("opencode-1.19.3-chat-v1", OPENAI_COMPATIBLE_SERVER_MODULE_ID),
+        # 228-a: reviewed flat OpenCode Responses client profile. Only the
+        # OpenAI and OpenAI-compatible Responses servers are qualified
+        # pairs; every other server fails closed via
+        # ensure_client_server_pair (incompatible_module_pair).
+        ClientServerPair("opencode-1.19.3-responses-v1", OPENAI_SERVER_MODULE_ID),
+        ClientServerPair("opencode-1.19.3-responses-v1", OPENAI_COMPATIBLE_SERVER_MODULE_ID),
     }
 )
 

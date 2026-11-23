@@ -70,6 +70,9 @@ from slaif_gateway.modules.clients.codex_0162 import (
     codex_0162_lower_initial_additional_tools,
     codex_0162_lower_positional_tool_history,
 )
+from slaif_gateway.modules.clients.opencode_1193_responses import (
+    OPENCODE_1193_RESPONSES_CLIENT_MODULE_ID,
+)
 from slaif_gateway.modules.contracts import DEFAULT_CLIENT_MODULE_ID, ModuleSelectionError
 from slaif_gateway.modules.servers.local_coding_vllm.contract import (
     VLLM_SERVER_MODULE_ID,
@@ -1257,7 +1260,10 @@ async def handle_response_create(
     body = normalized_client_request.body
     _ensure_client_module_pair_exists(client_module.module_id)
     codex_0149_full_tool_taxonomy: frozenset[tuple[str, str, str]] | None = None
-    if client_module.module_id == CODEX_0149_CLIENT_MODULE_ID:
+    if client_module.module_id in {
+        CODEX_0149_CLIENT_MODULE_ID,
+        OPENCODE_1193_RESPONSES_CLIENT_MODULE_ID,
+    }:
         try:
             taxonomy = codex_0149_declared_tool_taxonomy(body)
             if taxonomy:
@@ -1308,7 +1314,11 @@ async def handle_response_create(
     codex_0149_continuation_taxonomy = (
         codex_0149_full_tool_taxonomy
         if (
-            client_module.module_id == CODEX_0149_CLIENT_MODULE_ID
+            client_module.module_id
+            in {
+                CODEX_0149_CLIENT_MODULE_ID,
+                OPENCODE_1193_RESPONSES_CLIENT_MODULE_ID,
+            }
             and allow_codex_request_envelope
             and allow_codex_client_tools
             and allow_codex_streaming_tool_events
@@ -1375,6 +1385,7 @@ async def handle_response_create(
         and client_module.policy_spec.allow_idless_tool_call_replay
         and (
             client_module.module_id == CODEX_0149_CLIENT_MODULE_ID
+            or client_module.module_id == OPENCODE_1193_RESPONSES_CLIENT_MODULE_ID
             or positional_facts is not None
         )
     )
@@ -1463,7 +1474,9 @@ async def handle_response_create(
         settings=settings,
     )
     if defer_idless_replay:
-        if local_coding_server_context is None:
+        if local_coding_server_context is None and (
+            client_module.module_id != OPENCODE_1193_RESPONSES_CLIENT_MODULE_ID
+        ):
             raise OpenAICompatibleError(
                 "The selected client and server modules are not compatible.",
                 status_code=400,
@@ -1476,6 +1489,7 @@ async def handle_response_create(
             settings=settings,
             request=request,
             allow_idless_tool_call_replay=True,
+            allow_idless_encrypted_reasoning=allow_idless_encrypted_reasoning,
         )
     pair_local_codex_top_level_tools, pair_local_codex_streaming_tools = (
         _derive_pair_local_codex_top_level_profile(
