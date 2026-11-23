@@ -1,0 +1,40 @@
+{
+  "variant": "natural_two_turn_tool_continuation_with_real_read_execution",
+  "config_variant": "denied-web-baseline",
+  "request_turn_1": {
+    "top_level_fields": "same 9-field envelope as structural_text_stream",
+    "assistant_capability": "server issues tool_calls; client executes locally"
+  },
+  "tool_call_issuance": {
+    "response_delta_form": "choices[0].delta.tool_calls[]",
+    "item_fields": { "index": "integer", "id": "string", "type": "string:literal: function", "function": { "name": "string", "arguments": "json_string" } },
+    "finish_reason": "tool_calls",
+    "id_grammar_observed": { "prefix": "call_", "total_length": 34, "class": "server-issued opaque string; client replays verbatim" }
+  },
+  "request_turn_2_continuation": {
+    "messages_appended": [
+      { "role": "assistant", "fields": ["role", "content", "tool_calls"], "content_state": "string (may be empty) alongside tool_calls", "tool_call_item_fields": { "id": "string (exact server-issued id)", "type": "function", "function": { "name": "string", "arguments": "json_string" } } },
+      { "role": "tool", "fields": ["role", "tool_call_id", "content"], "tool_call_id_matches_issued_call_id": true, "content_type": "string" }
+    ],
+    "top_level_fields": "same 9-field envelope; tools re-declared identically"
+  },
+  "read_tool": {
+    "declared_argument_keys": ["filePath"],
+    "argument_note": "OpenCode read takes filePath (relative workspace path accepted); NOT the Hermes path key",
+    "native_output_wrap": {
+      "content_is_raw_file_bytes": false,
+      "envelope_lines_observed": 7,
+      "envelope_structure": "3 header lines, 1 line-number-prefixed content line per file line, 1 empty line, 2 footer lines",
+      "marker_occurrences_in_output": 1,
+      "marker_at_content_start": false,
+      "envelope_overhead_bytes_for_46_byte_single_line_file_same_path": 138,
+      "note": "do not equate tool message content with raw file bytes; verify by marker presence/correlation"
+    }
+  },
+  "verification_gate": {
+    "correlation": "tool message tool_call_id equals the server-issued call id",
+    "exact_result_roundtrip": "final client text equals the unpredictable marker extracted from the correlated native tool result",
+    "result": "verified: final_text_equals_marker true, 46/46 bytes, exit 0"
+  },
+  "privacy": { "raw_content_retained": false, "provider_call_performed": false }
+}

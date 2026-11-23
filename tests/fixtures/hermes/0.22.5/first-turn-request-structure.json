@@ -1,0 +1,67 @@
+{
+  "profile": {
+    "client_module_id": "hermes-0.22.5-chat-v1",
+    "client_module_version": "2",
+    "distribution": "hermes-agent",
+    "distribution_version": "0.22.5",
+    "source_tag": "v0.22.5",
+    "source_commit": "bf0203a794a07aac3ff764972ab9087baa4e4f4e",
+    "model_catalog_class": "custom_named_provider",
+    "wire_api": "chat_completions",
+    "revision_note": "distribution/source_tag/source_commit are immutable observations of the pinned v0.22.5 source archive; client_module_version '2' is the runtime candidate DATA revision (DATA2 digest c5e34d46270280d7e08639c01c28065380a2a80843c1114ac1f1ad2a2744d327) pinned in provenance.json, not a client release version"
+  },
+  "request": {
+    "label": "structural_counterpart_of_native_capture",
+    "method": "POST",
+    "path": "/v1/chat/completions",
+    "top_level_fields": [
+      {"name": "messages", "type": "array", "state": "present"},
+      {"name": "model", "type": "string", "state": "present", "observed_value_class": "configured_model_name"},
+      {"name": "reasoning_effort", "type": "string", "state": "present", "observed_value": "xhigh"},
+      {"name": "stream", "type": "boolean", "state": "present", "observed_value": true},
+      {"name": "stream_options", "type": "object", "state": "present", "members": ["include_usage"]},
+      {"name": "tools", "type": "array", "state": "present"}
+    ],
+    "absent_fields_not_to_require": [
+      "max_tokens",
+      "max_completion_tokens",
+      "max_output_tokens",
+      "store",
+      "tool_choice",
+      "parallel_tool_calls"
+    ],
+    "messages_shape": [
+      {"role": "system", "content_type": "string"},
+      {"role": "user", "content_type": "string"}
+    ],
+    "tool_declarations": {
+      "count": 8,
+      "form": "nested_function",
+      "names": [
+        "patch",
+        "read_file",
+        "search_files",
+        "terminal",
+        "write_file",
+        "tool_search",
+        "tool_describe",
+        "tool_call"
+      ],
+      "shape_fields": ["type", "function.name", "function.description", "function.parameters"],
+      "parameters_value_class": "object"
+    },
+    "vocabulary_derivation": {
+      "note": "observed initial declarations are not the universe; the bounded profile vocabulary is the configured toolset union (terminal: terminal,process_manage; file: read_file,write_file,patch,search_files; todo: todo_list) plus the client-local discovery bridge (tool_search,tool_describe,tool_call)",
+      "configured_toolsets": ["terminal", "file", "todo"]
+    }
+  },
+  "client_identification": {
+    "user_agent": "OpenAI/Python 2.24.0",
+    "authority": "none",
+    "note": "SDK identification only; never a profile selector"
+  },
+  "privacy": {
+    "raw_content_retained": false,
+    "provider_call_performed": false
+  }
+}

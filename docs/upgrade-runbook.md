@@ -376,6 +376,110 @@ revision-15 snapshot return to the old engine's singleton law, whose
 incremental-history refusals may reappear for 0.167.1-shaped clients.
 
 
+## Hermes/OpenCode Chat client profile upgrade and rollback (227-a)
+
+Chat client profiles (`hermes-0.22.5-chat-v1`, `opencode-1.19.3-chat-v1`)
+differ from Codex compatibility profiles in two ways: their profile DATA
+is PACKAGED in the gateway image (no operator-mounted profile file by
+default), and key pins have NO migration command. Each process loads
+exactly ONE identity per module id from its packaged DATA, so a key pin
+resolves only when its `fixture_sha256` matches the deployed revision;
+any pin/deployment digest mismatch fails that key's requests closed
+before admission. The REGISTERED RUNTIME module `version` and the
+`fixture_sha256` are both derived from that document's bytes (the module's
+exported `VERSION` constant is a separate source literal that is not the
+runtime identity), so a reviewed DATA-only revision needs only the new
+document bytes and a re-pin; the module ID remains the one source
+constant.
+
+Two distinct file locations must not be conflated:
+
+- **Profile DATA** — the baked JSON documents the binding loads at
+  startup, at container path
+  `/app/app/slaif_gateway/modules/clients/profiles/` (host source
+  `app/slaif_gateway/modules/clients/profiles/`):
+  `hermes-0.22.5-chat.json` and `opencode-1.19.3-chat.json`.
+- **Policy file** — the `schema_version` 1 document you pass to `keys
+  policy update --policy-file`; under `run-cli` it lives in the mounted
+  working directory (`/workspace`). It carries the per-key pin and is
+  unrelated to the profile DATA bytes.
+
+**Data-only revision (NO code/package/image change required):**
+
+A vocabulary/bounds revision that is only a new reviewed DATA document
+can stay on the SAME code and image:
+
+1. Review the new profile JSON and record its new canonical
+   `fixture_sha256` and the version string it declares.
+2. Bind-mount that reviewed JSON **read-only** at its exact packaged
+   path, identically on API, worker, and scheduler (all must see the
+   same bytes). Append to the `volumes` list of EACH of those three
+   services (do not replace their existing mounts); in YAML long syntax:
+
+   ```yaml
+   volumes:
+     # existing service volumes stay above these two lines
+     - type: bind
+       source: /path/to/hermes-0.22.5-chat.json
+       target: /app/app/slaif_gateway/modules/clients/profiles/hermes-0.22.5-chat.json
+       read_only: true
+     - type: bind
+       source: /path/to/opencode-1.19.3-chat.json
+       target: /app/app/slaif_gateway/modules/clients/profiles/opencode-1.19.3-chat.json
+       read_only: true
+   ```
+
+   The CLI runs in the API service, so the API container carries the
+   mount the CLI uses.
+3. **Recreate** the API, worker, and scheduler containers. Restart alone
+   never changes bytes baked into the image; the read-only bind mount is
+   what overrides them.
+4. Re-pin each affected key to the NEW exact tuple through a
+   `schema_version` 1 policy file (`keys policy update --policy-file`
+   with `--reason`), from the `/workspace` policy file.
+5. Verify with `keys policy export <key-id>`: the stored pin shows the
+   new `version` and `fixture_sha256`.
+
+A matching new image that bakes the same reviewed JSON is an
+ALTERNATIVE to the bind mount, not a requirement. On a native
+(non-Docker) install, replace the trusted installed JSON in place and
+restart; the loader reads the file relative to the installed module.
+
+**Full image/package upgrade (new image bakes the new DATA):**
+
+1. Deploy the new image to API, worker, and scheduler. All workers must
+   use one revision; never serve traffic with mixed revisions.
+2. Re-pin each affected key to the NEW exact tuple through a
+   `schema_version` 1 policy file (`keys policy update --policy-file`
+   with `--reason`). Example, Hermes revision 2: `{"id":
+   "hermes-0.22.5-chat-v1", "version": "2", "fixture_sha256":
+   "c5e34d46270280d7e08639c01c28065380a2a80843c1114ac1f1ad2a2744d327"}`.
+3. Verify with `keys policy export <key-id>`: the version-1 document
+   renders the stored pin.
+
+**Rollback (restore the previous revision):**
+
+Rollback is a full DATA restore, not just a re-pin: the previous pin
+cannot resolve until the matching previous DATA is deployed again.
+
+1. Re-deploy the PREVIOUS trusted revision to API, worker, and
+   scheduler: the previous image, OR the previous reviewed JSON at the
+   packaged paths (read-only bind mount, or native replace). Then
+   recreate/restart. A re-pin alone on the new DATA is NOT a rollback.
+2. Re-pin each key to the previous exact tuple with the matching CLI
+   (same `schema_version` 1 policy-file update as the upgrade).
+3. While a key's pin digest and the deployed DATA digest mismatch, that
+   key's requests fail closed. The previous revision must itself be
+   reviewed and qualified; the gateway makes no automatic
+   compatibility promise.
+
+**Deliberate disable** is distinct from rollback: clearing the pin
+(`"chat_client_module": null` in a `schema_version` 1 policy file)
+returns the key to `openai-default` Chat validation. It is not a
+rollback, and a client tuned to a profile's widened envelope (for
+example Hermes `xhigh` reasoning effort) may fail the default
+validator until the pin is restored.
+
 ## Qwen executable compatibility update (packaged profile 8)
 
 The Qwen schema-label, custom `functions.apply_patch`, sparse Local visible

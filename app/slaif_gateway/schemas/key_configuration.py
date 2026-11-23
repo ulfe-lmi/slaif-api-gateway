@@ -114,6 +114,11 @@ class KeyConfiguration:
       block.
     - ``confirm_external_tool_fenced``: bool acknowledgement for fenced
       blocks.
+    - ``chat_client_module``: ``ABSENT`` preserves; ``null`` clears only
+      the Chat binding (never touches Responses or other metadata); an
+      object is a complete strict ``{id, version, fixture_sha256}`` pin
+      (structural acceptance here; strict registry resolution is enforced
+      by the service authoring helper).
     """
 
     allowed_models: Field = ABSENT
@@ -130,6 +135,7 @@ class KeyConfiguration:
     chat_streaming_live_burn_policy: Field = ABSENT
     external_tool_policy: Field = ABSENT
     confirm_external_tool_fenced: Field = ABSENT
+    chat_client_module: Field = ABSENT
 
     def has(self, name: str) -> bool:
         """True when the field is present (explicitly, including null)."""
@@ -163,6 +169,7 @@ _FIELD_NAMES: tuple[str, ...] = (
     "chat_streaming_live_burn_policy",
     "external_tool_policy",
     "confirm_external_tool_fenced",
+    "chat_client_module",
 )
 
 _KNOWN_CONFIGURATION_FIELDS: frozenset[str] = frozenset(_FIELD_NAMES)
@@ -407,6 +414,11 @@ def parse_key_configuration(document: dict[str, Any]) -> KeyConfiguration:
         config.confirm_external_tool_fenced = _strict_bool(
             document["confirm_external_tool_fenced"],
             field_name="confirm_external_tool_fenced",
+        )
+    if "chat_client_module" in document:
+        raw = document["chat_client_module"]
+        config.chat_client_module = (
+            None if raw is None else _bounded_object(raw, field_name="chat_client_module")
         )
     return config
 

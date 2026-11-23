@@ -1,0 +1,25 @@
+{
+  "profile": {
+    "client_module_id": "hermes-0.22.5-chat-v1",
+    "client_module_version": "2",
+    "wire_api": "chat_completions",
+    "revision_note": "client_module_version '2' tracks the runtime candidate DATA revision (DATA2 digest in provenance.json), distinct from the immutable v0.22.5 source observations"
+  },
+  "request": {
+    "label": "structural_counterpart_of_native_capture",
+    "method": "POST",
+    "path": "/v1/chat/completions",
+    "note": "auxiliary non-streaming session-title model upgrade; observed auxiliary session_title request used none reasoning effort (the main run observed xhigh; the two are NOT the same effort)",
+    "top_level_fields": [
+      {"name": "messages", "type": "array", "state": "present"},
+      {"name": "model", "type": "string", "state": "present"},
+      {"name": "reasoning_effort", "type": "string", "state": "present", "observed_value": "none"},
+      {"name": "response_format", "type": "object", "state": "present", "observed_type": "json_schema", "observed_schema_name": "session_title"}
+    ],
+    "absent_fields_not_to_require": ["tools", "stream"]
+  },
+  "privacy": {
+    "raw_content_retained": false,
+    "provider_call_performed": false
+  }
+}

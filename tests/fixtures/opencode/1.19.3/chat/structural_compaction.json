@@ -1,0 +1,34 @@
+{
+  "variant": "actual_compaction_followed_by_continuation",
+  "config_variant": "small-context controlled fake-peer scenario",
+  "configuration": {
+    "limit": { "context": 4096, "input": 2048, "output": 256 },
+    "compaction": { "reserved": 256 },
+    "trigger_arithmetic": "compaction threshold = limit.input - compaction.reserved = 1792",
+    "reported_usage_that_triggered": { "prompt_tokens": 1900, "completion_tokens": 100, "total_tokens": 2000 }
+  },
+  "trigger_timing": "post-turn: after a main response whose reported total usage is at or above the threshold, before the next model call of that session",
+  "summarization_request": {
+    "top_level_field_count": 7,
+    "fields_absent_vs_main": ["tools", "tool_choice"],
+    "system_prompt_class": "dedicated context-summarization agent prompt (~630 bytes, static per pinned version)",
+    "user_content_class": "single string: 'Here is the conversation so far:' followed by the conversation as [User]: / [Assistant]: lines, ending with instructions not to mention the summary process"
+  },
+  "compacted_context_template": {
+    "system": "unchanged original full agent system prompt (byte-identical length to pre-compaction)",
+    "messages": [
+      { "role": "user", "content": "What did we do so far?" },
+      { "role": "assistant", "content": "<summary from summarization response>" },
+      { "role": "user", "content": "Continue if you have next steps, or stop and ask for clarification if you are unsure how to proceed." }
+    ],
+    "new_user_prompt_append": "appended as a quoted user message on the next main request",
+    "followed_by_continuation_main_call": true
+  },
+  "persistence": "compacted context persists across separate runs of the same session (--continue)",
+  "verification_gate": {
+    "summary_marker_injected_by_fake": true,
+    "summary_observed_in_continuation_main_request": true,
+    "result": "verified: compact_verified true, exit 0 both turns"
+  },
+  "privacy": { "raw_content_retained": false, "provider_call_performed": false }
+}

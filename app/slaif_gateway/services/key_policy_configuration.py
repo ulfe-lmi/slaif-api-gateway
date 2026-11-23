@@ -33,6 +33,9 @@ from slaif_gateway.schemas.key_configuration import (
     KeyConfiguration,
 )
 from slaif_gateway.schemas.keys import CreateGatewayKeyInput
+from slaif_gateway.modules.clients.agent_chat import (
+    canonicalize_chat_client_module_pin,
+)
 from slaif_gateway.modules.clients.registry import resolve_responses_client_module
 from slaif_gateway.modules.contracts import ModuleSelectionError
 from slaif_gateway.services.key_errors import (
@@ -379,4 +382,7 @@ def build_create_gateway_key_input(
             _present_or(config, "confirm_external_tool_fenced", False)
         ),
         note=note,
+        chat_client_module=canonicalize_chat_client_module_pin(
+            _present_or(config, "chat_client_module", None)
+        ),
     )

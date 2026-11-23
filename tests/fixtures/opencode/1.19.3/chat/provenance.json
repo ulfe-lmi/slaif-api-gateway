@@ -1,0 +1,59 @@
+{
+  "profile": {
+    "client_module_id": "opencode-1.19.3-chat-v1",
+    "client_module_version": "1",
+    "client_name": "OpenCode",
+    "client_version": "1.19.3",
+    "distribution": "opencode-linux-x64-baseline (glibc single-file executable)",
+    "distribution_version": "1.19.3",
+    "release": "https://github.com/anomalyco/opencode/releases/tag/v1.19.3",
+    "archive_sha256": "531cff2441129c30f0edd5878af494108ad07f5feb46d7ee29a2a5b830a5765d",
+    "executable_sha256": "179ca421d61eefeadfa0c50e084a6e79c1623734732f0f4593f81ccfd3ab7ee9",
+    "chat_provider_package": "@ai-sdk/openai-compatible 2.0.41",
+    "ai_sdk_version": "6.0.168",
+    "observed_user_agent": "opencode/1.19.3 ai-sdk/provider-utils/4.0.23 runtime/bun/1.3.14",
+    "observed_runtime": "bun 1.3.14",
+    "wire_api": "chat_completions",
+    "version_command_observed": "1.19.3",
+    "source_tag": "v1.19.3",
+    "source_commit": "e3c4eb242585dcd77be1a867391b7c25fd47ce52",
+    "source_commit_note": "direct commit of the official v1.19.3 release tag (type: commit), gh api repos/anomalyco/opencode/git/ref/tags/v1.19.3; independent of the pinned executable SHA-256",
+    "packaged_profile_digest": "2bd4f2599456892bb5d5119a85c9ffe9525796c1aa934ad46b49ce34d18f0e14",
+    "packaged_profile_digest_rule": "canonical_profile_digest: SHA-256 over sorted-key compact ASCII JSON of the validated schema_version 1 document in app/slaif_gateway/modules/clients/profiles/opencode-1.19.3-chat.json",
+    "vocabulary_decision": "v1 ships the 9-tool denied-web-baseline reviewed capture vocabulary; webfetch (observed only under the permissive task-default config variant) is outside v1 and requires a reviewed DATA revision with new digest"
+  },
+  "capture_environment": {
+    "captured_utc_date": "2026-11-20",
+    "mode": "pinned executable against task-owned 127.0.0.1 loopback fake; isolated task-owned HOME/XDG dirs; task-owned config with synthetic bearer; --pure; bounded 240s timeouts",
+    "user_saved_profiles_touched": false,
+    "user_credentials_read": false,
+    "production_provider_key_used": false,
+    "external_plugins": "disabled via --pure",
+    "config_variants": [
+      {
+        "label": "task-default",
+        "permission": {},
+        "observed_tool_count": 10,
+        "note": "task-owned config without webfetch denial; webfetch present"
+      },
+      {
+        "label": "denied-web-baseline",
+        "permission": {
+          "webfetch": "deny"
+        },
+        "observed_tool_count": 9,
+        "note": "reproduces the student-baseline 9-tool vocabulary from the 2026-10-20 status report"
+      }
+    ],
+    "configuration_difference_note": "tool vocabulary is configuration-dependent (permission.webfetch deny drops webfetch). The 10-tool capture is a configuration variant, not a newer-client behavior; neither is identical to the 2026-10-20 saved-profile capture."
+  },
+  "privacy": {
+    "raw_content_retained": false,
+    "provider_call_performed": false,
+    "raw_ids_retained": false,
+    "credentials_retained": false,
+    "home_workspace_paths_retained": false
+  },
+  "structural_fixture_digest_rule": "sha256 over, for each structural_*.json in tests/fixtures/opencode/1.19.3/chat sorted by filename: filename + NUL + file bytes (provenance.json excluded)",
+  "structural_fixture_sha256": "c84570f8dbbefb727ec90b17df2de802257951bda65e78b352df4742392208d3"
+}

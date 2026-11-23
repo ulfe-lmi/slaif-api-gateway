@@ -84,6 +84,59 @@ a code branch or adapter class. The generic output-field mapper supports text
 plus one inline image using configured JSON pointers. See [completion services](completion-services.md). Provider construction delegates to the
 server registry; there is no parallel production factory.
 
+## Chat client profile selection
+
+The first agent-harness Chat profiles are served by a shared neutral Chat
+profile engine (`modules/clients/agent_chat.py`): one pure, data-driven
+decoder for every reviewed Chat profile, with thin statically shipped
+harness bindings (`hermes_0225_chat`, `opencode_1193_chat`) that bind one
+packaged profile document each. The initial entries are
+`hermes-0.22.5-chat-v1` (profile DATA revision `2`, fixture digest
+`c5e34d46270280d7e08639c01c28065380a2a80843c1114ac1f1ad2a2744d327`) and
+`opencode-1.19.3-chat-v1` (DATA revision `1`, fixture digest
+`2bd4f2599456892bb5d5119a85c9ffe9525796c1aa934ad46b49ce34d18f0e14`).
+Both are `chat_completions` wire profiles; their tool vocabularies,
+assistant reasoning fields, reasoning-effort values, tool-call ID grammar,
+and per-profile ceilings ship as trusted validated DATA under
+`modules/clients/profiles/`, not as Python tool-name inventories.
+
+A Chat profile is selected ONLY from the optional authenticated
+server-side key metadata tuple `metadata_json.chat_client_module`
+(`{id, version, fixture_sha256}`). An absent pin keeps the existing
+`openai-default` Chat behavior unchanged, and a present explicit `null`
+clears only the Chat binding during key configuration updates. A present
+pin that is malformed, unknown (including Responses-only modules), stale,
+or digest-mismatched fails closed before Chat admission; it never
+silently degrades to the default and never affects the Responses
+endpoint, whose `responses_policy.client_module` pin remains
+Responses-scoped. Headers, User-Agent strings, model names, and
+client-request metadata never select or widen a profile.
+
+Chat profiles pair only with explicit, finite, Chat-capable server
+transports (generic OpenAI-compatible candidate pairs). The signed Local
+Coding server module remains a Responses-only transport and cannot serve
+Chat. As with every module, pairing is compatibility data, not an
+endpoint, route, provider, capability, pricing, or authority grant:
+policy, caps, routing, quota, pricing, and PostgreSQL accounting stay
+Gateway-core facts.
+
+Data-versus-engine upgrade boundary: a data-only vocabulary upgrade is
+new document bytes with a new digest and requires a re-pinned operator
+key and process restart; there is no per-tool source upgrade, automatic
+upgrade, or silent key-rotation path. Engine semantics changes are
+version-owned in source. Both profiles remain preprotected candidates and
+nothing in the profile DATA grants live qualification (see the client
+dossiers under [agentic clients](agentic-clients/hermes-0.22.5-chat-v1.md)).
+The protected live-qualification gate was `not_run` through 227-b; a
+bounded, human-authorized live LAN qualification was executed in 227-c
+against the pinned Hermes 0.22.5 and OpenCode 1.19.3 clients only (generic
+OpenAI-compatible candidate pairs), and is recorded in the
+[consolidated verification record](verification/2026-11-20-hermes-opencode-chat.md).
+That execution grants no Responses, plugin, MCP, or image claim, no future
+client version, and no production certification; the stock-native retry
+exception applied only to that 227-c execution, and the downstream hop
+beyond the gateway-to-provider edge remains unverified.
+
 ## Change ownership
 
 The [configurable upstream LLM adapter](upstream-llm-adapter.md) is the single

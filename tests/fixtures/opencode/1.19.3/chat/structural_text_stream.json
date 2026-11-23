@@ -1,0 +1,60 @@
+{
+  "variant": "ordinary_single_turn_streaming_text",
+  "config_variant": "denied-web-baseline",
+  "request": {
+    "endpoint": "POST /v1/chat/completions",
+    "headers": {
+      "authorization": { "state": "present", "class": "Bearer <synthetic>" },
+      "content_type": "application/json",
+      "accept": "*/*",
+      "user_agent": { "state": "present", "format_class": "opencode/<ver> ai-sdk/provider-utils/<ver> runtime/bun/<ver>" },
+      "session_headers": {
+        "names": ["x-session-id", "x-opencode-session-id", "x-session-affinity"],
+        "states": ["present", "present", "present"],
+        "three_values_equal_per_request": true,
+        "value_format": "ses_[A-Za-z0-9]{26}",
+        "value_length": 30
+      }
+    },
+    "top_level_fields": [
+      { "name": "model", "type": "string", "state": "present", "value_class": "configured model id" },
+      { "name": "max_tokens", "type": "integer", "state": "present", "observed": 32000, "note": "runtime output cap; configured limit.output 32768 emits 32000" },
+      { "name": "store", "type": "boolean", "state": "present", "observed": false },
+      { "name": "reasoning_effort", "type": "string", "state": "present", "observed": "xhigh", "note": "PROVEN DIFFERENCE: generic Chat validator accepts only minimal/low/medium/high" },
+      { "name": "messages", "type": "array", "state": "present" },
+      { "name": "tools", "type": "array", "state": "present", "note": "absent on auxiliary/title requests" },
+      { "name": "tool_choice", "type": "string", "state": "present", "observed": "auto", "note": "absent on auxiliary/title requests" },
+      { "name": "stream", "type": "boolean", "state": "present", "observed": true },
+      { "name": "stream_options", "type": "object", "state": "present", "observed": { "include_usage": true } }
+    ],
+    "top_level_field_count": 9,
+    "messages": [
+      { "role": "system", "content_type": "string", "byte_length_class": "~9588 agent instruction prompt (config-dependent)" },
+      { "role": "user", "content_type": "string" }
+    ],
+    "tool_declarations": {
+      "form": "nested",
+      "outer_fields": { "type": { "state": "present", "observed": "function" }, "function": { "state": "present", "type": "object" } },
+      "function_fields": { "name": "string", "description": "string", "parameters": "json_schema_object" },
+      "strict_key_state": "absent",
+      "counts_by_type": { "function": 9 },
+      "baseline_vocabulary_9": ["bash", "edit", "glob", "grep", "read", "skill", "task", "todowrite", "write"],
+      "observed_extension_when_webfetch_not_denied": ["webfetch"],
+      "authority_note": "local function declarations only; a name never grants hosted execution, routing, or connector authority"
+    }
+  },
+  "response": {
+    "content_type_class": "sse",
+    "observed_chunk_object": "chat.completion.chunk",
+    "completion_id_single_per_response": true,
+    "delta_sequence_classes": ["role+empty content", "content delta", "empty delta + finish_reason stop", "empty choices + usage (when stream_options.include_usage)"],
+    "terminal_predicates": { "finish_reason": "stop", "usage_chunk_consumed": true, "data_done_sentinel_observed": true }
+  },
+  "client_behavior": {
+    "always_streams_in_run_mode": true,
+    "nonstreaming_chat_observed": false,
+    "usage_reflected_in_step_finish_tokens": true,
+    "exit_code_on_success": 0
+  },
+  "privacy": { "raw_content_retained": false, "provider_call_performed": false }
+}

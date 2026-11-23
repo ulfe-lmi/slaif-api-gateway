@@ -44,6 +44,16 @@ from slaif_gateway.providers.errors import ProviderError
 from slaif_gateway.providers.errors import ProviderHTTPError
 from slaif_gateway.providers.factory import get_provider_adapter
 from slaif_gateway.modules.clients.registry import normalize_default_client_request
+from slaif_gateway.modules.clients.agent_chat import (
+    AgentChatModuleSelectionError,
+    AgentChatRequestError,
+    resolve_chat_client_module,
+)
+from slaif_gateway.modules.servers.registry import (
+    ensure_client_server_pair,
+    resolve_server_module,
+)
+from slaif_gateway.providers.errors import ProviderConfigurationError
 from slaif_gateway.metrics import (
     add_cost_eur,
     add_tokens,
@@ -182,6 +192,99 @@ def _build_safe_chat_completion_upstream_body(
         ) from exc
 
 
+def _resolve_chat_client_module(authenticated_key: AuthenticatedGatewayKey):
+    """Select a Chat profile ONLY from authenticated server-side metadata.
+
+    ``None`` (absent pin) keeps the existing default Chat behavior. A
+    present pin is resolved strictly against the finite static registry;
+    any unknown/stale/malformed pin fails closed before admission.
+    """
+    pin = getattr(authenticated_key, "chat_client_module", None)
+    if pin is None:
+        return None
+    return resolve_chat_client_module(pin)
+
+
+def _openai_error_from_chat_module_selection_error(
+    exc: AgentChatModuleSelectionError,
+) -> OpenAICompatibleError:
+    return OpenAICompatibleError(
+        "The selected Chat client module is unavailable for this request.",
+        status_code=400,
+        error_type="invalid_request_error",
+        code=exc.error_code,
+    )
+
+
+def _openai_error_from_chat_request_error(exc: AgentChatRequestError) -> OpenAICompatibleError:
+    return OpenAICompatibleError(
+        "The request is not valid for the selected Chat client profile.",
+        status_code=400,
+        error_type="invalid_request_error",
+        code=exc.error_code,
+        param=exc.param,
+    )
+
+
+def _observe_chat_capture_module_provenance(request, chat_module) -> None:
+    """Record the selected Chat module identity for the capture sidecar.
+
+    Observation-only: bounded, content-free, best-effort, and never
+    affects routing, admission, or accounting.  A no-op when no request
+    scope is bound, the capture channel is unavailable, or the default
+    dialect (no selected profile) is in force.
+    """
+    if request is None or chat_module is None:
+        return
+    try:
+        from slaif_gateway.services.request_capture import (
+            record_scope_capture_provenance,
+        )
+
+        record_scope_capture_provenance(
+            request.scope,
+            module_id=getattr(chat_module, "module_id", None),
+            module_version=getattr(chat_module, "module_version", None),
+            module_fixture_sha256=getattr(chat_module, "fixture_sha256", None),
+        )
+    except Exception:  # noqa: BLE001 - observability must never affect the request
+        pass
+
+
+def _chat_module_identity(module) -> tuple[str, str, str] | None:
+    """Reviewed profile identity (None for the default dialect)."""
+    if module is None:
+        return None
+    return (module.module_id, module.module_version, module.fixture_sha256)
+
+
+def _ensure_chat_client_server_pair(
+    client_module_id: str, route: RouteResolutionResult
+) -> None:
+    """Enforce the selected Chat profile's reviewed server pair.
+
+    Runs on the trusted resolved route descriptor BEFORE admission
+    (rate-limit/quota reservation) and credential lookup, and again on
+    the refreshed route after a real wait. The default Chat dialect is
+    never gated here (its existing factory-side pair check is
+    unchanged).
+    """
+    try:
+        descriptor = resolve_server_module(
+            route.provider,
+            getattr(route, "provider_kind", None),
+            getattr(route, "capabilities", None),
+        )
+        ensure_client_server_pair(client_module_id, descriptor.module_id)
+    except ProviderConfigurationError as exc:
+        raise OpenAICompatibleError(
+            "The selected Chat client and server modules are not compatible.",
+            status_code=400,
+            error_type="invalid_request_error",
+            code="incompatible_client_server_pair",
+        ) from exc
+
+
 async def handle_chat_completion(
     *,
     payload: ChatCompletionRequest,
@@ -189,10 +292,32 @@ async def handle_chat_completion(
     settings: Settings,
     request: Request | None = None,
 ):
-    body = normalize_default_client_request(
-        "/v1/chat/completions",
-        payload.model_dump(mode="python", exclude_none=True),
-    ).body
+    try:
+        chat_module = _resolve_chat_client_module(authenticated_key)
+    except AgentChatModuleSelectionError as exc:
+        # A stored but unknown/stale/malformed Chat pin fails closed BEFORE
+        # validation, admission, or any upstream activity.
+        raise _openai_error_from_chat_module_selection_error(exc) from exc
+    _observe_chat_capture_module_provenance(request, chat_module)
+    try:
+        if chat_module is None:
+            # Existing default path: historical exclude_none=True behavior.
+            raw_payload = payload.model_dump(mode="python", exclude_none=True)
+            body = normalize_default_client_request(
+                "/v1/chat/completions", raw_payload
+            ).body
+        else:
+            # Selected profile: presence-preserving dump. An explicitly
+            # provided null - including an unknown extra field set to
+            # null - must survive to the engine's strict shape and
+            # unknown-field checks; exclude_none=True would silently
+            # delete it and a prohibited field could be smuggled as null.
+            raw_payload = payload.model_dump(mode="python", exclude_unset=True)
+            body = chat_module.normalize("/v1/chat/completions", raw_payload).body
+    except AgentChatModuleSelectionError as exc:
+        raise _openai_error_from_chat_module_selection_error(exc) from exc
+    except AgentChatRequestError as exc:
+        raise _openai_error_from_chat_request_error(exc) from exc
 
     if not body.get("model"):
         raise OpenAICompatibleError(
@@ -221,7 +346,10 @@ async def handle_chat_completion(
             param="messages",
         )
 
-    policy = ChatCompletionRequestPolicy(settings=settings)
+    policy = ChatCompletionRequestPolicy(
+        settings=settings,
+        chat_client_spec=chat_module.policy_spec if chat_module is not None else None,
+    )
     try:
         policy_result = policy.apply(
             body,
@@ -238,6 +366,12 @@ async def handle_chat_completion(
         policy_result=policy_result,
         request=request,
     )
+    if chat_module is not None:
+        # Selected profile: the route's server descriptor must carry a
+        # reviewed pair for this profile BEFORE any admission or
+        # credential lookup (unqualified, native, and signed
+        # Responses-only transports fail closed here).
+        _ensure_chat_client_server_pair(chat_module.module_id, route)
     try:
         policy_result = apply_media_input_estimate(policy_result, route_capabilities=route.capabilities, input_ceiling=settings.HARD_MAX_INPUT_TOKENS)
     except RequestPolicyError as exc:
@@ -276,13 +410,34 @@ async def handle_chat_completion(
         # The request genuinely waited: admission was re-validated, so
         # forward under the CURRENT key, request policy result, and route
         # (R4: never forward under a stale pre-wait authorization).
-        authenticated_key = refreshed_context.authenticated_key
-        policy_result = refreshed_context.policy_result
-        route = refreshed_context.route
-        upstream_body = _build_safe_chat_completion_upstream_body(
-            policy_result=policy_result,
-            upstream_model=route.resolved_model,
-        )
+        try:
+            refreshed_key = refreshed_context.authenticated_key
+            try:
+                refreshed_chat_module = _resolve_chat_client_module(refreshed_key)
+            except AgentChatModuleSelectionError as exc:
+                raise _openai_error_from_chat_module_selection_error(exc) from exc
+            if _chat_module_identity(refreshed_chat_module) != _chat_module_identity(chat_module):
+                # The Chat profile binding changed while waiting: never
+                # forward under a stale pre-wait profile (R4).
+                raise policy_changed_while_waiting_error()
+            authenticated_key = refreshed_key
+            policy_result = refreshed_context.policy_result
+            route = refreshed_context.route
+            if chat_module is not None:
+                # The refreshed route must still carry a reviewed pair
+                # for the same profile (R4).
+                _ensure_chat_client_server_pair(chat_module.module_id, route)
+            upstream_body = _build_safe_chat_completion_upstream_body(
+                policy_result=policy_result,
+                upstream_model=route.resolved_model,
+            )
+        except Exception:
+            # Post-acquisition refresh denial: release any acquired
+            # concurrency slot exactly once before the error propagates
+            # (the success-path release below is never reached on this
+            # path).
+            await _release_rate_limit_concurrency(rate_limit_reservation, suppress=True)
+            raise
     try:
         quota = await _reserve_chat_completion_quota(
             authenticated_key=authenticated_key,
@@ -1000,7 +1155,16 @@ def _revalidate_chat_completion_after_wait(
             raise policy_changed_while_waiting_error()
 
         try:
-            new_policy_result = ChatCompletionRequestPolicy(settings=settings).apply(
+            new_chat_module = _resolve_chat_client_module(new_key)
+        except AgentChatModuleSelectionError as exc:
+            raise _openai_error_from_chat_module_selection_error(exc) from exc
+        try:
+            new_policy_result = ChatCompletionRequestPolicy(
+                settings=settings,
+                chat_client_spec=(
+                    new_chat_module.policy_spec if new_chat_module is not None else None
+                ),
+            ).apply(
                 body,
                 defer_media_limit=True,
                 capability_policy_mode=new_key.capability_policy_mode,
@@ -1038,6 +1202,25 @@ def _revalidate_chat_completion_after_wait(
             new_route.provider,
         ) != (original.route.resolved_model, original.route.provider):
             raise policy_changed_while_waiting_error()
+
+        # The Chat profile binding and its reviewed transport pair must
+        # hold for the CURRENT route before any limiter admission under
+        # it (R4): a stale/changed binding or an unqualified pair fails
+        # the wait instead of being forwarded.
+        try:
+            original_chat_module = _resolve_chat_client_module(
+                original.authenticated_key
+            )
+            new_chat_module = _resolve_chat_client_module(new_key)
+        except AgentChatModuleSelectionError as exc:
+            raise _openai_error_from_chat_module_selection_error(exc) from exc
+        if (
+            _chat_module_identity(new_chat_module)
+            != _chat_module_identity(original_chat_module)
+        ):
+            raise policy_changed_while_waiting_error()
+        if new_chat_module is not None:
+            _ensure_chat_client_server_pair(new_chat_module.module_id, new_route)
 
         return LazyAdmissionContext(
             gateway_key_id=new_key.gateway_key_id,
