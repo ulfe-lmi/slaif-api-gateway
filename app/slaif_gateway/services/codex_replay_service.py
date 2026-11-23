@@ -121,12 +121,14 @@ class CodexReplayService:
         gateway_key_id: uuid.UUID,
         now: datetime | None = None,
         allow_idless_tool_call_replay: bool = False,
+        allow_idless_encrypted_reasoning: bool = False,
     ) -> CodexReplayAuthorization:
         """Prove same-key active ownership before route or quota side effects."""
 
         checked = _validated_candidates(
             candidates,
             allow_idless_tool_call_replay=allow_idless_tool_call_replay,
+            allow_idless_encrypted_reasoning=allow_idless_encrypted_reasoning,
         )
         if not checked:
             return CodexReplayAuthorization(references=())
@@ -156,7 +158,7 @@ class CodexReplayService:
         call_digest_candidates: list[tuple[str, str]] = []
         for candidate in checked:
             for secret in secrets.values():
-                if candidate.item_id is not None:
+                if candidate.item_id is not None or candidate.item_kind == "reasoning":
                     item_digest_candidates.append(
                         (candidate.item_kind, _item_digest(candidate, secret=secret))
                     )
@@ -181,7 +183,10 @@ class CodexReplayService:
         authorized: list[AuthorizedCodexReplayReference] = []
         for candidate in checked:
             matches: list[tuple[CodexReplayReference, str]] = []
-            if candidate.item_id is None:
+            if (
+                candidate.item_id is None
+                and candidate.item_kind in _PORTABLE_TOOL_HISTORY_KINDS
+            ):
                 for version, secret in secrets.items():
                     expected_digest = _call_digest(candidate, secret=secret)
                     assert expected_digest is not None
@@ -276,10 +281,14 @@ class CodexReplayService:
         route_id: uuid.UUID,
         upstream_model: str,
         now: datetime | None = None,
+        allow_idless_encrypted_reasoning: bool = False,
     ) -> int:
         """HMAC and upsert validated completion candidates after accounting."""
 
-        checked = _validated_candidates(candidates)
+        checked = _validated_candidates(
+            candidates,
+            allow_idless_encrypted_reasoning=allow_idless_encrypted_reasoning,
+        )
         if not checked:
             return 0
         if not source_request_id.strip() or not provider.strip() or not upstream_model.strip():
@@ -359,15 +368,20 @@ def _validated_candidates(
     candidates: Sequence[CodexReplayCandidate],
     *,
     allow_idless_tool_call_replay: bool = False,
+    allow_idless_encrypted_reasoning: bool = False,
 ) -> tuple[CodexReplayCandidate, ...]:
     checked = tuple(candidates)
     seen_items: set[tuple[str, str]] = set()
     seen_calls: set[tuple[str, str]] = set()
+    seen_idless_ciphers: set[str] = set()
     for candidate in checked:
         if candidate.item_kind not in CODEX_REPLAY_ITEM_KINDS:
             raise _ownership_error()
         if candidate.item_id is None:
-            if (
+            if candidate.item_kind == "reasoning":
+                if not allow_idless_encrypted_reasoning:
+                    raise _ownership_error()
+            elif (
                 not allow_idless_tool_call_replay
                 or candidate.item_kind not in {"function_call", "custom_tool_call"}
             ):
@@ -393,6 +407,16 @@ def _validated_candidates(
                     or len(encrypted_content.encode("utf-8")) > 1_048_576
                 ):
                     raise _ownership_error()
+            elif candidate.item_id is None:
+                if (
+                    not isinstance(encrypted_content, str)
+                    or not encrypted_content
+                    or len(encrypted_content.encode("utf-8")) > 1_048_576
+                ):
+                    raise _ownership_error()
+                if encrypted_content in seen_idless_ciphers:
+                    raise _ownership_error()
+                seen_idless_ciphers.add(encrypted_content)
             elif encrypted_content is not None:
                 raise _ownership_error()
             continue
@@ -424,6 +448,14 @@ def _item_digest(candidate: CodexReplayCandidate, *, secret: str) -> str:
         token = (
             "slaif-codex-replay:v2:compaction:"
             f"{len(candidate.item_id.encode('utf-8'))}:{candidate.item_id}:"
+            f"{len(encrypted_content.encode('utf-8'))}:{encrypted_content}"
+        )
+        return hmac_sha256_token(token=token, secret=secret)
+    if candidate.item_kind == "reasoning" and candidate.item_id is None:
+        encrypted_content = getattr(candidate, "encrypted_content", None)
+        assert encrypted_content is not None
+        token = (
+            "slaif-codex-replay:v3:reasoning:"
             f"{len(encrypted_content.encode('utf-8'))}:{encrypted_content}"
         )
         return hmac_sha256_token(token=token, secret=secret)
