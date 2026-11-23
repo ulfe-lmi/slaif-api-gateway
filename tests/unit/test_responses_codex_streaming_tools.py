@@ -2505,7 +2505,9 @@ def test_encrypted_reasoning_done_event_is_exact_opaque_and_candidate_only() -> 
     assert len(candidates) == 1
     assert candidates[0].item_kind == "reasoning"
     assert candidates[0].item_id == "rs_1"
-    assert not hasattr(candidates[0], "encrypted_content")
+    # ID-bearing candidates stay ID-only lookups; the cipher field exists
+    # only for the qualified id-less path and must remain unset here.
+    assert candidates[0].encrypted_content is None
     assert not hasattr(candidates[0], "summary")
     assert PRIVATE_CANARY not in repr(validator.__dict__)
     assert PRIVATE_CANARY not in json.dumps(validator.safe_evidence())

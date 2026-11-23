@@ -150,6 +150,7 @@ class ResponsesStreamValidationProfile:
     custom_client_tools: frozenset[tuple[str, str, str]] = frozenset({("functions", "exec", "custom")})
     allow_sparse_visible_reasoning: bool = False
     allow_sparse_function_events: bool = False
+    allow_idless_encrypted_reasoning: bool = False
 
 
 @dataclass(slots=True)
@@ -167,10 +168,11 @@ class CodexReplayStreamCandidate:
     """Transient validated IDs for immediate post-accounting HMAC persistence."""
 
     item_kind: str
-    item_id: str
+    item_id: str | None
     call_id: str | None
     tool_namespace: str | None
     tool_name: str | None
+    encrypted_content: str | None = None
 
 
 class ResponsesStreamEventValidator:
@@ -636,18 +638,14 @@ class ResponsesStreamEventValidator:
             return False
         if event_type == "response.output_item.added" and not isinstance(item_id, str):
             return False
-        if (
-            event_type == "response.output_item.done"
-            and (
-                state.item_type in {"function_call", "custom_tool_call"}
-                or (
-                    state.item_type == "reasoning"
-                    and self._profile.codex_encrypted_reasoning_replay
-                )
-            )
-            and not isinstance(item_id, str)
-        ):
-            return False
+        if event_type == "response.output_item.done" and not isinstance(item_id, str):
+            if state.item_type in {"function_call", "custom_tool_call"}:
+                return False
+            if state.item_type == "reasoning" and not (
+                state.encrypted_reasoning
+                and self._profile.allow_idless_encrypted_reasoning
+            ):
+                return False
 
         if isinstance(item_id, str):
             active = self._active_items.get(item_id)
@@ -692,8 +690,22 @@ class ResponsesStreamEventValidator:
             if state.call_id in self._seen_call_ids:
                 return False
             self._seen_call_ids.add(state.call_id)
-        if event_type == "response.output_item.done" and isinstance(item_id, str):
-            self._capture_replay_candidate(item_id=item_id, state=state)
+        if event_type == "response.output_item.done":
+            if isinstance(item_id, str):
+                self._capture_replay_candidate(item_id=item_id, state=state)
+            elif (
+                state.item_type == "reasoning"
+                and state.encrypted_reasoning
+                and self._profile.allow_idless_encrypted_reasoning
+            ):
+                # Ciphertext is read directly from the already-validated done
+                # payload and held in validator memory only until the
+                # post-accounting persist call consumes the candidate.
+                self._capture_replay_candidate(
+                    item_id=None,
+                    state=state,
+                    encrypted_content=item.get("encrypted_content"),
+                )
         return True
 
     def _validate_item_shape(
@@ -739,6 +751,7 @@ class ResponsesStreamEventValidator:
                 event_type=event_type,
                 encrypted_replay=self._profile.codex_encrypted_reasoning_replay,
                 allow_visible_reasoning=self._profile.allow_sparse_visible_reasoning,
+                allow_idless=self._profile.allow_idless_encrypted_reasoning,
             )
             if encrypted_bytes is None:
                 return None
@@ -788,13 +801,22 @@ class ResponsesStreamEventValidator:
             str(call_id),
         )
 
-    def _capture_replay_candidate(self, *, item_id: str, state: _StreamItemState) -> None:
+    def _capture_replay_candidate(
+        self,
+        *,
+        item_id: str | None,
+        state: _StreamItemState,
+        encrypted_content: str | None = None,
+    ) -> None:
         if state.item_type == "reasoning":
             if not self._profile.codex_encrypted_reasoning_replay or not state.encrypted_reasoning:
                 return
             kind = "reasoning"
         elif state.item_type in {"function_call", "custom_tool_call"}:
             kind = state.item_type
+            # Stream tool candidates are ID-bearing; the cipher field is only
+            # ever populated by the qualified id-less reasoning path.
+            assert encrypted_content is None
         else:
             return
         self._replay_reference_candidates.append(
@@ -804,6 +826,7 @@ class ResponsesStreamEventValidator:
                 call_id=state.call_id,
                 tool_namespace=state.namespace,
                 tool_name=state.name,
+                encrypted_content=encrypted_content,
             )
         )
 
@@ -1940,6 +1963,7 @@ def _validate_reasoning_item(
     event_type: str,
     encrypted_replay: bool,
     allow_visible_reasoning: bool = False,
+    allow_idless: bool = False,
 ) -> int | None:
     if (
         allow_visible_reasoning
@@ -1958,9 +1982,17 @@ def _validate_reasoning_item(
         return _validate_reasoning_item(item, event_type=event_type, encrypted_replay=False)
     if encrypted_replay:
         if event_type == "response.output_item.done":
-            if set(item) != {"type", "id", "summary", "encrypted_content"}:
-                return None
-            if not _bounded_identifier(item.get("id"), required=True):
+            if set(item) == {"type", "id", "summary", "encrypted_content"}:
+                # Present ID: exact-set shape plus bounded identifier, so a
+                # null or malformed ID is still denied.
+                if not _bounded_identifier(item.get("id"), required=True):
+                    return None
+            elif set(item) == {"type", "summary", "encrypted_content"}:
+                # ID-less done is only ever a qualified profile path; the
+                # reference is derived from the ciphertext, never a fabricated ID.
+                if not allow_idless:
+                    return None
+            else:
                 return None
             encrypted_content = item.get("encrypted_content")
             if not isinstance(encrypted_content, str) or not _bounded_utf8(
