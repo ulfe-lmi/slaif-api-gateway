@@ -1378,10 +1378,19 @@ async def handle_response_create(
             or positional_facts is not None
         )
     )
+    # Id-less encrypted reasoning is qualified by the selected client spec
+    # alone.  Its ownership proof is an immediate ciphertext-digest lookup,
+    # never the deferred CALL-ID path, so it must not join the tool-history
+    # deferral below.
+    allow_idless_encrypted_reasoning = bool(
+        client_module.policy_spec is not None
+        and client_module.policy_spec.allow_idless_encrypted_reasoning
+    )
     try:
         replay_candidates = codex_replay_request_candidates(
             policy_result.effective_body,
             allow_idless_tool_call_replay=allow_idless_tool_call_replay,
+            allow_idless_encrypted_reasoning=allow_idless_encrypted_reasoning,
             top_level_tool_taxonomy=codex_0149_continuation_taxonomy,
             codex_tool_call_bindings=(
                 positional_facts.call_bindings if positional_facts is not None else None
@@ -1397,7 +1406,13 @@ async def handle_response_create(
             error_type="invalid_request_error",
             code="responses_codex_replay_reference_invalid",
         )
-    defer_idless_replay = any(candidate.item_id is None for candidate in replay_candidates)
+    # Only id-less tool calls need the deferred CALL-ID ownership proof;
+    # id-less encrypted reasoning verifies immediately by cipher digest.
+    defer_idless_replay = any(
+        candidate.item_id is None
+        and candidate.item_kind in {"function_call", "custom_tool_call"}
+        for candidate in replay_candidates
+    )
     replay_authorization = (
         CodexReplayAuthorization(references=())
         if defer_idless_replay
@@ -1407,6 +1422,7 @@ async def handle_response_create(
             settings=settings,
             request=request,
             allow_idless_tool_call_replay=allow_idless_tool_call_replay,
+            allow_idless_encrypted_reasoning=allow_idless_encrypted_reasoning,
         )
     )
     request_id = _request_id_from_request(request)
@@ -1932,6 +1948,11 @@ async def handle_response_create(
                         ),
                         codex_encrypted_reasoning_replay=(
                             codex_encrypted_reasoning_event_requested
+                        ),
+                        allow_idless_encrypted_reasoning=(
+                            client_module.policy_spec is not None
+                            and client_module.policy_spec.allow_idless_encrypted_reasoning
+                            and codex_encrypted_reasoning_event_requested
                         ),
                         declared_client_tools=(
                             pair_local_codex_top_level_tools
@@ -2694,6 +2715,7 @@ async def _verify_owned_codex_replay_references(
     settings: Settings,
     request: Request | None,
     allow_idless_tool_call_replay: bool = False,
+    allow_idless_encrypted_reasoning: bool = False,
 ) -> CodexReplayAuthorization:
     if not candidates:
         return CodexReplayAuthorization(references=())
@@ -2712,6 +2734,7 @@ async def _verify_owned_codex_replay_references(
                 candidates=candidates,
                 gateway_key_id=authenticated_key.gateway_key_id,
                 allow_idless_tool_call_replay=allow_idless_tool_call_replay,
+                allow_idless_encrypted_reasoning=allow_idless_encrypted_reasoning,
             )
         except CodexReplayReferenceError as exc:
             raise _openai_error_from_codex_replay_error(exc) from exc
@@ -2839,6 +2862,7 @@ async def _persist_codex_replay_references(
     route: RouteResolutionResult,
     settings: Settings,
     request: Request | None,
+    allow_idless_encrypted_reasoning: bool = False,
 ) -> int:
     if not candidates:
         return 0
@@ -2864,6 +2888,7 @@ async def _persist_codex_replay_references(
                 provider=route.provider,
                 route_id=route.route_id,
                 upstream_model=route.resolved_model,
+                allow_idless_encrypted_reasoning=allow_idless_encrypted_reasoning,
             )
             await session.commit()
             return count
@@ -3540,6 +3565,7 @@ def _streaming_responses_response(
                             route=route,
                             settings=settings,
                             request=request,
+                            allow_idless_encrypted_reasoning=profile.allow_idless_encrypted_reasoning,
                         )
                     except CodexReplayReferenceError as exc:
                         provider_status = "incomplete"
