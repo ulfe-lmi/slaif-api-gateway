@@ -1,10 +1,14 @@
 # Hermes 0.22.5 native Chat profile — `hermes-0.22.5-chat-v1` (preprotected candidate)
 
-Objective 227-a, secondary-owned Hermes Chat binding. **Preprotected
-candidate stage**: this dossier records native-client loopback evidence
-only. It is NOT a live-qualification, Gateway/PostgreSQL settlement, or
-production claim. The protected gate remains `not_run` until root
-authorizes protected evidence.
+Objective 227-a, secondary-owned Hermes Chat binding. This dossier records
+the native-client loopback evidence from that preprotected candidate
+stage. That loopback evidence is NOT a live-qualification,
+Gateway/PostgreSQL settlement, or production claim. The protected gate was
+`not_run` through 227-b; a bounded, human-authorized live LAN
+qualification was executed in 227-c and is recorded in the
+[consolidated verification record](../verification/2026-11-20-hermes-opencode-chat.md)
+(not in this dossier). The loopback evidence recorded here remains not a
+production claim.
 
 ## 1. Pinned client identity
 
@@ -121,13 +125,31 @@ authorizes protected evidence.
   allowlist. The private `slaif227fake` model alias, the 3-second provider
   timeout, and the fake context/usage settings are controlled
   negative/compression QA variants and are never production templates.
-- **Protected gate**: `not_run`. Live qualification (if ever authorized)
-  requires the concrete protected plan defined by the order (see the
-  [real-provider qualification boundary](../real-provider-qualification.md));
-  nothing in this dossier grants it.
+- **Protected gate**: `not_run` through 227-b. The bounded,
+  human-authorized live LAN qualification was executed in 227-c: the
+  terminal positive result was run 3, a strict marker-equality pass in
+  30.01 s, after 3 actual native launches (run 1: 1.01 s, exit 1, missing
+  runtime dependency in the task venv, 0 admitted; run 2: 11.0 s, HTTP 403
+  `model_not_allowed_for_key` because the native config used the
+  provider-qualified slug `slaif227fake/qwen38-27b`; run 3: pass with the
+  bare `qwen38-27b` model). Hermes settled 3 requests, 11,475 tokens,
+  EUR 0.011475, with zero reservations/fences; the model reached
+  `qwen38-27b` through the intended LAN edge, and the downstream hop beyond
+  the gateway-to-provider edge remains unverified (see the
+  [consolidated verification record](../verification/2026-11-20-hermes-opencode-chat.md)).
+  Stricter global qualifications still require the concrete
+  [real-provider qualification boundary](../real-provider-qualification.md);
+  nothing in this dossier grants them.
 
 ## 5. Known limits and follow-ups
 
+- **Native client configuration (227-c live)**: `model.default` MUST be
+  the bare `qwen38-27b`. The provider-qualified slug
+  `slaif227fake/qwen38-27b` was rejected with HTTP 403
+  `model_not_allowed_for_key` (run 2, 11.0 s, 0 admitted); the
+  `custom:slaif227fake` pool entry pointed at the task gateway base URL.
+  Main effort xhigh, auxiliary `none`, and the captured toolsets were
+  unchanged.
 - The pinned client's main run mode is streaming. Nonstreaming capture is
   recorded only for the auxiliary `session_title` request (a
   `response_format` JSON-schema call with `none` effort); broader

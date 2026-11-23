@@ -1,10 +1,14 @@
 # OpenCode 1.19.3 native Chat profile — `opencode-1.19.3-chat-v1` (preprotected candidate)
 
-Objective 227-a, secondary-owned OpenCode Chat binding. **Preprotected
-candidate stage**: this dossier records native-client loopback evidence only.
-It is NOT a live-qualification, Gateway/PostgreSQL settlement, or
-production claim. The protected gate remains `not_run` until root authorizes
-protected evidence.
+Objective 227-a, secondary-owned OpenCode Chat binding. This dossier
+records the native-client loopback evidence from that preprotected
+candidate stage. That loopback evidence is NOT a live-qualification,
+Gateway/PostgreSQL settlement, or production claim. The protected gate was
+`not_run` through 227-b; a bounded, human-authorized live LAN
+qualification was executed in 227-c and is recorded in the
+[consolidated verification record](../verification/2026-11-20-hermes-opencode-chat.md)
+(not in this dossier). The loopback evidence recorded here remains not a
+production claim.
 
 ## 1. Pinned client identity
 
@@ -77,12 +81,23 @@ protected evidence.
   or PostgreSQL settlement. The loopback fake is a synthetic peer; no
   gateway request was processed and no ledger row exists. Fake-SDK usage
   must never be cited as settlement evidence.
-- **Protected gate**: `not_run`. Live qualification (if ever authorized)
-  requires the concrete protected plan defined by the order; nothing in this
-  dossier grants it.
+- **Protected gate**: `not_run` through 227-b. The bounded,
+  human-authorized live LAN qualification was executed in 227-c: run 1
+  (20.3 s) is preserved as a framing failure (final 32 B vs 33 B marker,
+  sha8 `9f4bbeb2`, trailing-newline mismatch, not a pass); run 2 (20.358 s)
+  passed with strict raw-byte equality (final 32 B == 32 B marker, no
+  normalization), native `read` tool completed with callID and output,
+  2 steps, 0 error events, exit 0. All 4 OpenCode requests finalized 200
+  FINALIZED, 29,546 tokens, EUR 0.029546, zero reservations/fences
+  (see the [consolidated verification
+  record](../verification/2026-11-20-hermes-opencode-chat.md)).
 
 ## 5. Known limits and follow-ups
 
+- **Native client configuration (227-c live)**: the run used a custom
+  provider entry with explicit `@ai-sdk/openai-compatible` pointed at the
+  task gateway — NOT the built-in OpenAI or Responses path. Main effort
+  xhigh and the captured tool profile were unchanged.
 - Nonstreaming Chat was never emitted by the client in `run` mode; the
   profile does not claim a nonstream capture.
 - Responses-surface facts (flat declarations, ID-less replay) are objective

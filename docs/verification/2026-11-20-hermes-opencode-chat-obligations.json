@@ -1,5 +1,5 @@
 {
-  "objective": "227-c",
+  "objective": "227-d",
   "historical_objectives": {
     "227_a": {
       "objective": "227-a",
@@ -10,16 +10,21 @@
       "objective": "227-b",
       "status": "PREPROTECTED_READY",
       "report": "oap/reports/227-b-preprotected-governance-and-evidence-closure.md"
+    },
+    "227_c": {
+      "objective": "227-c",
+      "status": "LIVE_EXECUTED_REPORT_PUBLISHED (superseded by 227-d closure on the same PR)",
+      "report": "oap/reports/227-c-lan-chat-qualification.md"
     }
   },
   "record": "docs/verification/2026-11-20-hermes-opencode-chat.md",
-  "status": "LIVE_EXECUTED_REPORT_PUBLISHED_PENDING_ROOT_GATE",
-  "status_reason": "227-c live LAN qualification executed on frozen root-accepted candidate b2a0d950e122d612594f55ba54e18fe80d2644c7; both native cases terminal positive with ALL historical failures preserved; docs+manifest committed; immutable report published as report-only SELF; pending root final exact-head CI recheck, review, and guarded merge on DRAFT PR #395",
+  "status": "CLOSED_CLEANUP_VERIFIED_REPORT_PUBLISHED_PENDING_RESPONSE",
+  "status_reason": "227-d closure: 227-c report run-1 provenance conflation corrected (pre-spawn driver typo = not a launch; run1 = first actual native launch, missing runtime dependency); coordinated cleanup executed and verified (pre-deletion full-secret scan 0 unexpected hits; both task keys revoked with usage preserved; gateway/redis/PG stopped gracefully, PG data kept; private auth inputs deleted); docs+manifest updated; report-only SELF publishes the immutable 227-d report; executed qualification basis remains the human-accepted bounded gate (stock native retries authorized, none observed); the strict global zero-retry/six-admission contract is retained and unsatisfied; no source/runtime changes; pending response OK and root gates.",
   "branch": "oap/227-hermes-opencode-chat",
   "base": "0940d8a28f3a413d2a2cc6f4962c0efcafd71e13",
   "activated_order": {
-    "path": "oap/orders/227-c-lan-chat-qualification.md",
-    "sha256": "1e77d9754e1082d772fbc64247b74f62269c07a35ac7d8a677510e743ba4be81",
+    "path": "oap/orders/227-d-chat-delivery-closure.md",
+    "sha256": "b4086e73efba27660f8cc5057964d482cf1e9b9a310d1edae8986f0b6783adbe",
     "edited_during_round": false,
     "historical_227_b": {
       "path": "oap/orders/227-b-preprotected-governance-and-evidence-closure.md",
@@ -29,12 +34,17 @@
         "path": "oap/orders/227-a-hermes-opencode-chat-preprotected.md",
         "sha256": "4d24d84bef3b7c7d2f1a4b4f70e380dc84debf95da726c8a922735dcadd0f546"
       }
+    },
+    "historical_227_c": {
+      "path": "oap/orders/227-c-lan-chat-qualification.md",
+      "sha256": "1e77d9754e1082d772fbc64247b74f62269c07a35ac7d8a677510e743ba4be81",
+      "edited_during_round": false
     }
   },
   "active_pointer": {
     "path": "oap/active",
-    "value": "227-c",
-    "sha256": "b91d46f38f58b5e9decda71476f498d9400bc6d5846d3287d6b42f0deea1b7eb",
+    "value": "227-d",
+    "sha256": "378ce28308527a3a0c6768e0886eec0254858ef8247237c0b97a6d52448fc77f",
     "edited_during_round": false,
     "historical_227_b": {
       "path": "oap/active",
@@ -45,6 +55,12 @@
         "value": "227-a",
         "sha256": "ea3d8056453a861b46ca727cf55aee5043a1df7b36cde04d49af43688ab17738"
       }
+    },
+    "historical_227_c": {
+      "path": "oap/active",
+      "value": "227-c",
+      "sha256": "b91d46f38f58b5e9decda71476f498d9400bc6d5846d3287d6b42f0deea1b7eb",
+      "edited_during_round": false
     }
   },
   "source": {
@@ -206,7 +222,7 @@
           {
             "run": 1,
             "status": "PRESERVED_FAILURE",
-            "outcome": "setup failure before spawn (driver typo STOUT->STDOUT)",
+            "outcome": "first actual native launch; exit 1, missing runtime dependency in the task venv (incomplete); 0 admitted, 0 reserved",
             "duration_s": 1.01,
             "exit": 1,
             "admitted_requests": 0,
@@ -279,7 +295,8 @@
           "cache_read_tokens": 5253,
           "note": "recorded separately; PostgreSQL is authoritative"
         },
-        "gateway_log": "3x chat 200 + 3x provider 200 after the run-2 403; one benign GET /v1/models 403 (expected for Chat-only key); request_diagnostics empty; zero pending"
+        "gateway_log": "3x chat 200 + 3x provider 200 after the run-2 403; one benign GET /v1/models 403 (expected for Chat-only key); request_diagnostics empty; zero pending",
+        "pre_spawn_driver_typo": "separate event before run 1: driver typo STOUT->STDOUT crashed the driver before any native spawn; no native process started; NOT counted as a launch (227-d provenance correction superseding the c report's run-1 conflation)"
       },
       "opencode": {
         "owner": "secondary (receipts secondary-owned; primary integrates)",
@@ -341,7 +358,7 @@
         "retries": "stock built-in retries authorized by the bounded human exception; none observed"
       },
       "hygiene": {
-        "secrets": "no plaintext sk-slaif- in any artifact or CLI log; only intentional 0600 private auth-input files (deleted in final coordinated cleanup); capture False throughout",
+        "secrets": "a bare sk-slaif- prefix search alone is not proof; root's independent canary scan tested the KNOWN FULL credentials (both task bearers + intended LAN bearer) across 441 non-venv files; only the 4 expected 0600 Hermes config hits (work/client-hermes/hermes-home/config.yaml, run-3/config-pre-fix.yaml, hermes-home/backups/config/config.yaml.good.20261123-084233, .good.20261123-090415); no raw-log hits; REQUEST_CAPTURE_ENABLED=False throughout; all private auth-input files removed in the 227-d coordinated cleanup",
         "filesystem": "/tmp inode exhaustion (1048576/1048576) worked around via owned home task runtime root; all task files under owned root",
         "worktree": "clean at b2a0d950e122d612594f55ba54e18fe80d2644c7 (frozen)"
       },
@@ -350,16 +367,155 @@
         "Partial-disconnect finalization is ESTIMATED semantics; no partial disconnect occurred in any 227-c run",
         "Zero-retry guarantee holds only via the human stock-retry exception bound to this order; root final exact-head CI recheck pending"
       ]
+    },
+    "cleanup_227_d": {
+      "executed": "2026-11-23 within 227-d, after terminal 227-c positive results; no source/runtime change",
+      "pre_cleanup_counters": {
+        "hermes": {
+          "key_uuid": "26b387b4-81d7-4468-8112-fcb4f1da61fd",
+          "settled_requests": 3,
+          "request_cap": 6,
+          "input_tokens": 10864,
+          "output_tokens": 611,
+          "total_tokens": 11475,
+          "cost_eur": "0.011475",
+          "reserved": 0,
+          "fence": "none"
+        },
+        "opencode": {
+          "key_uuid": "6401a067-0b41-42aa-bb16-83e1a547c855",
+          "settled_requests": 4,
+          "request_cap": 6,
+          "total_tokens": 29546,
+          "cost_eur": "0.029546",
+          "reserved": 0,
+          "fence": "none"
+        },
+        "aggregate": {
+          "total_tokens": 41021,
+          "cost_eur": "0.041021",
+          "ledger_requests_finalized": 7
+        }
+      },
+      "receipt_hashes": {
+        "work/client-hermes/marker-227c": "f26b338c87b60d46fcfd22bfbdfa60f1d07a181e758a80d8633f3a9d806b39c9",
+        "work/client-hermes/run-1/result.json": "624fd510a7748d5db9824c264b0faffd4714108c5c3c6515cc7061eedde469f3",
+        "work/client-hermes/run-1/driver.log (empty, 0 B)": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "work/client-hermes/run-2/result.json": "57bd3b7aabe51386745f3ff9395355436aef7415217f1dfa67ae9fc881a72298",
+        "work/client-hermes/run-2/marker-provenance.json": "3c70676e99f33c1e6cd8ee1e881a3a21743c202fe83867ee9a1663b744deee2d",
+        "work/client-hermes/run-3/result.json": "5c5f3934d9120633399e08a9010ed2c58f776090b7b156358fb903ea884e77a9",
+        "work/client-opencode/run/logs/run.out": "9d299b8ec117549660d87788c97bb327e609016c391ce9160a2f66117b4a5265",
+        "work/client-opencode/run-2/logs/run.out": "5fee6959f63cd8c4731efe7d01dd1feb25e295ef6d385e8b18101ce4d5b181e5",
+        "logs/hermes-run1-cli.log": "daa1e0447beb3fd05074e2ced8edf58c27f8ebc35cf0da84f3631199f688cfcb",
+        "logs/hermes-run2-cli.log": "ce7d01ea63f9221f57a480b8dc7c0ef8e1ad0877df4cb8e6905379d1e9e5bdcb",
+        "logs/hermes-run3-cli.log": "db765443a24b4e052009985f107d6eb7afd1c63d9e1a86dd7f04e16b86d9ed1a",
+        "logs/gateway.log": "38ee8c54e221d0ea92576b484c5a08832907150b16c9c7bbb1694c836b0eb936"
+      },
+      "receipt_hashes_file": "work/receipt-hashes-227d.txt (0600, under the owned task root)",
+      "revocations": [
+        {
+          "key_uuid": "26b387b4-81d7-4468-8112-fcb4f1da61fd",
+          "rc": 0,
+          "status": "revoked",
+          "usage_reset": false,
+          "reason": "227-d coordinated cleanup: 227-c Hermes LAN qualification task key retired after terminal positive run3; usage preserved (3 requests, 11475 tokens, EUR 0.011475)",
+          "valid_until": "2026-11-24T08:25:52.058841+00:00"
+        },
+        {
+          "key_uuid": "6401a067-0b41-42aa-bb16-83e1a547c855",
+          "rc": 0,
+          "status": "revoked",
+          "usage_reset": false,
+          "reason": "227-d coordinated cleanup: 227-c OpenCode LAN qualification task key retired after terminal positive run2; usage preserved (4 requests, 29546 tokens, EUR 0.029546)",
+          "valid_until": "2026-11-24T08:25:59.536015+00:00"
+        }
+      ],
+      "revocation_receipts": "work/revoke-hermes-result.json / work/revoke-opencode-result.json (0600)",
+      "service_stops": [
+        {
+          "service": "gateway",
+          "pid": 3944229,
+          "identity": "uvicorn slaif_gateway.main:app --host 127.0.0.1 --port 18300",
+          "method": "SIGTERM",
+          "port_closed": 18300
+        },
+        {
+          "service": "redis",
+          "pid": 3944362,
+          "identity": "redis-server 127.0.0.1:6390",
+          "method": "SIGTERM",
+          "port_closed": 6390
+        },
+        {
+          "service": "postgres16",
+          "pid": 3936772,
+          "identity": "postgres -D <task-root>/pg/data -p 54399",
+          "method": "pg_ctl stop -m fast",
+          "port_closed": 54399,
+          "data_dir": "kept"
+        }
+      ],
+      "deletion": {
+        "deleted_paths": [
+          "work/client-hermes",
+          "work/client-opencode",
+          "work/db-records",
+          "secrets/ (admin-pw, key-hermes.txt, key-opencode.txt, lan-bearer.key, secrets.env)",
+          "work/env.sh",
+          "work/ids.env",
+          "work/policy-hermes.json",
+          "work/policy-opencode.json",
+          "logs/gateway.log",
+          "logs/hermes-run1-cli.log",
+          "logs/hermes-run2-cli.log",
+          "logs/hermes-run3-cli.log",
+          "logs/pg.log",
+          "logs/redis.log",
+          "logs/redis-stdout.log"
+        ],
+        "content_printed": false,
+        "kept": [
+          "pg/ data",
+          "logs/slaif-oap-control-227c.log and the logs dir",
+          "task root",
+          "home/",
+          "tmp/deps-3149-nobh.txt",
+          "redis/",
+          "gateway/",
+          "work/ scripts, receipt-hashes-227d.txt, revoke-*-result.json, PR-body files, and the new 227-d PR files"
+        ]
+      },
+      "final_scan": {
+        "files_scanned": 2709,
+        "excluded": "binary pg/",
+        "needles": "3 full-secret needles (both task keys + intended LAN bearer) loaded into a 0600 needle file before deletion",
+        "unexpected_hits": 0,
+        "needle_file": "removed after scan",
+        "auth_files": "confirmed gone",
+        "ports_closed": [
+          18300,
+          6390,
+          54399
+        ]
+      },
+      "root_accounting_evidence": {
+        "usage_raw_fields": "prompt_tokens/completion_tokens/total_tokens only (provider usage present), all 7",
+        "cost_source": "slaif_calculated on all 7 (task-configured EUR 1/M input and output pricing, NOT a provider invoice)",
+        "cached_fallback": "3 of 7 with documented cached_input_price_fallback_to_input warning and confidence slaif_calculated_with_fallbacks; other 4 plain slaif_calculated",
+        "needs_reconciliation": "false x6, null x1",
+        "holds_fences_reservations": "none",
+        "note": "scoped limitation; no billing-precision claim"
+      }
     }
   },
   "honesty_disclosures": [
     "historical secondary full-unit run (Python 3.13) failed one named OpenRouter audio test; aggregate counts and causality unknown; no fix made, no full matrix rerun claimed",
     "setupfail1 receipt cleanup unverified/retained; manual cleanup only",
-    "protected live gate not_run: no live inference, key mutation, or deploy recorded",
-    "Preserved failures: Hermes run1 (1.01s setup failure before spawn, 0 admitted) and run2 (11.0s HTTP 403 model_not_allowed_for_key on wire model \"slaif227fake/qwen38-27b\", 0 admitted), and OpenCode run1 (20.3s trailing-newline framing mismatch, strict FALSE) are preserved as failures; none relabeled or excluded.",
+    "protected live gate was not_run through 227-b: no live inference, key mutation, or deploy recorded until 227-c; the bounded human-authorized live LAN qualification was subsequently executed in 227-c (see evidence.live_227_c and evidence.cleanup_227_d)",
+    "Preserved failures (provenance corrected in 227-d): the pre-spawn driver typo (STOUT->STDOUT) was NOT a launch; Hermes run1 (1.01s, first actual native launch, missing runtime dependency in the task venv, 0 admitted) and run2 (11.0s HTTP 403 model_not_allowed_for_key on wire model \"slaif227fake/qwen38-27b\", 0 admitted), and OpenCode run1 (20.3s trailing-newline framing mismatch, strict FALSE) are preserved as failures; none relabeled or excluded.",
     "Hermes client-reported final event totals (10,697 total / 5,253 cache-read) and PostgreSQL authoritative settlement (11,475 total) are both recorded; PostgreSQL is authoritative.",
     "Stock client built-in retries were authorized only as a bounded exception for these 227-c LAN runs; none were observed in any admitted request.",
-    "Secret auth-input files (0600) under the owned task runtime remain pending final coordinated cleanup; /tmp inode exhaustion was worked around by relocating all task state to the owned home task root."
+    "Secret auth-input files (0600) under the owned task runtime: final coordinated cleanup COMPLETED in 227-d with a verified pre-deletion full-secret canary scan (0 unexpected hits); /tmp inode exhaustion was worked around by relocating all task state to the owned home task root."
   ],
   "preprotected": {
     "missing": [],

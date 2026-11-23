@@ -124,10 +124,18 @@ Data-versus-engine upgrade boundary: a data-only vocabulary upgrade is
 new document bytes with a new digest and requires a re-pinned operator
 key and process restart; there is no per-tool source upgrade, automatic
 upgrade, or silent key-rotation path. Engine semantics changes are
-version-owned in source. Both profiles are preprotected candidates: the
-protected live-qualification gate is `not_run`, and nothing in the
-profile DATA grants live qualification (see the client dossiers under
-[agentic clients](agentic-clients/hermes-0.22.5-chat-v1.md)).
+version-owned in source. Both profiles remain preprotected candidates and
+nothing in the profile DATA grants live qualification (see the client
+dossiers under [agentic clients](agentic-clients/hermes-0.22.5-chat-v1.md)).
+The protected live-qualification gate was `not_run` through 227-b; a
+bounded, human-authorized live LAN qualification was executed in 227-c
+against the pinned Hermes 0.22.5 and OpenCode 1.19.3 clients only (generic
+OpenAI-compatible candidate pairs), and is recorded in the
+[consolidated verification record](verification/2026-11-20-hermes-opencode-chat.md).
+That execution grants no Responses, plugin, MCP, or image claim, no future
+client version, and no production certification; the stock-native retry
+exception applied only to that 227-c execution, and the downstream hop
+beyond the gateway-to-provider edge remains unverified.
 
 ## Change ownership
 

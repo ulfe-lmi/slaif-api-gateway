@@ -511,8 +511,15 @@ failure; none is relabeled as a pass.
 - Baseline preserved: main xhigh / auxiliary none, captured toolsets,
   ``chat --oneshot --format stream-json --max-turns 3``; real local file-read
   tool plus continuation plus final marker equality.
-- **Run 1 (preserved failure):** 1.01 s, exit 1. Driver pre-spawn typo
-  (STOUT->STDOUT) before the CLI started; a setup failure. 0 admitted.
+- **Pre-spawn driver typo (NOT a launch):** the driver crashed on a
+  STOUT->STDOUT typo before any native CLI spawn; no native process
+  started; 0 admitted; not counted in the outer launch total. The 227-c
+  report's "Run 1" bullet conflated this with the first actual launch;
+  the 227-c report is immutable and this 227-d closure corrects that
+  conflation.
+- **Run 1 (preserved failure - first actual native launch):** 1.01 s,
+  exit 1. Missing runtime dependency in the task venv (incomplete).
+  0 admitted, 0 reserved.
 - **Run 2 (preserved failure):** 11.0 s, exit 1. HTTP 403
   ``model_not_allowed_for_key``. The native request dump shows the wire model
   was the provider-qualified slug ``slaif227fake/qwen38-27b`` shipped from the
@@ -556,7 +563,8 @@ failure; none is relabeled as a pass.
 
 ### Budget and hygiene (227-c live)
 
-- Outer launches: **5 of 100** (Hermes 3, OpenCode 2). Wall time: Hermes
+- Outer launches: **5 of 100** (Hermes 3, OpenCode 2; the pre-spawn
+  driver typo was not a launch and is not counted). Wall time: Hermes
   cumulative 42.02 s (<= 600; 557.98 s remaining), OpenCode cumulative
   40.658 s (<= 600; 559.342 s remaining), aggregate 82.678 s (<= 1200;
   1117.322 s remaining).
@@ -567,12 +575,17 @@ failure; none is relabeled as a pass.
 - Retries: stock built-in retries were authorized for this bounded run;
   **none were observed** (each admitted chat request corresponds to exactly
   one 200 FINALIZED settlement at the observed gateway->provider hop).
-- Hygiene: no plaintext ``sk-slaif-`` in any run artifact or CLI log (the
-  only canary hits are the intentional 0600 private auth-input files, to be
-  deleted in final cleanup); ``REQUEST_CAPTURE_ENABLED=False`` throughout;
-  the /tmp inode exhaustion (1048576/1048576) was worked around by keeping
-  every task file under the owned home task root; worktree clean at the
-  frozen candidate.
+- Hygiene (rescoped in 227-d): a bare ``sk-slaif-`` prefix search alone
+  is not proof of absence; the root's independent canary scan tested the
+  KNOWN FULL credentials (both task bearers plus the intended LAN bearer)
+  across 441 non-venv files and found only the 4 expected 0600 Hermes
+  config hits (the task-owned ``config.yaml``, the pre-fix run-3 config
+  copy, and two ``config.yaml.good.*`` backups), with no raw-log hits;
+  ``REQUEST_CAPTURE_ENABLED=False`` throughout; the /tmp inode exhaustion
+  (1048576/1048576) was worked around by keeping every task file under the
+  owned home task root; worktree clean at the frozen candidate. All
+  private auth-input files were removed in the 227-d coordinated cleanup
+  (below).
 
 ### Limitations (227-c live)
 
@@ -585,8 +598,123 @@ failure; none is relabeled as a pass.
   for these bounded tests; stricter qualifications still require the section
   51 prerequisite. Root's final exact-head CI recheck on the report commit
   remains pending (root gate).
-- Final cleanup of the private 0600 secret auth-input files is pending
-  coordinated cleanup after evidence integration.
+- Final cleanup of the private 0600 secret auth-input files: completed in
+  the 227-d coordinated closure (below), preceded by a verified
+  pre-deletion full-secret scan with 0 unexpected hits.
+
+## 227-d closure (2026-11-23)
+
+### Supersession and provenance correction
+
+- The 227-c report ``oap/reports/227-c-lan-chat-qualification.md`` (sha256
+  ``3177a306c8dede320bc29e409d89cf8a1a78b1770976f31263efd729d625bbc6``) is
+  immutable. Its Hermes "Run 1" bullet conflated two distinct events; the
+  correction, in exact provenance order:
+  - **A. Pre-spawn driver typo (NOT a launch):** the STOUT->STDOUT driver
+    crash started no native process and is not a launch; root still counted
+    its 1.01 s toward the wall budget (first 1.01 s + 11.0 s = 12.01 s
+    consumed before run 3).
+  - **B. Run 1 = first actual native launch:** 1.01 s, exit 1, missing
+    runtime dependency in the task venv; 0 admitted, 0 reserved.
+  - **C. Run 2 (HTTP 403 ``model_not_allowed_for_key``, provider-qualified
+    slug) is unchanged.**
+  - **D. Run 3 (strict PASS) is unchanged.**
+- ``docs/first-time-operator-guide.md``'s sentence "The protected live gate
+  is `not_run`..." (line 612) is superseded by this record; that guide is
+  not editable in this order and remains unchanged.
+
+### Coordinated cleanup (executed and verified 2026-11-23)
+
+- Pre-cleanup key counters (PG, authoritative): Hermes
+  ``26b387b4-81d7-4468-8112-fcb4f1da61fd`` 3 of 6 settled, 10,864 in / 611
+  out / 11,475 total / EUR 0.011475; OpenCode
+  ``6401a067-0b41-42aa-bb16-83e1a547c855`` 4 of 6 settled, 29,546 total /
+  EUR 0.029546; zero reserved on both; no fences; aggregate 41,021 tokens /
+  EUR 0.041021; all 7 ledger requests FINALIZED.
+- Pre-deletion receipts: the 12 driver/result/log files were sha256-hashed
+  (receipts saved 0600 at
+  ``/home/janezp/codex-work/slaif-227c-task/work/receipt-hashes-227d.txt``)
+  before deletion:
+
+  | file (relative to the task root) | sha256 |
+  | --- | --- |
+  | ``work/client-hermes/marker-227c`` | ``f26b338c87b60d46fcfd22bfbdfa60f1d07a181e758a80d8633f3a9d806b39c9`` |
+  | ``work/client-hermes/run-1/result.json`` | ``624fd510a7748d5db9824c264b0faffd4714108c5c3c6515cc7061eedde469f3`` |
+  | ``work/client-hermes/run-1/driver.log`` (empty, 0 B) | ``e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855`` |
+  | ``work/client-hermes/run-2/result.json`` | ``57bd3b7aabe51386745f3ff9395355436aef7415217f1dfa67ae9fc881a72298`` |
+  | ``work/client-hermes/run-2/marker-provenance.json`` | ``3c70676e99f33c1e6cd8ee1e881a3a21743c202fe83867ee9a1663b744deee2d`` |
+  | ``work/client-hermes/run-3/result.json`` | ``5c5f3934d9120633399e08a9010ed2c58f776090b7b156358fb903ea884e77a9`` |
+  | ``work/client-opencode/run/logs/run.out`` | ``9d299b8ec117549660d87788c97bb327e609016c391ce9160a2f66117b4a5265`` |
+  | ``work/client-opencode/run-2/logs/run.out`` | ``5fee6959f63cd8c4731efe7d01dd1feb25e295ef6d385e8b18101ce4d5b181e5`` |
+  | ``logs/hermes-run1-cli.log`` | ``daa1e0447beb3fd05074e2ced8edf58c27f8ebc35cf0da84f3631199f688cfcb`` |
+  | ``logs/hermes-run2-cli.log`` | ``ce7d01ea63f9221f57a480b8dc7c0ef8e1ad0877df4cb8e6905379d1e9e5bdcb`` |
+  | ``logs/hermes-run3-cli.log`` | ``db765443a24b4e052009985f107d6eb7afd1c63d9e1a86dd7f04e16b86d9ed1a`` |
+  | ``logs/gateway.log`` | ``38ee8c54e221d0ea92576b484c5a08832907150b16c9c7bbb1694c836b0eb936`` |
+
+- Key revocations (typed CLI, both rc 0, status ``revoked``, usage
+  preserved, no usage reset):
+  - Hermes ``26b387b4-81d7-4468-8112-fcb4f1da61fd`` - reason "227-d
+    coordinated cleanup: 227-c Hermes LAN qualification task key retired
+    after terminal positive run3; usage preserved (3 requests, 11475
+    tokens, EUR 0.011475)"; ``valid_until
+    2026-11-24T08:25:52.058841+00:00``.
+  - OpenCode ``6401a067-0b41-42aa-bb16-83e1a547c855`` - reason "...retired
+    after terminal positive run2; usage preserved (4 requests, 29546
+    tokens, EUR 0.029546)"; ``valid_until
+    2026-11-24T08:25:59.536015+00:00``.
+  - Safe receipts kept 0600 at
+    ``work/revoke-hermes-result.json`` /
+    ``work/revoke-opencode-result.json``.
+- Graceful service stops (identity re-verified immediately before each):
+  Gateway PID 3944229 (uvicorn ``slaif_gateway.main:app --host
+  127.0.0.1 --port 18300``) SIGTERM -> 18300 closed; Redis PID 3944362
+  (``redis-server 127.0.0.1:6390``) SIGTERM -> 6390 closed; PG16 PID
+  3936772 (``postgres -D <task-root>/pg/data -p 54399``)
+  ``pg_ctl stop -m fast`` -> 54399 closed, **data directory kept**.
+- Deletion (15 content-free paths, content never printed): dirs
+  ``work/client-hermes``, ``work/client-opencode``, ``work/db-records``,
+  ``secrets/`` (admin-pw, key-hermes.txt, key-opencode.txt,
+  lan-bearer.key, secrets.env); files ``work/env.sh``, ``work/ids.env``,
+  ``work/policy-hermes.json``, ``work/policy-opencode.json``;
+  ``logs/gateway.log``, ``logs/hermes-run1-cli.log``,
+  ``logs/hermes-run2-cli.log``, ``logs/hermes-run3-cli.log``,
+  ``logs/pg.log``, ``logs/redis.log``, ``logs/redis-stdout.log``.
+  Kept: ``pg/`` data, ``logs/slaif-oap-control-227c.log`` and the logs
+  dir, the task root, ``home/``, ``tmp/deps-3149-nobh.txt``, ``redis/``,
+  ``gateway/``, and the ``work/`` scripts/receipts/PR-body files listed
+  above (plus the new 227-d PR files).
+- Final scan: 3 full-secret needles (both task keys + the intended LAN
+  bearer) were loaded into a 0600 needle file before deletion; 2709 files
+  under the task root (excluding binary ``pg/``) -> **0 unexpected
+  hits**; the needle file was then deleted; auth files confirmed gone;
+  ports 18300/6390/54399 all closed.
+
+### Root accounting evidence (scoped limitation, no billing-precision claim)
+
+- All 7 ``usage_raw`` objects carry ``prompt_tokens`` /
+  ``completion_tokens`` / ``total_tokens`` only (provider usage present).
+- ``cost_source`` / ``actual_cost_source`` = ``slaif_calculated`` on all 7:
+  the task-configured pricing (EUR 1/M input and output), NOT a provider
+  invoice.
+- 3 of 7 carry the documented
+  ``cached_input_price_fallback_to_input`` warning with confidence
+  ``slaif_calculated_with_fallbacks``; the other 4 are plain
+  ``slaif_calculated``.
+- ``needs_reconciliation``: false x6, null x1; no actual holds/fences/
+  reservations.
+
+### Final status
+
+- The strict global zero-retry / six-admission plan remains a historical
+  proposal; the stricter global contract is retained and was NOT
+  satisfied. The executed qualification used the human-accepted bounded
+  gate (stock native retries authorized for this bounded run; none
+  observed).
+- Outer launches 5 of 100 (Hermes 3, OpenCode 2; the pre-spawn typo is not
+  counted); wall time 42.02 s / 40.658 s / 82.678 s aggregate;
+  41,021 tokens / EUR 0.041021.
+- Task keys revoked, services stopped, private auth inputs deleted, full
+  canary scan clean: the 227-c live evidence is closed out.
 
 ## Operator references
 
