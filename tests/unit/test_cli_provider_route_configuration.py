@@ -639,6 +639,27 @@ class TestRoutesUpdateDryRun:
         # strict round-trip: the written file re-parses under the same contract
         assert plan.route_id == ROUTE_ID
 
+    @pytest.mark.parametrize("mode", ["upstream", "gateway_estimate"])
+    def test_context_admission_plan_roundtrip(self, tmp_path, monkeypatch, mode) -> None:
+        _fake_preview_for(FakeRoute(), monkeypatch)
+        path = tmp_path / "context-plan.json"
+        result = _invoke(
+            app, _dry_run_args(ROUTE_ID, str(path), "--codex-context-admission", mode, "--json")
+        )
+        assert result.exit_code == 0, result.stderr
+        plan = parse_route_update_plan_file(path.read_bytes())
+        assert plan.capability_patch.codex_context_admission == mode
+        assert plan.preview["proposed_configuration"]["capabilities"]["codex_limits"] == CODEX_BLOCK
+        assert plan.preview["proposed_configuration"]["capabilities"]["codex_context_admission"] == mode
+
+
+    def test_context_admission_bad_mode_writes_no_plan(self, tmp_path, monkeypatch) -> None:
+        _fake_preview_for(FakeRoute(), monkeypatch)
+        path = tmp_path / "context-plan.json"
+        result = _invoke(app, _dry_run_args(ROUTE_ID, str(path), "--codex-context-admission", "auto"))
+        assert result.exit_code != 0
+        assert not path.exists()
+
     def test_no_overwrite_refused(self, tmp_path, monkeypatch) -> None:
         route = FakeRoute()
         _fake_preview_for(route, monkeypatch)

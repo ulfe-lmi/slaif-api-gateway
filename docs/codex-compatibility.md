@@ -638,9 +638,13 @@ existing versioned secret and writes only owner key, source ledger/request,
 provider/route/model, kind, approved tool identity, timestamps, and operator-configured
 expiry (default and maximum: 365 days). Raw IDs and HMAC digests are never logged, exposed, or used as provider
 state. A later request must resolve every reference to the same key before route
-selection, then match provider/route/model before Redis, pricing, quota, or
-provider work. Cross-key, expired, unavailable-secret-version, name/kind, and
-route mismatches use safe denial. Client replay cannot combine with
+selection. Verified client function/custom-tool history can cross providers,
+routes and models while retaining same-key ownership and exact call/tool
+identity. Opaque reasoning and compaction still require provider/route/model
+compatibility before Redis, pricing, quota or provider work. Cross-key, expired,
+unavailable-secret-version, name/kind and opaque-route mismatches deny safely.
+Destination model/provider permissions and capabilities remain mandatory; see
+[model switching](codex-model-switching.md). Client replay cannot combine with
 `previous_response_id`, stored Responses state, or Conversations. Persistence
 failure occurs after accounting, suppresses normal completion, and preserves
 charged usage truth.

@@ -16,6 +16,14 @@ replay ownership, quotas, and accounting remain code-enforced. Presets cannot
 override core fields or teach a backend a new transport. See
 [client compatibility presets](client-compatibility-presets.md).
 
+For qualified Codex visible reasoning, omitted/null/empty `encrypted_content`
+are empty representations, not opaque replay authority. Request detection
+and completed-reasoning SSE validation agree on this distinction across model
+routes without rewriting provider fields. Malformed types and nonempty
+ciphertext remain subject to their existing validation and independent
+capability/ownership rules. See
+[the visible-reasoning contract](responses-compatibility.md#visible-reasoning-is-not-an-opaque-replay-reference).
+
 This document describes exactly how implemented `/v1/chat/completions`,
 standalone `/v1/audio/*`, `/v1/embeddings`, `POST /v1/realtime/client_secrets`,
 and the current `/v1/responses` subset are forwarded to upstream providers. It
@@ -215,6 +223,27 @@ translates calls per validated binding: native vLLM wire names
 resolved namespace keeps the same wire identity as the implicit
 binding translation — while `preserve` encodings forward the
 materialized namespace with no codec.
+
+The same profile-selected mode accepts the pinned protocol's optional
+tool-result `name` (function/custom) and `namespace` (function only).
+Non-null identities are bounded and checked against the original call
+binding before routing or reservation, not against the final active tools.
+Null/absent identities add no identity claim. Canonical accepted fields are
+metered and retained transiently. Preserve transports forward them unchanged;
+native/portable codecs map a supplied name to that call's historical wire
+name and remove the separate namespace. A result cannot declare a tool or
+authorize replay, and no output identity is persisted as a new reference.
+Other profiles and ordinary Responses keep their strict field vocabulary.
+
+Call-free named `function_call_output` items have a different meaning: the
+pinned client uses them to supply additional context, not a tool response.
+The revision-16 core normalizes these validated items to labeled user data
+before shared preparation. All adapters receive ordinary user messages,
+preserving their positions and text/image order; no synthetic call or replay
+reference is created. The original envelope/client-tool/streaming-event
+requirements still reach route admission for context-only requests. Actual
+call-linked outputs retain every linkage and ownership check. See
+[the named-context contract](responses-compatibility.md#named-client-context-without-a-tool-call).
 
 Instruction placement is part of the SAME shared pure preparation (run
 by the production adapter and the pre-admission estimate preview): a
@@ -507,9 +536,17 @@ Responses-specific rules for the current foundation:
 - a fully gated Codex request requires strict top-level route `codex_limits`
   metadata. After route resolution, SLAIF replaces only the injected ordinary
   output default with the route default, then clips a valid explicit/default
-  output budget to route/operator maxima and rejects estimated input plus that
-  effective output above context before
-  Redis, pricing, quota, or provider work. The qualification profile's 32,768
+  output budget to route/operator maxima. By default (top-level
+  `codex_context_admission` omitted or `gateway_estimate`), it rejects estimated
+  input plus effective output above the route context ceiling before Redis,
+  pricing, quota, or provider work. Explicit `codex_context_admission="upstream"`
+  delegates actual model-capacity validation and generation clipping to a
+  qualified backend; the conservative input estimate plus full capped output
+  budget still drives pricing, rate admission and PostgreSQL quota reservation.
+  Both modes retain operator input/output maxima, payload/capability checks,
+  replay ownership, and actual-usage settlement. Unknown or wrongly typed modes
+  fail closed with `responses_codex_context_admission_invalid`. The setting is
+  route data, not a provider-name heuristic, client parameter or key privilege. The qualification profile's 32,768
   default and 1,050,000/128,000 limits are configured model data, not universal
   facts; ordinary Responses remains at 1,024. Gated pinned V1 compact is the
   explicit exception: it preserves an absent upstream `max_output_tokens` field
@@ -1261,7 +1298,10 @@ Codex replay pairs each result with one preceding call by call ID and kind.
 The native transport already supports multiple calls in one response; replay
 therefore accepts call-call-result-result ordering, including results completing
 in reverse order. Existing input caps, taxonomy validation, independent gates,
-HMAC same-key/same-route ownership and accounting remain enforced. The current
+HMAC same-key ownership, exact call/tool identity and accounting remain
+enforced. Verified client function/custom-tool history can cross model routes;
+opaque reasoning/compaction retains its provider/route/model binding. The
+destination still requires its normal permissions, capabilities and admission. The current
 parallel-generation preference does not invalidate prior parallel history.
 No history is reordered, repaired, dropped or synthesized.
 

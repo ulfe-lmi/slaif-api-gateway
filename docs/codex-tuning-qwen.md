@@ -28,7 +28,7 @@ policy. The original three cases are:
 
 | Original public slug | Backend/adapter | Actual backend context | Gateway estimation ceiling | Default output | Maximum output |
 | --- | --- | ---: | ---: | ---: | ---: |
-| `qwen3.8-27b-V100` | llama.cpp; `llama-cpp-qwen-v1` | 196,608 | 400,000 | 64,000 | 128,000 |
+| `qwen3.8-27b-V100` | llama.cpp; `responses-passthrough-v1` with verified preserve-order template | 196,608 | 400,000 | 64,000 | 128,000 |
 | `qwen3.8-27b` | vLLM; native vLLM tool codec | 262,144 | 393,216 | 64,000 | 128,000 |
 | `qwen3.8-27b-rtx3090` | vLLM; native vLLM tool codec | 100,000 | 150,000 | 64,000 | 128,000 |
 
@@ -42,7 +42,7 @@ request can choose a smaller value or request up to the route maximum, subject
 to operator, context, pricing, quota, and rate-limit checks. The maximum alone
 does not make every call reserve 128,000 output tokens.
 
-For ordinary generation, the necessary backend condition is:
+For backends that require the entire requested output budget to fit, the condition is:
 
 ```text
 actual input tokens + requested output budget <= actual backend context
@@ -71,6 +71,69 @@ For a request near the 128,000 maximum on V100/A100, compact earlier or explicit
 use a smaller output budget. A remote `/responses/compact` call has its own
 output-reservation policy; it reserves the configured compact default, capped at applicable maxima. These templates use
 local compaction and leave `remote_compaction_v2=false`.
+
+## Context admission for a clipping backend
+
+A maximum output is a ceiling, not a promise to generate that many tokens.
+The upgraded A100 vLLM backend clips it to available context: with 200,000
+actual input tokens and a 64,000 output maximum in a 262,144 context, the
+backend allows at most 62,144 generated tokens. Such a request need not fail.
+The gateway's byte-based estimate can differ substantially from actual Qwen
+input tokens. For example, 330,260 estimated input plus a 64,000 output cap
+exceeds the padded 393,216 gateway ceiling by 1,044 even when the backend may
+have room for a shorter answer.
+
+Select who decides capacity with top-level route capability data:
+
+```json
+{"codex_context_admission": "upstream"}
+```
+
+This is a capability fragment, not a complete replacement document. The strict
+values are `gateway_estimate` (the omitted default, preserving the old guard)
+and `upstream`. Null, booleans, unknown strings and objects are refused. Never
+infer the setting from a provider slug or GPU name. Enable upstream admission
+only after verifying the **actual served endpoint** rejects full/oversized
+input and clips generation to remaining context, including reasoning, tools,
+streaming and vision. Qualify each repaired proxy separately. The A100 upgrade
+does not establish clipping support on the RTX3090 or V100 routes.
+
+Use a partial, audited route plan after installing the new gateway build:
+
+```bash
+slaif-gateway routes update ROUTE_UUID \
+  --codex-context-admission upstream \
+  --dry-run /private/context-admission-plan.json --json
+slaif-gateway routes update ROUTE_UUID \
+  --execute /private/context-admission-plan.json \
+  --reason "Verified backend context validation and output clipping" --json
+slaif-gateway routes show ROUTE_UUID --json
+```
+
+Review the plan fingerprint and changed capability before execution. Omitted
+siblings, numeric limits, adapters and key policies are preserved. Existing
+routes stay on the default mode until explicitly updated. Database-backed
+route changes require no key rotation or API restart once the supporting build
+is running. Roll back the setting with the same two-step workflow using
+`--codex-context-admission gateway_estimate`; do that before rolling back to a
+build that does not understand the new capability.
+
+In upstream mode the route context number remains required for numeric profile
+readiness but does not reject requests from an approximate token estimate. The
+backend owns actual model capacity. **Accounting stays conservative**: the
+example still reserves 394,260 tokens, forwards the 64,000 cap, and settles from
+actual reported usage. Explicit smaller output requests remain smaller; larger
+requests are clipped to the route/operator maximum; omission inserts the route
+default. Payload/image bounds, absolute operator input/output ceilings,
+capability/ownership checks, quotas, TPM, concurrency and finalization remain
+in force. No input is silently truncated and no output is unlimited.
+
+This policy applies to fully gated Codex create and compact admission; compact
+keeps its existing endpoint reservation and absent upstream output-limit field.
+It does not change ordinary Chat/Responses behavior or fix old clients' recovery
+from a genuine backend context error. Client context and auto-compaction limits
+must still describe the real model; do not raise them to the padded gateway
+ceiling. Earlier compaction remains a useful latency and safety margin.
 
 ## Install a profile that actually selects Qwen
 
@@ -161,7 +224,8 @@ quotas. Existing client files are not rewritten by a route update.
 | --- | --- |
 | route `codex_limits.default_max_output_tokens` | injected and reserved only when the client omitted a limit; smaller explicit requests are preserved |
 | route `codex_limits.max_output_tokens` | ceiling for explicit create requests; larger requests are clipped down |
-| route `codex_limits.context_window_tokens` | admission estimate ceiling; input estimate plus output allowance must fit |
+| route `codex_limits.context_window_tokens` | required context metadata; estimate-plus-output guard in `gateway_estimate` mode |
+| route `codex_context_admission` | `gateway_estimate` by default; explicit `upstream` delegates actual capacity validation without reducing reservations |
 | `CODEX_ABSOLUTE_MAX_OUTPUT_TOKENS` | operator ceiling; currently 128,000 by default |
 | `CODEX_ABSOLUTE_MAX_INPUT_TOKENS` | separate operator input ceiling |
 | `DEFAULT_MAX_OUTPUT_TOKENS` / `HARD_MAX_OUTPUT_TOKENS` | ordinary Chat/Responses defaults; Codex extended limits require independent key/route gates |
@@ -169,7 +233,7 @@ quotas. Existing client files are not rewritten by a route update.
 | key quota and rate-limit policy | reserves estimated input plus output before inference; can reject a request before any answer |
 | wait mode / maximum wait | queues eligible rate-limited requests within the configured bound; does not enlarge token or context limits |
 | concurrency per key | simultaneous requests, distinct from tools within one turn |
-| replay-reference TTL | lifetime of same-key/provider/route replay ownership; preserve durable database state across restarts |
+| replay-reference TTL | lifetime of same-key replay ownership; plain tool history is portable, opaque state remains source-bound; preserve durable database state across restarts |
 
 A 20,000-token input with the default output budget reserves exposure for about
 84,000 tokens. Hard-quota settlement uses actual reported usage and releases
@@ -191,7 +255,7 @@ fixture identities. The new templates are client setup examples, not READY claim
 
 | Case | Backend settings to verify | Gateway adapter |
 | --- | --- | --- |
-| V100 / llama.cpp | actual configured context 196,608; correct GGUF/template; Responses and image support; instruction placement | configured upstream LLM adapter, `llama-cpp-qwen-v1` for the prefix-only template |
+| V100 / llama.cpp | actual configured context 196,608; verified template accepting late instructions; Responses and image support | configured upstream LLM adapter, `responses-passthrough-v1` after backend verification |
 | A100 / vLLM | served model ID, `max_model_len=262144`, compatible reasoning parser and image processor, Responses SSE/tool format | `local_coding_vllm` native tool codec |
 | RTX3090 / vLLM | served model ID, `max_model_len=100000`, KV/batching capacity and compatible reasoning/image support | `local_coding_vllm` native tool codec |
 
@@ -209,6 +273,12 @@ Only use a preserve-order adapter/template combination after verifying backend
 support. This is separate from the corrected string/one-part-array tool hint
 recognition described in the [upgrade runbook](upgrade-runbook.md).
 
+The V100 original and repaired routes switched to the verified preserve-order
+template/profile combination on 2026-11-19. The backend's existing
+developer-to-system normalization remains; separate instruction boundaries and
+chronology are preserved. Follow the [V100 deployment and rollback runbook](runbooks/qwen-v100-llama-cpp.md)
+and its [verification record](verification/2026-11-19-v100-instruction-order.md).
+
 ## Images, tool histories and payload bounds
 
 Use the route's geometry-based `media_input_estimation.image_geometry` with the
@@ -224,6 +294,15 @@ this example. Request-byte, validated media, model context and backend limits
 still apply. Do not reintroduce an image-count workaround for token-estimation
 errors. Video-frame extraction and direct video capabilities have independent
 route/request bounds; disabling the image count does not enable arbitrary video.
+
+Long image histories can independently cross the packaged 40 MiB aggregate
+data-URL byte cap because earlier images are resubmitted on later turns.
+The deployment now explicitly sets
+`RESPONSES_MAX_TOTAL_IMAGE_DATA_URL_BYTES=134217728` (128 MiB), with the
+20 MiB per-image limit unchanged and a matching `128m` API transport ceiling.
+See the [image-history payload runbook](runbooks/codex-image-payload-size.md)
+for configuration, API reload, boundary verification and rollback. This does
+not change image-token estimation or the backend context window.
 
 The compatibility preset owns tool namespace vocabulary, declaration/schema
 limits, visible-reasoning sizes and replay shapes. Those byte/item bounds are
@@ -279,7 +358,8 @@ defines the canonical event.
 | 429 | estimated reservation, token/request window, concurrent requests and wait policy |
 | output-limit notice | provider status/reason, thinking consumption, requested/default budget |
 | generic stream failure | unsupported event, malformed tool encoding, missing usage or transport failure |
-| replay-reference unavailable | durable ownership/TTL and key/provider/route; an older failed stream may have left orphaned history—rewind before that turn; preserve the database during upgrades |
+| replay-reference unavailable | same-key ownership, expiry and tool identity; an older failed stream may have left orphaned history; preserve the database during upgrades |
+| replay route mismatch | opaque reasoning/compaction belongs to another route; verified plain tool history can cross permitted routes; see [model switching](codex-model-switching.md) |
 
 Use content-free diagnostics first. Do not log bearer keys, tool contents,
 images or whole conversations to tune these controls.

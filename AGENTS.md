@@ -728,7 +728,8 @@ Current behavior:
   and replay additionally require the independent default-off
   `codex_encrypted_reasoning_replay` capability on the key and route. Fully
   validated reasoning/tool `response.output_item.done` IDs become reusable
-  HMAC-only same-key/provider/route references with an operator-configurable TTL (default and maximum: 365 days) only after final usage
+  HMAC-only same-key references (portable verified client-tool history;
+  opaque reasoning/compaction remains provider/route/model-bound) with an operator-configurable TTL (default and maximum: 365 days) only after final usage
   and PostgreSQL accounting finalization; normal completion remains held until
   those references commit. Raw IDs, digests, encrypted reasoning, summaries,
   arguments, and results are never persisted or exposed. Client-managed replay
@@ -738,7 +739,11 @@ Current behavior:
   `codex_limits` metadata and operator ceilings. The reviewed qualification
   profile uses a bounded 32,768 default output, 1,050,000 context, and 128,000
   maximum output; these are configured model data, not universal facts or an
-  unlimited-output promise. Ordinary Responses remains on its existing 1,024
+  unlimited-output promise. Optional top-level route `codex_context_admission`
+  defaults to `gateway_estimate`; explicit `upstream` delegates actual model
+  capacity validation to a qualified clipping backend without reducing
+  conservative reservations or removing operator input/output and payload caps.
+  Ordinary Responses remains on its existing 1,024
   default. Cache-read, cache-write, uncached input, ordinary output, reasoning
   output, and configured long-context tiers are separate accounting
   dimensions; locally calculated cache-write/long-context cost is not

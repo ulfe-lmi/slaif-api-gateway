@@ -6,6 +6,22 @@
 
 ## Before changing a deployment
 
+For large Codex image histories, align both ingress and route adapter byte
+ceilings using the [image-history payload runbook](runbooks/codex-image-payload-size.md).
+The six local Qwen adapter ceilings can be raised from the inherited 64 MiB
+to 128 MiB through existing audited route configuration. That route-only change
+requires no rebuilt image, process restart, schema migration or key rotation;
+the independently configured image allowance and Nginx limits still apply.
+
+The [Codex model-switching update](codex-model-switching.md) changes replay
+compatibility in the engine: verified same-key client-tool history is portable,
+while opaque reasoning/compaction remains source-bound. Deploy the reviewed
+image and recreate API workers; there is no schema, key-pin, registry or key
+rotation step. Existing reference rows retain their source provenance. An older
+binary may reject a newly accumulated mixed-route history after rollback;
+preserve the database and local conversations, and use forward recovery or
+visible-history reconstruction rather than deleting ownership records.
+
 For the Qwen output-budget/terminal update, follow the
 [Codex tuning guide](codex-tuning-qwen.md). The engine change accepts bounded,
 usage-backed output-limit terminals and requires recreating API workers; it adds
@@ -265,6 +281,39 @@ DATA: new execution, stream, or item behavior outside the engine
 validators may still require a code change.
 
 ### Codex 226 declaration-history profile upgrade (revision 15 -> 16)
+
+Visible-reasoning model-switch correction: retained empty-string ciphertext
+must not activate opaque replay, and a qualified backend's null/omitted
+ciphertext remains visible at stream completion. See
+[the classification contract](responses-compatibility.md#visible-reasoning-is-not-an-opaque-replay-reference).
+Deploy a rebuilt engine and drain/restart all API and worker processes. No
+schema, preset file/digest, key pin, key material, route limit or quota change
+is required. The correction preserves input/output fields; existing
+conversations do not need manual edits. Rolling back the engine restores the
+old mixed-history stream rejection; genuine encrypted replay retains its
+existing provider/route/model restrictions in both versions.
+
+Engine correction for optional result identities: revision 16's pinned
+protocol already defines optional `name` on function/custom outputs and
+`namespace` on function outputs. The corrected engine validates these against
+the original call binding, including after catalog updates, and translates
+them consistently through preserve/native/portable transports. See
+[the compatibility contract](responses-compatibility.md#optional-codex-tool-result-identities).
+For deployments already on revision 16, rebuild and drain/restart every API
+and worker process. Keep the existing profile file, digest, key pins, and
+keys; no database migration or rotation is required. Rolling back only this
+engine correction restores the old field rejection for affected histories.
+
+The follow-up engine correction also supports Codex's named client context:
+`function_call_output` with a name and absent/null `call_id`. This source-defined
+item is additional context rather than a call-linked result. It is normalized
+to labeled user data for every backend, under the original key/route gates;
+no call ID or ownership is fabricated. See
+[the exact behavior and boundaries](responses-compatibility.md#named-client-context-without-a-tool-call).
+Deploying only the optional-name fix can expose the next rejection at
+`input[...].call_id`; the named-context correction requires a new engine
+build and drained API/worker restart. Existing revision-16 files, digests,
+pins, keys, routes, quotas and schema remain unchanged.
 
 The 226 declaration-history lifecycle is ENGINE behavior plus profile
 DATA: the new preset (`codex-0.167.1`, revision `16`) requires the NEW

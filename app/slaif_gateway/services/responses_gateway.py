@@ -1368,8 +1368,8 @@ async def handle_response_create(
     # explicit new lifecycle mode, AND only when the selected spec
     # declares it; frozen legacy presets never gain it by inheritance.
     # Owned ID-less calls still use the existing deferred same-key
-    # CALL-ID HMAC lookup after local route/pair validation; unowned or
-    # wrong-route references always deny.
+    # CALL-ID HMAC lookup after local route/pair validation. Unowned references
+    # deny; verified client tool history can cross routes, unlike opaque state.
     allow_idless_tool_call_replay = bool(
         client_module.policy_spec is not None
         and client_module.policy_spec.allow_idless_tool_call_replay

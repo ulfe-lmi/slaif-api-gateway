@@ -5,6 +5,10 @@ budgets, and context/compaction tuning, use the
 [Codex tuning guide](../codex-tuning-qwen.md). This page retains the exact
 historical 0.162 procedure and fixture identities.
 
+For the current V100 backend template override, accepted role normalization,
+preserve-order route selector and coordinated rollback, use the
+[V100/llama.cpp runbook](qwen-v100-llama-cpp.md).
+
 > **Status:** Bounded operator procedure; Codex CLI 0.162.1
 > **Scope:** Exact Codex 0.162 client module with a Local Coding Responses backend
 

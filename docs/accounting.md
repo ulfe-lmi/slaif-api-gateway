@@ -196,8 +196,16 @@ Core invariants:
   existing failure/reconciliation path. Hosted web-search settlement is unchanged.
 - Fully gated Codex admission replaces only the injected ordinary 1,024 output
   default with the strict route default (32,768 in the qualification profile),
-  then enforces route/operator output and context bounds before Redis, pricing,
-  quota, or provider work. Ordinary non-Codex requests keep their own defaults.
+  then enforces route/operator output bounds and the selected context-admission
+  policy before Redis, pricing, quota, or provider work. Top-level route
+  `codex_context_admission` defaults to `gateway_estimate`, retaining the
+  estimated-input-plus-output context check. Explicit `upstream` delegates
+  capacity validation to a backend qualified to validate actual tokenized input
+  and clip generation to remaining context. It does not reduce or remove any
+  quota, cost or rate reservation: reserve the same conservative input estimate
+  plus the requested output clipped to route/operator maxima (or the configured
+  default on omission), then settle from actual provider usage. Absolute
+  operator input/output ceilings and payload bounds apply in both modes. Ordinary non-Codex requests keep their own defaults.
   Explicit valid output budgets are clipped down to the applicable route and
   operator maxima; smaller requests are never inflated to the default. The
   forwarded limit is the output component used for pricing and reservation.

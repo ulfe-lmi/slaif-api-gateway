@@ -89,7 +89,7 @@ reasoning dialect on its exact Local pair. A reasoning item may have an absent
 or null ID, bounded `summary`, and bounded visible `content` containing only
 the reviewed text-part types; the gateway never fabricates an ID. An absent or
 null `encrypted_content` value is visible state, not encrypted replay. A
-non-null encrypted value remains on the independent ID-bound encrypted-replay
+nonempty encrypted value remains on the independent ID-bound encrypted-replay
 path, and OpenAI/default/0.147 clients retain their existing strict rules.
 
 This document defines the RC2-beta support boundary for Responses API work.
@@ -225,7 +225,21 @@ response reference metadata after a successful provider create response with an
 ID. If `max_output_tokens` is omitted, ordinary Responses injects the existing
 1,024 default output cap. A request with all four existing Codex gates uses its
 strict route numeric default instead (32,768 for the qualification profile),
-bounded by route/operator maximums and the route context window. The
+bounded by route/operator maximums and the selected context-admission policy.
+The optional top-level route `codex_context_admission` is strictly
+`gateway_estimate` (also the omitted default) or `upstream`. The former checks
+estimated input plus effective output against `codex_limits.context_window_tokens`;
+the latter sends the capped request to a qualified backend for actual tokenized
+context validation and generation clipping. In upstream mode the route context
+value remains required numeric/readiness metadata, not a hard estimate-based
+rejection threshold. Accounting, pricing and rate admission still use the full
+conservative reservation, including the output cap; operator input/output
+ceilings and all authorization, payload, media and replay rules still apply.
+An unknown value, null or wrong type is rejected as
+`responses_codex_context_admission_invalid`. This setting neither increases
+backend capacity nor guarantees automatic recovery from a real backend overflow.
+See [Qwen context-admission configuration](codex-tuning-qwen.md#context-admission-for-a-clipping-backend).
+The
 1,050,000/128,000 qualification limits and pricing multipliers are configured
 model data, not universal hardcoded facts. The route-side requirement is
 fail-closed: a key holding all four Codex grants requires the resolved route
@@ -294,8 +308,9 @@ carry only the exact pinned model, history, instructions, tools,
 rejects `stream`, `store`, `include`, `tool_choice`, background, hosted/MCP
 authority, V2 `compaction_trigger`, provider-state IDs, media, and unknown
 fields. Prior reasoning/tool/compaction history must pass same-key HMAC lookup
-before side effects. A different compact route row requires explicit same-
-provider/same-upstream-model compatible-route metadata.
+before side effects. For opaque reasoning/compaction, a different compact
+route row requires explicit same-provider/same-upstream-model compatible-route
+metadata. Verified plain tool history does not need that route exception.
 
 With all five Codex key capabilities, pinned create/compact history may also
 contain exact `internal_chat_message_metadata_passthrough` on message (including
@@ -633,8 +648,11 @@ frame remains unchanged in transit.
 Fully validated reasoning and function/custom done items receive reusable
 HMAC-only references with a configurable TTL (default and maximum: 365 days) after final provider usage and successful
 PostgreSQL accounting. A replay request must resolve every item/call ID to the
-same key before route work and then match provider, route, model, kind, and
-approved tool identity before Redis/pricing/quota/provider work. Raw IDs,
+same key and approved kind/tool identity before Redis/pricing/quota/provider
+work. Verified client function/custom-tool history is portable across routes,
+providers and models; opaque reasoning/compaction must additionally match
+provider/route/model. Destination policy and capabilities still apply. See
+[model switching](codex-model-switching.md). Raw IDs,
 digests, encrypted reasoning, summaries, arguments, and results never persist
 or appear in logs/metrics/audit/errors. Cross-key, expired, unavailable HMAC
 version, and compatibility mismatches deny safely. Client-managed replay cannot
@@ -1323,8 +1341,85 @@ consistent with the streaming path, which never persists encrypted-replay
 references for visible reasoning. The existing content shape, size, capability,
 and input-accounting checks still apply.
 
+The request detector and qualified visible-reasoning stream validator use the
+same distinction: absent, null, and empty-string ciphertext do not activate
+opaque replay. A retained empty marker from one backend must not cause another
+backend's null marker to be rejected when reasoning completes. For profiles
+that explicitly enable bounded visible reasoning, the completed item remains
+visible even when other history has enabled encrypted replay; its content,
+identifier, status and lifecycle bounds still apply. Malformed ciphertext
+types are rejected, and visible items never create opaque replay references.
+The original input and output representations are preserved.
+
+This permits changing between allowed model routes with retained visible
+reasoning, including the V100/llama.cpp empty-string and A100/vLLM null
+representations. SDK/PostgreSQL regressions exercise both switch directions
+and switching back, using mocked provider HTTP. Individual route smoke tests
+alone do not establish this mixed-history behavior.
+
 Nonempty encrypted reasoning, compaction, and tool-call references retain their
 existing ownership and route checks. This classification repair can unblock a
 conversation rejected solely because visible reasoning was misclassified; it
 cannot recover genuinely missing encrypted or tool references. No schema,
 key rotation, compatibility-profile migration, or history editing is required.
+
+### Optional Codex tool-result identities
+
+The explicitly selected positional-history feature (shipped
+`codex-0.167.1`, revision 16) accepts optional `name` on function and custom
+tool outputs, and optional `namespace` on function outputs. These fields
+are already present in the pinned upstream
+[`ResponseItem` protocol](https://github.com/openai/codex/blob/rust-v0.167.1/codex-rs/protocol/src/models.rs).
+Absent or null identities are accepted. Non-null values must be non-empty
+strings within the existing tool-name byte limits. For call-linked results
+they must match the exact preceding call's historical binding. A later declaration, removal, or
+same-name tool in another namespace cannot rebind a result. Custom outputs
+do not accept `namespace` in this pinned contract.
+
+Accepted fields remain transient history, are included in input accounting,
+and grant no declaration, execution, or replay authority. Call-ID, ordering,
+kind, uniqueness, capability, and same-key replay-ownership checks still
+apply to call-linked results. Preserve transports retain these fields; native and portable vLLM
+codecs translate a supplied result name to the matching call's wire name
+and remove its separately represented namespace. They do not invent an
+omitted name. Ordinary Responses and frozen profiles without the feature
+retain their existing strict output-field sets.
+
+This corrects an engine omission in revision 16 support. Rebuild and drain/
+restart all API and worker processes; no schema, preset digest, key rotation,
+or key-pin migration is required. It resolves a field-only rejection such as
+`input[322].name`; it does not recover genuinely missing replay references.
+
+### Named client context without a tool call
+
+The same revision-16 feature accepts a distinct source-derived shape:
+`function_call_output` with a bounded non-empty `name` and an absent/null
+`call_id`. Codex's pinned
+[`AdditionalContextToolOutput`](https://github.com/openai/codex/blob/rust-v0.167.1/codex-rs/context-fragments/src/additional_context.rs)
+uses this for client-authored context, with an optional namespace. It has no
+preceding model call. Codex also retains such named context across compaction
+in [`is_retained_tool_output`](https://github.com/openai/codex/blob/rust-v0.167.1/codex-rs/core/src/compact_retained_tool_outputs.rs).
+
+After validating the existing field/text/image bounds and duplicate IDs, the
+gateway represents this information as an ordinary `user` message at the
+same position. Its first text part labels it `Codex client context` with a
+JSON-encoded name/namespace; subsequent parts preserve the original text or
+validated images in order. There is no fabricated call ID, tool declaration,
+tool execution, replay reference, or system/developer role. This shared
+normalization applies before transport preparation, so vLLM, llama.cpp and
+preserve/portable transports receive the same ordinary context data and
+account for the forwarded representation. The canonical source request is
+not mutated. Request-wide resource limits and independent image gates remain.
+
+Context-only requests still require all three Codex envelope/client-tool/
+streaming-event grants on both key and route. Named context can coexist with
+pending calls but cannot resolve one; real results keep exact call-ID, kind,
+identity, ordering and same-key ownership checks. Empty/malformed call IDs
+are rejected rather than treated as context. Custom outputs still require
+their call IDs. Anonymous call-free outputs are rejected. Optional null
+output IDs in this profile are inert, as omitted IDs are.
+
+This covers Responses create and already-gated Codex compaction; the ordinary
+input-token-count contract is unchanged. Frozen profiles and ordinary
+Responses remain strict. Rebuild/drain/restart the engine; no preset digest,
+key material, key-pin, schema, route setting or quota change is required.

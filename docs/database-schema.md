@@ -1521,9 +1521,12 @@ Rules:
 
 HMAC-only ownership metadata for bounded Codex client-managed replay. These
 rows authorize a gateway key to resend a previously completed provider
-reasoning item, local-tool call/output pair, or opaque V1 compaction item on a
-compatible provider/model route. They do not store provider state, response
-content, or billing truth.
+reasoning item, local-tool call/output pair, or opaque V1 compaction item.
+Verified client-tool history is portable between permitted model routes;
+opaque reasoning/compaction retains its provider/route/model binding. Stored
+provider/route/model columns retain source provenance and are not rebound when
+tool history moves. These rows do not store provider state, response content,
+or billing truth. See [model switching](codex-model-switching.md).
 
 Columns:
 
@@ -1601,9 +1604,11 @@ Rules:
   accounting finalization succeed. A streaming completed event or unary V1
   compact response remains held until insertion commits. A persistence failure
   suppresses normal success but does not release or reverse finalized usage.
-- Lookups require the same gateway key, unexpired row, exact item/call kind,
-  approved namespace/tool identity, provider, route, and upstream model before
-  Redis, pricing, quota, or provider side effects.
+- Lookups require the same gateway key, unexpired row, exact item/call kind
+  and approved namespace/tool identity before Redis, pricing, quota or provider
+  side effects. Opaque reasoning/compaction additionally requires compatible
+  provider/route/upstream-model facts. Verified client-tool history is portable;
+  destination permissions and capability checks still apply.
 - References are reusable until expiry for Codex full-history replay. They do
   not create or imply `previous_response_id`, stored Response, or Conversation
   ownership and cannot be combined with those provider-state mechanisms.

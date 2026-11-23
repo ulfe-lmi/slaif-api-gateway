@@ -29,6 +29,7 @@ secret store.
 
 Runbooks:
 
+- [Codex image-history payload size](codex-image-payload-size.md)
 - [Provider key rotation](provider-key-rotation.md)
 - [Gateway key leak response](gateway-key-leak.md)
 - [HMAC secret rotation](hmac-secret-rotation.md)
