@@ -30,7 +30,6 @@ RESPONSES_CODEX_STREAM_EVENT_TYPES = frozenset(
         "response.function_call_arguments.done",
         "response.custom_tool_call_input.delta",
         "response.reasoning_summary_part.added",
-        "response.reasoning_summary_part.done",
         "response.reasoning_summary_text.delta",
         "response.reasoning_summary_text.done",
         "response.reasoning_text.delta",
@@ -478,6 +477,18 @@ class ResponsesStreamEventValidator:
             return valid
         if not self._profile.codex_streaming_tool_events:
             return self._validate_existing_text_event(payload, event_type)
+        if (
+            event_type == "response.reasoning_summary_part.done"
+            and self._profile.allow_sparse_visible_reasoning
+        ):
+            # The summary-part closure event belongs to the selected OpenCode
+            # native profile; every other profile keeps the baseline denial
+            # of this Codex dialect event.
+            valid = self._validate_codex_event(payload, event_type)
+            if valid:
+                self._safe_event_counts[event_type] += 1
+                self._safe_event_bytes[event_type] += _event_generated_bytes(payload)
+            return valid
         if event_type not in RESPONSES_CODEX_STREAM_EVENT_TYPES:
             return False
 
@@ -1194,10 +1205,15 @@ class ResponsesStreamEventValidator:
                 return False
             return True
 
-        if not strict_codex and event_type == "response.reasoning_summary_part.done":
+        if (
+            not strict_codex
+            and event_type == "response.reasoning_summary_part.done"
+            and self._profile.allow_sparse_visible_reasoning
+        ):
             # Summary-part closure for the OpenCode selected-profile stream:
             # the delivered part text must equal the accumulated deltas.
-            # The strict 0.149 dialect rejects this event type as before.
+            # The strict 0.149 dialect and every non-selected profile reject
+            # this event type as before.
             if not _required_index(payload, "summary_index"):
                 return False
             part = payload.get("part")

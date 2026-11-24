@@ -4,9 +4,11 @@ Covers the minimal OpenCode 1.19.3 streaming surface added on top of the
 qualified id-less encrypted reasoning path:
 
 - ``response.reasoning_summary_part.done`` is the non-strict summary-part
-  closure event; its part text must equal the accumulated
-  ``reasoning_summary_text.delta`` bytes, and it is rejected by the strict
-  0.149 dialect and by profiles without the OpenCode tool-event surface.
+  closure event, scoped to the selected native profile: its part text must
+  equal the accumulated ``reasoning_summary_text.delta`` bytes, and it is
+  rejected by the strict 0.149 dialect and by every profile that does not
+  enable ``allow_sparse_visible_reasoning`` (legacy tool-event profiles
+  keep the baseline denial).
 - ``response.output_item.added`` reasoning items carry exactly
   ``{type, id, encrypted_content}`` (bounded id, non-empty bounded cipher)
   under the replay profile; cumulative cipher bytes stay bounded.
@@ -67,6 +69,7 @@ def _profile(**overrides) -> ResponsesStreamValidationProfile:
         "codex_encrypted_reasoning_replay": True,
         "allow_idless_encrypted_reasoning": True,
         "require_output_indices": True,
+        "allow_sparse_visible_reasoning": True,
     }
     base.update(overrides)
     return ResponsesStreamValidationProfile(**base)
@@ -272,6 +275,46 @@ def test_strict_0149_dialect_rejects_summary_part_done() -> None:
 def test_plain_profile_rejects_summary_part_done() -> None:
     validator = ResponsesStreamEventValidator(ResponsesStreamValidationProfile())
     assert validator.validate(_part_added()) is False
+
+
+def test_native_profile_flag_enables_summary_part_done() -> None:
+    """The selected native profile flag alone enables the closure event."""
+    native = _validator()
+    _run(
+        native,
+        _cipher_added(),
+        _part_added(),
+        _delta(),
+        _part_done(),
+        _id_done(),
+    )
+    near_native = _validator(allow_sparse_visible_reasoning=False)
+    _run(near_native, _cipher_added(), _part_added(), _delta())
+    assert near_native.validate(_part_done()) is False
+    assert near_native.take_replay_reference_candidates() == ()
+
+
+def test_legacy_tool_event_profile_rejects_summary_part_done() -> None:
+    """Legacy tool-event profile (all native flags off) keeps baseline denial."""
+    legacy = ResponsesStreamValidationProfile(
+        codex_streaming_tool_events=True,
+        codex_encrypted_reasoning_replay=True,
+    )
+    validator = ResponsesStreamEventValidator(legacy)
+    added = {
+        "type": "response.output_item.added",
+        "output_index": 0,
+        "sequence_number": 0,
+        "item": {
+            "type": "reasoning",
+            "id": "rs_1",
+            "summary": [],
+            "status": "in_progress",
+        },
+    }
+    _run(validator, added, _part_added(), _delta())
+    assert validator.validate(_part_done()) is False
+    assert validator.take_replay_reference_candidates() == ()
 
 
 # --- id-bearing exact-shape cipher added items -----------------------------

@@ -2495,7 +2495,35 @@ def _done_reasoning(
 
 
 def test_encrypted_reasoning_done_event_is_exact_opaque_and_candidate_only() -> None:
+    """Legacy encrypted-replay profile keeps a cipher-free single reference."""
     validator = ResponsesStreamEventValidator(_encrypted_profile())
+    payload = _done_reasoning(encrypted_content=PRIVATE_CANARY)
+    original = copy.deepcopy(payload)
+
+    assert validator.validate(payload)
+    assert payload == original
+    candidates = validator.take_replay_reference_candidates()
+    assert len(candidates) == 1
+    assert candidates[0].item_kind == "reasoning"
+    assert candidates[0].item_id == "rs_1"
+    # Legacy single-reference behavior: no ciphertext alias is captured for
+    # non-selected profiles; only the v1 ID reference is issued.
+    assert candidates[0].encrypted_content is None
+    assert not hasattr(candidates[0], "summary")
+    assert PRIVATE_CANARY not in repr(validator.__dict__)
+    assert PRIVATE_CANARY not in json.dumps(validator.safe_evidence())
+    assert validator.take_replay_reference_candidates() == ()
+
+
+def test_encrypted_reasoning_done_native_profile_captures_v3_alias() -> None:
+    """Selected native profile: id-bearing validated done keeps the cipher alias."""
+    profile = ResponsesStreamValidationProfile(
+        codex_streaming_tool_events=True,
+        codex_encrypted_reasoning_replay=True,
+        allow_idless_encrypted_reasoning=True,
+        declared_client_tools=DECLARATIONS,
+    )
+    validator = ResponsesStreamEventValidator(profile)
     payload = _done_reasoning(encrypted_content=PRIVATE_CANARY)
     original = copy.deepcopy(payload)
 
