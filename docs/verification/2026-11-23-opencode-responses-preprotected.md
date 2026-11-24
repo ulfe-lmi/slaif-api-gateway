@@ -1,20 +1,27 @@
-# 228-a OpenCode 1.19.3 Responses Module — Preprotected Verification Record
+# 228-a/228-b OpenCode 1.19.3 Responses Module — Preprotected Verification Record
 
-Record finalized 2026-11-24. This filename is dated 2026-11-23 to match
-the crosslinks already committed in `docs/responses-compatibility.md`.
+Record finalized 2026-11-24 (228-b refresh of the 228-a record; this
+filename is dated 2026-11-23 to match the crosslinks already committed
+in `docs/responses-compatibility.md`).
 All evidence was produced at the tested implementation heads named
-below (dual-labeled; the later code commits are re-covered by the
-442-test focused regression and the 18-test PG run at the final code
-head).
+below (labeled per head; the later code commits are re-covered by the
+467-test focused regression, the 20-test PG run, and the 10-pass
+governance run at the final 228-b code head).
 
 ## Status
 
-- Preprotected candidate: `PREPROTECTED_READY`.
-- Protected live-qualification gate: `not_run` (this preprotected order
-  authorizes no inference or remote setup).
+- Objective status: `NEEDS_CONTINUATION` (honest incomplete). The 228-b
+  completion order's item 6 — the pinned ACTUAL OpenCode 1.19.3 binary
+  through the task-owned Gateway + real PostgreSQL + separate loopback
+  mock upstream (no `get_provider_adapter` monkeypatch) — is staged and
+  awaits root dispatch (`not_run`). The 228-a candidate label
+  `PREPROTECTED_READY` (candidate reviewable) is superseded by this
+  b-refresh; it never meant "qualified".
+- Protected live-qualification gate: `not_run`.
 - Real provider inference: `not_run`.
-- Known failure pending root ruling: focused OAP governance
-  1 failed / 9 passed (activated-order format literal; see below).
+- Governance: resolved at 228-b — focused OAP governance 10 passed at
+  the final 228-b code head (the a-era 1 failed / 9 passed is preserved
+  as immutable history; see below).
 - Strict zero-retry plus six-settled-request admission guarantee:
   `UNSATISFIED` (source-verified; the relaxed live plan below requires
   an explicit human risk decision; see Proposed future live plan).
@@ -28,12 +35,20 @@ head).
 - First tested implementation head:
   `79e27c844e70a54cdf092d53b6aca8bd5bb5004b` (338-test unit matrix plus
   the original 11-test PG run, both below).
-- Final code head: `55482cc16b4f40530498040c70e0151433b3a9c1`
+- 228-a final code head: `55482cc16b4f40530498040c70e0151433b3a9c1`
   (442-test focused unit regression plus 18-test PG run, both below;
   `ruff check app tests` clean).
+- Final 228-b code head: `c5d007fb272d0103d9f9a396547e237334987409`
+  (467-test focused unit regression, 20-test PG run, and 10-pass
+  governance, all below; `ruff check app tests` clean). `c5d007fb` is
+  test-only on top of `d896ad91`, so the app code is byte-identical to
+  the running task Gateway.
 - Tree identities at `55482cc16b4f40530498040c70e0151433b3a9c1`:
   `HEAD:app` = `30610d166c7de6a55510774a76af51125f54e044`;
   `HEAD:app/slaif_gateway` = `1c254ceb09b9ebf155102fc15e8d25c1f985b566`.
+- Tree identities at `c5d007fb272d0103d9f9a396547e237334987409`:
+  `HEAD:app` = `a857667b3ca7752170256b4dab7c39f4ae1b1213`;
+  `HEAD:app/slaif_gateway` = `4f26abb76184df2a74a97fa37290f66f36708083`.
 - Documentation-only commits: `bbaa8c4414e491f84a3fa1da894e1b012b1bfd36`
   (responses-compatibility), `7a2c7234c0f3116ee69c0be902a717a8f1df1cdc`
   (provider-forwarding-contract), `8c21b68cab899ef61ade40b6b917da4de2bdf949`
@@ -52,16 +67,39 @@ head).
   `ae38ec9e1e7bdec706064ba761c5c8bb8bd0f5c4` (summary-part closure,
   exact cipher added item, flat-function streaming flag),
   `55482cc16b4f40530498040c70e0151433b3a9c1` (tests only).
+  228-b: `2b6e7e48ca2fde938e3d0f167fb506fe6201c6af` (aux-title form,
+  assistant output-text history, empty visible reasoning),
+  `cb936fbd2e22da532532c844d0596c70b3d59e1f` (unit coverage for the
+  same), `fb6a521019da5ec74cab8990b77651802aa0bf0d` (provider reasoning
+  IDs required; cipher capture gated to the selected profile; visible
+  absent/null/empty lifecycle; orphan-done rejection),
+  `ce476f3b6ea30ae24d95fd10628929ad065ab7ae` (v3 alias issuance
+  selected-profile-only), `49d55a9dc81bfffbf370c63f6fd0ba03b8f3c2f6`
+  (OpenCode-only sparse-visible exception),
+  `ea561ac96bfb57a59acf01ea3df0ec3129b844f1` (aux/compaction summary
+  stream-true-only), `e6687613af90fc4edc34253e2b6a264c916032d7`
+  (focused unit coverage),
+  `d896ad91f5de1c34bdfb753fedcc51086717fa0b` (part.done closure scoped
+  to the selected native profile),
+  `c5d007fb272d0103d9f9a396547e237334987409` (tests only: HTTP-mock
+  factory-adapter settlement).
 - Accepted secondary cherry-picks (fake-only capture checkpoints):
   local `89e536153f1c9487ef83e6ee9713970bfdd2b13c` from secondary
   `3c61d6c3daa62bccada1f3e7756611ad4e493151` (initial capture);
   local `19b1569de3efbd5a1e8fff7dac0c44ebc97737d3` from secondary
   `569f2f11afdaa7aacd8556c29ee7e3b28505feea` (corrected wire and
-  verifier).
+  verifier); local `552231f6699427425f2bcdca4d1783554efc2a11` from
+  secondary `f3af15335907fc5fe8c2f02705e7df4ad91d424a` (fix2 recapture:
+  no top-level response_id, assistant-text continuation, default
+  auto-title aux-first shape, visible-reasoning states); local
+  `ca76576019f2021f94890d85be3885d86c544f89` from secondary
+  `5a2b7e81b2759f60630e06856a4ee744a0b95a11` (native client-side
+  compaction loopback capture, synthetic trigger).
 - Final publication head: pending — the report's parent is this
   documentation-refresh commit.
-- PR: not yet published (one numeric objective = one DRAFT PR); title
-  "Add pinned native OpenCode Responses client support".
+- PR: DRAFT PR #401 (one numeric objective = one PR; created by 228-a,
+  amended by 228-b); title "Add pinned native OpenCode Responses client
+  support"; base `main`; auto-merge disabled.
 
 ## Scope and identity
 
@@ -128,6 +166,32 @@ head).
   only through the existing same-key/kind/callID/name HMAC, even when
   the tool is no longer declared; history is never unioned into the
   current active declaration.
+- 228-b streaming/output semantics (selected native profile only;
+  legacy validators and digest bytes unchanged): provider reasoning
+  `added`/`done` events must carry the actual provider IDs (the
+  captured upstream issues them; only the SDK's request-side replay
+  drops the ID), so an id-less reasoning `done` is rejected whenever
+  encrypted-replay is on, while id-less reasoning INPUT eligibility
+  remains a separate, still-granted fact; the v3 ciphertext alias is
+  captured and issued only for this selected profile, so legacy
+  profiles keep single-ID-reference behavior; the visible
+  absent/null/empty `encrypted_content` output lifecycle passes with
+  ZERO references (no opaque alias; empty string kept verbatim;
+  omitted summary accepted as `[]`, explicit `null` denied); the
+  `response.reasoning_summary_part.done` closure event is accepted only
+  on this profile (legacy default denial); orphan `done` events without
+  a preceding `added` are rejected under the required output indexes
+  (legacy sparse paths preserved); the auto-title and compaction
+  summary requests are exactly 7 top-level fields (`include, input,
+  max_output_tokens, model, reasoning, store, stream`), `stream: true`
+  only, no `tools`/`tool_choice`, input a list (3 items observed for
+  auto-title, 2 for compaction); continuations after assistant text or
+  compaction are 4 typeless items `[developer, user, assistant, user]`
+  with the byte-exact summary in the assistant slot. Correction note:
+  the 228-b order prose described the auto-title request as
+  non-streaming; the captured receipt (`report-fix2`,
+  `gates.defaulttitle.aux_request_facts.stream=true`) outranks that
+  prose, and no non-streaming obligation is invented.
 - Retry boundary: the gateway strict zero-retry rule is gateway policy,
   not a native client guarantee. The pinned OpenCode session hardcodes
   `RETRY_MAX_RETRIES=5` with no override parameter above the SDK default
@@ -155,7 +219,7 @@ head).
 - Command:
   `PYTHONDONTWRITEBYTECODE=1 TMPDIR=/home/janezp/codex-work/slaif-228-tmp TMP=$TMPDIR TEMP=$TMPDIR .venv/bin/python -m pytest tests/unit/test_codex_replay_idless_reasoning.py tests/unit/test_responses_codex_streaming_idless_reasoning.py tests/unit/test_opencode_1193_responses_module.py tests/unit/test_responses_codex_multiturn_replay.py tests/unit/test_responses_codex_streaming_tools.py tests/unit/test_codex_replay_service.py -q -o addopts= -p no:cacheprovider`
 
-### Focused unit regression at the final code head
+### Focused unit regression at the 228-a final code head (history)
 
 - Head: final code head `55482cc16b4f40530498040c70e0151433b3a9c1`.
 - Result: `442 passed in 5.81s`.
@@ -171,7 +235,17 @@ head).
 - Command:
   `PYTHONDONTWRITEBYTECODE=1 TMPDIR=/home/janezp/codex-work/tmp-228 TMP=$TMPDIR TEMP=$TMPDIR .venv/bin/python -m pytest tests/unit/test_responses_codex_streaming_opencode_lifecycle.py tests/unit/test_responses_codex_streaming_idless_reasoning.py tests/unit/test_responses_codex_streaming_tools.py tests/unit/test_responses_codex_client_tools.py tests/unit/test_opencode_1193_responses.py tests/unit/test_opencode_1193_responses_module.py tests/unit/test_responses_replay_delivery.py -q -o addopts= -p no:cacheprovider`
 
-### Real isolated PostgreSQL integration at the final code head
+### Focused unit regression at the final 228-b code head
+
+- Head: final 228-b code head `c5d007fb272d0103d9f9a396547e237334987409`.
+- Result: `467 passed in 6.00s`.
+- Same 7-file set as the 442 run above, re-executed at the final b
+  head; supersedes the 442 count for that set. Overlap with the
+  338-test matrix (3 files) remains separate; no results are summed.
+- Command:
+  `PYTHONDONTWRITEBYTECODE=1 TMPDIR=/home/janezp/codex-work/tmp-228 TMP=$TMPDIR TEMP=$TMPDIR .venv/bin/python -m pytest tests/unit/test_responses_codex_streaming_opencode_lifecycle.py tests/unit/test_responses_codex_streaming_idless_reasoning.py tests/unit/test_responses_codex_streaming_tools.py tests/unit/test_responses_codex_client_tools.py tests/unit/test_opencode_1193_responses.py tests/unit/test_opencode_1193_responses_module.py tests/unit/test_responses_replay_delivery.py -q -o addopts= -p no:cacheprovider`
+
+### Real isolated PostgreSQL integration at the 228-a final code head (history)
 
 - Head: final code head `55482cc16b4f40530498040c70e0151433b3a9c1`.
 - Result: `18 passed in 3.27s` (11 pre-existing + 7 new); 4 warnings
@@ -197,6 +271,27 @@ head).
 - Command:
   `TEST_DATABASE_URL=postgresql+asyncpg://postgres@127.0.0.1:54401/slaif228_test PYTHONDONTWRITEBYTECODE=1 TMPDIR=/home/janezp/codex-work/tmp-228 TMP=$TMPDIR TEMP=$TMPDIR .venv/bin/python -m pytest tests/integration/test_opencode_1193_responses_postgres.py -q -o addopts= -p no:cacheprovider`
 
+### Real isolated PostgreSQL at the final 228-b code head
+
+- Head: final 228-b code head `c5d007fb272d0103d9f9a396547e237334987409`.
+- Result: `20 passed in 4.00s` (the 18 above + 2 new); no side effects
+  beyond the disposable database.
+- Scope change: the 2 new parameterized cases (`openai-native`:
+  provider `openai`, kind `openai`; `openai-compatible`: provider
+  `mock228b-compat`, kind `openai_compatible`) leave
+  `gateway.get_provider_adapter` UNPATCHED — the real factory selects
+  the real registered adapter and real httpx is intercepted by `respx`
+  at `127.0.0.1` loopback. The 18 prior tests keep their
+  `get_provider_adapter`-mocked scope.
+- Wire facts asserted: 2 POSTs per case, public-to-upstream model
+  substitution, `stream is True`, Bearer-only credential, and no HMAC
+  secret / token hash / provider value in the upstream body.
+- PG settlement asserted: 11 requests, 12,359 tokens, reserved 0/0,
+  `cost_used_eur == Decimal("7.250052")`, 3 replay references (incl.
+  the function-call binding), 2 finalized ledger + reservation rows.
+- Command:
+  `TEST_DATABASE_URL=postgresql+asyncpg://postgres@127.0.0.1:54401/slaif228_test PYTHONDONTWRITEBYTECODE=1 TMPDIR=/home/janezp/codex-work/tmp-228 TMP=$TMPDIR TEMP=$TMPDIR .venv/bin/python -m pytest tests/integration/test_opencode_1193_responses_postgres.py -q -o addopts= -p no:cacheprovider`
+
 ### Secondary fake-peer loopback capture (synthetic; labeled)
 
 - Two accepted cherry-picks, both fake-only capture checkpoints (NOT a
@@ -219,6 +314,16 @@ head).
 - Cleanup predicates: `run_root_cleaned=true`,
   `cleanup_verified=true`, `fake_process_terminated=true`,
   `session_distinct_across_probes=true`.
+- Extended fake-only checkpoints (same synthetic loopback boundary):
+  the fix2 eight-probe recapture (receipt
+  `/home/janezp/codex-work/slaif-228-task/report-fix2.json`,
+  `all_pass=true`, finished 2026-11-24T01:07:42Z) and the 228-b
+  nine-probe compaction superset run (9/9 gates, finished
+  2026-11-24T09:59:04Z). Per-probe facts, executed-artifact provenance
+  hashes, and the honest deviations are in the dossier
+  (`docs/agentic-clients/opencode-1.19.3-responses-v1.md`); the
+  compaction positive is a synthetic-trigger fake-only client
+  observation, not Gateway/provider compaction support.
 - Synthetic bearer + `127.0.0.1` loopback only; no raw content, IDs,
   or credentials retained.
 - The corrected wire proves the pinned SDK consumes a standards-shaped
@@ -226,10 +331,12 @@ head).
 
 ### Lint
 
-- `ruff check app tests` — clean at the final code head
-  `55482cc16b4f40530498040c70e0151433b3a9c1` (root-verified).
+- `ruff check app tests` — clean at the 228-a final code head
+  `55482cc16b4f40530498040c70e0151433b3a9c1` (root-verified) and re-run clean at the final 228-b code
+  head `c5d007fb272d0103d9f9a396547e237334987409`.
 - `git diff --check 5f0f4c34ff13f1d76ae050708a37f387e6988451..55482cc16b4f40530498040c70e0151433b3a9c1`
-  — clean.
+  and `git diff --check 5f0f4c34ff13f1d76ae050708a37f387e6988451..c5d007fb272d0103d9f9a396547e237334987409`
+  — both clean.
 
 ### Focused OAP governance (new activation)
 
@@ -241,13 +348,50 @@ head).
 - Disposition: the activated order, `oap/active`, and the test are
   unchanged (order rule: commit the activated order byte-unchanged; no
   test weakening). Same class as the immutable 227-a order-format
-  finding; root owns the canonical 228-b `AMEND_EXISTING_PR` on the
-  same PR (227-b precedent).
+  finding; the canonical 228-b `AMEND_EXISTING_PR` on the same PR
+  (227-b precedent) is this objective.
 - Command:
   `PYTHONDONTWRITEBYTECODE=1 TMPDIR=/home/janezp/codex-work/slaif-228-tmp TMP=$TMPDIR TEMP=$TMPDIR .venv/bin/python -m pytest tests/unit/test_oap_governance.py -q -o addopts= -p no:cacheprovider`
 
+### Focused OAP governance (228-b canonical order)
+
+- Head: final 228-b code head `c5d007fb272d0103d9f9a396547e237334987409`.
+- Result: `10 passed`. The canonical 228-b `AMEND_EXISTING_PR` order
+  passes the focused governance suite in full; the a-era 1 failed / 9
+  passed above is preserved as immutable history (no test changes in
+  either round).
+- Command:
+  `PYTHONDONTWRITEBYTECODE=1 TMPDIR=/home/janezp/codex-work/tmp-228 TMP=$TMPDIR TEMP=$TMPDIR .venv/bin/python -m pytest tests/unit/test_oap_governance.py -q -o addopts= -p no:cacheprovider`
+
+### Task-owned native setup (staged; run not_run)
+
+- Services: task-owned PostgreSQL 16 on `127.0.0.1:54401` (database
+  `slaif228_test`, trust, loopback only); task-owned Gateway at
+  `http://127.0.0.1:18310/v1` running code
+  `d896ad91f5de1c34bdfb753fedcc51086717fa0b` (the final b code head is
+  test-only, so the app code is byte-identical); separate loopback
+  mock upstream at `127.0.0.1:18031` reusing the existing
+  `scripts/verify_agent_chat/loopback_responses_fake.py` (no second
+  SSE producer).
+- Gateway env: `REQUEST_CAPTURE_ENABLED=false`, Redis rate limits off;
+  route `slaif-228b-mock`, model `opencode228b` to upstream
+  `opencode228b-upstream`, streaming, all four codex capabilities on,
+  `provider_max_retries=0`, EUR 1/M input and output pricing,
+  `codex_limits` 1,050,000 / 32,768 / 128,000.
+- Task key: `/v1/responses`-only. Preflight verified wrong key 401,
+  models 403 `endpoint_not_allowed`, minimal body 400
+  `opencode_1193_fields`, wrong model 403, and PG counters
+  0 admitted / 0 reserved / 0 used (no admission).
+- Pinned-binary launcher pre-positioned (task-local nonsecret setup
+  record, not committed); the actual run awaits root dispatch:
+  `not_run`.
+
 ### Not run
 
+- Order item 6: pinned ACTUAL OpenCode 1.19.3 binary through the
+  task-owned Gateway + real PostgreSQL + separate loopback mock upstream
+  (no `get_provider_adapter` monkeypatch): setup staged and verified,
+  run `not_run` (awaits root dispatch).
 - Real provider inference: `not_run`.
 - Protected live-qualification gate: `not_run`.
 
@@ -273,16 +417,36 @@ head).
    (altered/foreign/stale cipher, wrong route/provider/model, present
    invalid id, same-key immediate continuation) covered in the unit
    and PG runs.
-5. PostgreSQL settlement/replay coverage: 18 tests at the final code
-   head, labeled as a native-Gateway + PostgreSQL + mock-upstream
+5. PostgreSQL settlement/replay coverage: 18 tests at the 228-a final
+   code head, and 20 at the final 228-b code head (the 2 new cases
+   leave `get_provider_adapter` unpatched: real factory, real
+   registered adapter for both `openai` and `openai_compatible` kinds,
+   respx loopback interception, wire-level and settlement assertions);
+   all labeled as a native-Gateway + PostgreSQL + mock-upstream
    consumer run at `handle_response_create` (real route gate, strict
-   SSE validator, PG settlement and replay references; upstream mocked
-   at `get_provider_adapter`).
+   SSE validator, PG settlement and replay references).
 6. Retry boundary as stated above; the strict zero-retry and
    six-settled-request admission guarantee remains `UNSATISFIED`
    (source-verified; see Known failures and pending gates); the only
    recorded stock-retry exception remains the human-authorized bounded
    227-c LAN Chat qualification, applied to that execution only.
+7. 228-b governance: the canonical 228-b `AMEND_EXISTING_PR` order
+   passes the focused OAP governance suite 10/10 at the final b code
+   head; the a-era 1/10 (order literal `NEW_PR` vs validator
+   `CREATE_NEW_PR`) is preserved as immutable history, with order,
+   `oap/active`, and test unchanged in both rounds.
+8. 228-b streaming/output semantics as listed under Scope and identity:
+   provider reasoning IDs required on added/done (id-less done
+   rejected, id-less input eligibility separate); selected-profile-only
+   v3 alias issuance, `part.done` closure, and orphan-done rejection;
+   visible absent/null/empty output lifecycle with zero references;
+   7-field stream-`true` aux/compaction summary requests; 4-typeless
+   continuations.
+9. Correction: the 228-b order prose called the auto-title request
+   non-streaming; the captured receipt (`report-fix2`,
+   `aux_request_facts.stream=true`) outranks that prose; no
+   non-streaming obligation was invented and the selected profile
+   remains fail-closed on `stream: false`.
 
 ## 227 reuse (labeled, not relabeled)
 
@@ -317,11 +481,16 @@ declaration only, for a later root/human decision.
 
 ## Known failures and pending gates
 
-1. Focused OAP governance: 1 failed / 9 passed (activated-order
-   literal `NEW_PR` vs validator `CREATE_NEW_PR`); order, tests, and
-   `oap/active` unchanged; root owns the canonical 228-b
-   `AMEND_EXISTING_PR` on the same PR (227-b precedent).
-2. Strict zero-retry plus six-settled-request admission guarantee:
+1. Focused OAP governance — RESOLVED at 228-b: 10/10 at the final b
+   code head. The a-era 1 failed / 9 passed (activated-order literal
+   `NEW_PR` vs validator `CREATE_NEW_PR`) is preserved as immutable
+   history; order, tests, and `oap/active` were unchanged in both
+   rounds.
+2. Order item 6 (228-b): pinned ACTUAL OpenCode 1.19.3 binary through
+   the task-owned Gateway + real PostgreSQL + separate loopback mock
+   upstream (no `get_provider_adapter` monkeypatch): setup staged and
+   verified, run `not_run` awaiting root dispatch.
+3. Strict zero-retry plus six-settled-request admission guarantee:
    `UNSATISFIED`. Source proof: pinned OpenCode session
    `packages/opencode/src/session/llm.ts` line 323
    `maxRetries = input.retries ?? 0`, `processor.ts` line 674
@@ -331,8 +500,8 @@ declaration only, for a later root/human decision.
    (`requests_used_total == 0`) shows `request_limit_total = 6` does
    not cap total admissions across failures. Human risk decision
    pending; never claimed passed.
-3. Protected live-qualification gate: `not_run`.
-4. Final PR-head CI: pending (GitHub, after push).
-5. Obligation mapping: this record and its manifest are an evidence
+4. Protected live-qualification gate: `not_run`.
+5. Final PR-head CI: pending (GitHub, after push).
+6. Obligation mapping: this record and its manifest are an evidence
    index, not a verified per-obligation node-ID mapping; the proposed
    live plan is declared, not executed.

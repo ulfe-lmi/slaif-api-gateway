@@ -4,8 +4,10 @@ Objective 228-a, secondary-owned OpenCode Responses binding. This dossier
 records the native-client loopback capture from that preprotected candidate
 stage. That loopback evidence is NOT a live qualification, Gateway/
 PostgreSQL settlement, or production claim. The protected gate is `not_run`,
-the packaged profile DATA is pending primary packaging, and no
-`PREPROTECTED_READY` claim is made while either gap remains.
+the packaged profile DATA was subsequently packaged by primary
+(section 2); the protected gate remains `not_run`, and the current
+objective status is recorded in the consolidated verification record
+(228-b: `NEEDS_CONTINUATION`).
 
 ## 1. Pinned client identity
 
@@ -23,11 +25,17 @@ the packaged profile DATA is pending primary packaging, and no
 
 ## 2. Packaged profile DATA
 
-- **Status: pending primary packaging.** No `schema_version 1` profile JSON
-  and no client module exist yet for `opencode-1.19.3-responses-v1`; this
-  dossier, the sanitized fixtures, and the verifier feed primary packaging.
-- Wire facts proven by this capture (for the future DATA, not claims about
-  packaged behavior): 9 top-level request fields
+- **Status: packaged.** A `schema_version 1` profile JSON exists at
+  `app/slaif_gateway/modules/clients/profiles/opencode-1.19.3-responses.json`
+  (fixture digest — canonical JSON digest —
+  `592c5d1baa7aa3a805320411f3f961521ba72b30cc34cafe01cb755ddf69f0ff`),
+  and the client module `opencode-1.19.3-responses-v1` (engine version
+  `1`) is implemented and selected via the authenticated key-metadata
+  pin; this dossier, the sanitized fixtures, and the verifier fed that
+  packaging.
+- Wire facts proven by this capture (recorded as the packaged frozen
+  dialect; this dossier remains the capture provenance, not the
+  module's behavior spec): 9 top-level request fields
   (`include, input, max_output_tokens, model, reasoning, store, stream,
   tool_choice, tools`); nested `reasoning: {effort: "xhigh"}` (not a
   top-level `reasoning_effort` string); `max_output_tokens` 32000 emitted
@@ -230,9 +238,10 @@ the packaged profile DATA is pending primary packaging, and no
   `/v1/responses/compact` (or other endpoint) participation, and the
   issued summary is a safe synthetic template (no content retained).
 - **Protected gate**: `not_run`. No live LAN or provider run occurred for
-  the Responses wire in 228-a (preprotected candidate stage only). No
-  `PREPROTECTED_READY` claim is made while the module DATA is unpackaged
-  and the protected gate remains `not_run`.
+  the Responses wire in 228-a (preprotected candidate stage only). The
+  consolidated verification record carries the current objective status
+  (228-b: `NEEDS_CONTINUATION` — the pinned-binary run is staged and
+  awaits root dispatch).
 
 ## 5. Known limits and follow-ups
 

@@ -1,11 +1,16 @@
 {
   "schema_version": 1,
-  "objective": "228-a",
+  "objective": "228-b",
+  "amended_from": "228-a",
   "branch": "oap/228-opencode-responses",
   "base_main": "5f0f4c34ff13f1d76ae050708a37f387e6988451",
-  "tested_implementation_head_sha": "55482cc16b4f40530498040c70e0151433b3a9c1",
-  "head_note": "dual-labeled heads: first tested implementation head 79e27c844e70a54cdf092d53b6aca8bd5bb5004b (338-test unit matrix + original 11-test PG run); final code head 55482cc16b4f40530498040c70e0151433b3a9c1 (442-test focused regression + 18-test PG run, ruff clean); later code commits are re-covered by those runs; final publication head is the documentation-refresh commit that parents the report",
+  "tested_implementation_head_sha": "c5d007fb272d0103d9f9a396547e237334987409",
+  "head_note": "triple-labeled heads: first tested implementation head 79e27c844e70a54cdf092d53b6aca8bd5bb5004b (338-test unit matrix + original 11-test PG run); 228-a final code head 55482cc16b4f40530498040c70e0151433b3a9c1 (442-test focused regression + 18-test PG run, ruff clean); final 228-b code head c5d007fb272d0103d9f9a396547e237334987409 (467-test focused regression + 20-test PG run + 10-pass governance, ruff clean); later code commits are re-covered by those runs; final publication head is the documentation-refresh commit that parents the report",
   "tree_ids": {
+    "HEAD:app": "a857667b3ca7752170256b4dab7c39f4ae1b1213",
+    "HEAD:app/slaif_gateway": "4f26abb76184df2a74a97fa37290f66f36708083"
+  },
+  "tree_ids_228a_final_code_head": {
     "HEAD:app": "30610d166c7de6a55510774a76af51125f54e044",
     "HEAD:app/slaif_gateway": "1c254ceb09b9ebf155102fc15e8d25c1f985b566"
   },
@@ -14,7 +19,16 @@
     "488c5776eeac3dfec1ecd8469e9b20af3ec803db",
     "a146d1d5e78d71c151695cc87b72afa1595ff4a4",
     "ae38ec9e1e7bdec706064ba761c5c8bb8bd0f5c4",
-    "55482cc16b4f40530498040c70e0151433b3a9c1"
+    "55482cc16b4f40530498040c70e0151433b3a9c1",
+    "2b6e7e48ca2fde938e3d0f167fb506fe6201c6af",
+    "cb936fbd2e22da532532c844d0596c70b3d59e1f",
+    "fb6a521019da5ec74cab8990b77651802aa0bf0d",
+    "ce476f3b6ea30ae24d95fd10628929ad065ab7ae",
+    "49d55a9dc81bfffbf370c63f6fd0ba03b8f3c2f6",
+    "ea561ac96bfb57a59acf01ea3df0ec3129b844f1",
+    "e6687613af90fc4edc34253e2b6a264c916032d7",
+    "d896ad91f5de1c34bdfb753fedcc51086717fa0b",
+    "c5d007fb272d0103d9f9a396547e237334987409"
   ],
   "documentation_commits": [
     "bbaa8c4414e491f84a3fa1da894e1b012b1bfd36",
@@ -34,11 +48,21 @@
       "local": "19b1569de3efbd5a1e8fff7dac0c44ebc97737d3",
       "secondary_branch": "569f2f11afdaa7aacd8556c29ee7e3b28505feea",
       "label": "fake-only capture checkpoint; corrected wire and required encrypted-replay/call-linkage gate"
+    },
+    "fix2_recapture": {
+      "local": "552231f6699427425f2bcdca4d1783554efc2a11",
+      "secondary_branch": "f3af15335907fc5fe8c2f02705e7df4ad91d424a",
+      "label": "fake-only capture checkpoint; fix2 recapture (no top-level response_id; assistant-text continuation; default auto-title aux-first shape; visible-reasoning states observation-only)"
+    },
+    "compaction": {
+      "local": "ca76576019f2021f94890d85be3885d86c544f89",
+      "secondary_branch": "5a2b7e81b2759f60630e06856a4ee744a0b95a11",
+      "label": "fake-only capture checkpoint; native client-side compaction (synthetic trigger)"
     }
   },
   "record": "docs/verification/2026-11-23-opencode-responses-preprotected.md",
-  "status": "PREPROTECTED_READY",
-  "status_note": "preprotected candidate; protected live-qualification gate not_run; known failure: focused OAP governance 1 failed / 9 passed (activated-order format literal; order, oap/active, and test unchanged; root owns canonical 228-b on the same PR); strict zero-retry + six-settled-request admission guarantee UNSATISFIED (human risk decision pending); final PR-head CI pending; no production certification",
+  "status": "NEEDS_CONTINUATION",
+  "status_note": "228-b completion order; honest incomplete: order item 6 (pinned actual OpenCode binary through task-owned Gateway + real PostgreSQL + separate loopback mock upstream, no get_provider_adapter monkeypatch) staged and awaits root dispatch (not_run); protected live-qualification gate not_run; final PR-head CI pending; a-era governance 1/10 resolved at b (10/10) and preserved as immutable history; strict zero-retry + six-settled-request admission guarantee UNSATISFIED (human risk decision pending); no production certification",
   "evidence": [
     {
       "type": "unit",
@@ -57,7 +81,7 @@
     },
     {
       "type": "unit",
-      "label": "focused unit regression at final code head; separate set from the 338 matrix (3 files shared); never summed",
+      "label": "focused unit regression at the 228-a final code head (history); separate set from the 338 matrix (3 files shared); never summed",
       "head": "55482cc16b4f40530498040c70e0151433b3a9c1",
       "result": "442 passed in 5.81s",
       "files": [
@@ -73,7 +97,7 @@
     },
     {
       "type": "real_isolated_postgresql",
-      "label": "native-Gateway + PostgreSQL + mock-upstream consumer run at handle_response_create (real route-capability gate enforce_responses_route_capabilities, real strict SSE validator, real PG settlement + replay refs; upstream mocked at get_provider_adapter); HTTP ingress/auth by existing e2e (not re-run)",
+      "label": "native-Gateway + PostgreSQL + mock-upstream consumer run at handle_response_create at the 228-a final code head (history) (real route-capability gate enforce_responses_route_capabilities, real strict SSE validator, real PG settlement + replay refs; upstream mocked at get_provider_adapter); HTTP ingress/auth by existing e2e (not re-run)",
       "head": "55482cc16b4f40530498040c70e0151433b3a9c1",
       "result": "18 passed in 3.27s (11 pre-existing + 7 new); 4 warnings: 2 benign SQLAlchemy distinct() notices + 2 benign pytest-asyncio deprecation notices",
       "files": ["tests/integration/test_opencode_1193_responses_postgres.py"],
@@ -89,6 +113,56 @@
       "command": "TEST_DATABASE_URL=postgresql+asyncpg://postgres@127.0.0.1:54401/slaif228_test PYTHONDONTWRITEBYTECODE=1 TMPDIR=/home/janezp/codex-work/tmp-228 TMP=$TMPDIR TEMP=$TMPDIR .venv/bin/python -m pytest tests/integration/test_opencode_1193_responses_postgres.py -q -o addopts= -p no:cacheprovider"
     },
     {
+      "type": "unit",
+      "label": "same 7-file focused set re-executed at the final 228-b code head; supersedes the 442 count for that set; overlap with the 338-test matrix (3 files) separate; never summed",
+      "head": "c5d007fb272d0103d9f9a396547e237334987409",
+      "result": "467 passed in 6.00s",
+      "files": [
+        "tests/unit/test_responses_codex_streaming_opencode_lifecycle.py",
+        "tests/unit/test_responses_codex_streaming_idless_reasoning.py",
+        "tests/unit/test_responses_codex_streaming_tools.py",
+        "tests/unit/test_responses_codex_client_tools.py",
+        "tests/unit/test_opencode_1193_responses.py",
+        "tests/unit/test_opencode_1193_responses_module.py",
+        "tests/unit/test_responses_replay_delivery.py"
+      ],
+      "command": "PYTHONDONTWRITEBYTECODE=1 TMPDIR=/home/janezp/codex-work/tmp-228 TMP=$TMPDIR TEMP=$TMPDIR .venv/bin/python -m pytest tests/unit/test_responses_codex_streaming_opencode_lifecycle.py tests/unit/test_responses_codex_streaming_idless_reasoning.py tests/unit/test_responses_codex_streaming_tools.py tests/unit/test_responses_codex_client_tools.py tests/unit/test_opencode_1193_responses.py tests/unit/test_opencode_1193_responses_module.py tests/unit/test_responses_replay_delivery.py -q -o addopts= -p no:cacheprovider"
+    },
+    {
+      "type": "real_isolated_postgresql",
+      "label": "native-Gateway + PostgreSQL + mock-upstream consumer run at handle_response_create at the final 228-b code head; the 2 new cases leave gateway.get_provider_adapter UNPATCHED (real factory selects the real registered adapter; respx loopback interception); the 18 prior cases keep the get_provider_adapter-mocked scope",
+      "head": "c5d007fb272d0103d9f9a396547e237334987409",
+      "result": "20 passed in 4.00s (the 18 above + 2 new); no side effects beyond the disposable database",
+      "files": ["tests/integration/test_opencode_1193_responses_postgres.py"],
+      "new_coverage": [
+        "openai-native: provider openai, kind openai, factory unpatched",
+        "openai-compatible: provider mock228b-compat, kind openai_compatible, factory unpatched",
+        "wire facts: 2 POSTs per case, public-to-upstream model substitution, stream is True, Bearer-only credential, no HMAC secret / token hash / provider value in the upstream body",
+        "PG settlement: 11 requests, 12359 tokens, reserved 0/0, cost_used_eur == Decimal('7.250052'), 3 replay references (incl. the function-call binding), 2 finalized ledger + reservation rows"
+      ],
+      "command": "TEST_DATABASE_URL=postgresql+asyncpg://postgres@127.0.0.1:54401/slaif228_test PYTHONDONTWRITEBYTECODE=1 TMPDIR=/home/janezp/codex-work/tmp-228 TMP=$TMPDIR TEMP=$TMPDIR .venv/bin/python -m pytest tests/integration/test_opencode_1193_responses_postgres.py -q -o addopts= -p no:cacheprovider"
+    },
+    {
+      "type": "governance",
+      "label": "focused OAP governance on the canonical 228-b AMEND_EXISTING_PR order; the a-era 1 failed / 9 passed entry above is preserved as immutable history (no test changes in either round)",
+      "head": "c5d007fb272d0103d9f9a396547e237334987409",
+      "result": "10 passed",
+      "command": "PYTHONDONTWRITEBYTECODE=1 TMPDIR=/home/janezp/codex-work/tmp-228 TMP=$TMPDIR TEMP=$TMPDIR .venv/bin/python -m pytest tests/unit/test_oap_governance.py -q -o addopts= -p no:cacheprovider"
+    },
+    {
+      "type": "secondary_fake_peer_loopback_extended",
+      "label": "extended fake-only checkpoints (same synthetic loopback boundary); NOT a Gateway/provider pass",
+      "result": "fix2 eight-probe recapture all_pass=true (receipt /home/janezp/codex-work/slaif-228-task/report-fix2.json, finished 2026-11-24T01:07:42Z); 228-b nine-probe compaction superset run 9/9 gates (finished 2026-11-24T09:59:04Z); per-probe facts and executed-artifact provenance hashes in docs/agentic-clients/opencode-1.19.3-responses-v1.md; the compaction positive is a synthetic-trigger fake-only client observation, not Gateway/provider compaction support"
+    },
+    {
+      "type": "native_setup_staged",
+      "label": "task-owned native setup staged for order item 6; run not_run awaiting root dispatch",
+      "services": "task-owned PostgreSQL 16 127.0.0.1:54401 (slaif228_test, trust, loopback only); task-owned Gateway http://127.0.0.1:18310/v1 on code d896ad91f5de1c34bdfb753fedcc51086717fa0b (final b head c5d007fb is test-only, so app code byte-identical); separate loopback mock upstream 127.0.0.1:18031 reusing existing scripts/verify_agent_chat/loopback_responses_fake.py (no second SSE producer)",
+      "gateway_env": "REQUEST_CAPTURE_ENABLED=false, Redis rate limits off; route slaif-228b-mock, model opencode228b -> opencode228b-upstream, streaming, all four codex capabilities on, provider_max_retries=0, EUR 1/M input/output pricing, codex_limits 1050000/32768/128000",
+      "preflight": "wrong key 401; models 403 endpoint_not_allowed (responses-only key); minimal body 400 opencode_1193_fields; wrong model 403; PG counters 0 admitted / 0 reserved / 0 used (no admission)",
+      "record": "task-local nonsecret setup record (not committed): /home/janezp/codex-work/slaif-228-task/native/setup-228b-record.json"
+    },
+    {
       "type": "secondary_fake_peer_loopback",
       "label": "two accepted cherry-picks, fake-only capture checkpoints; NOT a Gateway/provider pass; synthetic bearer + 127.0.0.1 loopback only; no raw content/IDs/credentials retained",
       "result": "corrected receipt all_pass=true (secondary source SHA 569f2f11afdaa7aacd8556c29ee7e3b28505feea, finished 2026-11-23T12:04:07Z): text 5.978s/1 req; tool loop 5.53s/2 req, 1/1 correlated tool result, final 38B exact; reasoning 5.578s/2 req, 5-item continuation, encrypted_replay_verified=true, call_linkage_exact=true",
@@ -102,7 +176,7 @@
     },
     {
       "type": "lint",
-      "label": "ruff check app tests at final code head (root-verified); git diff --check base..final code head clean",
+      "label": "ruff check app tests clean at 228-a final code head 55482cc1 (root-verified) and re-run clean at final 228-b code head c5d007fb; git diff --check base..55482cc1 and base..c5d007fb both clean",
       "result": "clean"
     },
     {
@@ -111,7 +185,7 @@
       "result": "1 failed, 9 passed in 0.37s",
       "failed_test": "test_initial_round_declares_new_pr_and_one_objective_one_pr",
       "root_cause": "activated order line 3 'PR mode: NEW_PR' does not match the validator literal 'PR mode: CREATE_NEW_PR' required for -a initial rounds",
-      "disposition": "activated order, oap/active, and test unchanged (byte-unchanged order; no test weakening); root owns canonical 228-b AMEND_EXISTING_PR on the same PR (227-b precedent)",
+      "disposition": "activated order, oap/active, and test unchanged (byte-unchanged order; no test weakening); the canonical 228-b AMEND_EXISTING_PR on the same PR (227-b precedent) is this objective; a-era result preserved as immutable history and resolved 10/10 at the final b code head",
       "command": "PYTHONDONTWRITEBYTECODE=1 TMPDIR=/home/janezp/codex-work/slaif-228-tmp TMP=$TMPDIR TEMP=$TMPDIR .venv/bin/python -m pytest tests/unit/test_oap_governance.py -q -o addopts= -p no:cacheprovider"
     },
     { "type": "real_provider", "label": "real provider inference", "result": "not_run" },
@@ -130,10 +204,10 @@
     "forbidden": ["counter reset", "production credential mining", "production traffic"],
     "actual_prior_227_reused": "5 launches, 41021 tokens, EUR 0.041021 (linked in the 227-c record; failure history preserved)"
   },
-  "not_run": ["real_provider", "protected_gate"],
+  "not_run": ["native_pinned_binary_run (order item 6, awaits root dispatch)", "real_provider", "protected_gate"],
   "missing": [
-    "governance 1/10 (order literal NEW_PR vs validator CREATE_NEW_PR); root owns canonical 228-b AMEND_EXISTING_PR on the same PR",
-    "protected live-qualification gate not_run (this order authorizes no inference or remote setup)",
+    "order item 6: pinned ACTUAL OpenCode 1.19.3 binary through the task-owned Gateway + real PostgreSQL + separate loopback mock upstream (no get_provider_adapter monkeypatch); setup staged and verified, run not_run awaiting root dispatch",
+    "protected live-qualification gate not_run",
     "final PR-head CI pending (GitHub, after push)",
     "obligation mapping: record + manifest are an evidence index, not a verified per-obligation node-ID mapping",
     "live plan declared not executed; strict zero-retry + six-settled-request admission guarantee pending explicit human risk decision"
@@ -144,7 +218,11 @@
     "streaming-only: stream=false -> opencode_1193_field_shape",
     "id-less reasoning v3: ciphertext alias captured only from a validated id-bearing done after finalized usage (emitted event not rewritten); id-bearing reasoning inputs rejected in the native flat form (opencode_1193_input_item); legacy visible idless behavior unchanged; denial matrix covered in unit + PG runs",
     "PostgreSQL settlement/replay: 18 tests at final code head, consumer-run scope at handle_response_create (upstream mocked at get_provider_adapter)",
-    "retry boundary: gateway zero-retry is gateway policy only; pinned OpenCode session hardcodes RETRY_MAX_RETRIES=5 with no override; strict zero-retry + six-settled-request admission guarantee UNSATISFIED (human risk decision pending)"
+    "retry boundary: gateway zero-retry is gateway policy only; pinned OpenCode session hardcodes RETRY_MAX_RETRIES=5 with no override; strict zero-retry + six-settled-request admission guarantee UNSATISFIED (human risk decision pending)",
+    "228-b streaming/output semantics (selected native profile only; legacy validators and digest bytes unchanged): provider reasoning added/done must carry the actual provider IDs (id-less done rejected; id-less input eligibility separate); v3 ciphertext alias captured and issued only for the selected profile; visible absent/null/empty encrypted_content output lifecycle passes with zero references (no opaque alias; empty string kept verbatim; omitted summary accepted as [], explicit null denied); response.reasoning_summary_part.done closure accepted only on the selected profile (legacy default denial); orphan done without a preceding added rejected under required output indices (legacy sparse paths preserved); auto-title and compaction summary requests are exactly 7 top-level fields (include, input, max_output_tokens, model, reasoning, store, stream), stream true only, no tools/tool_choice, input a list (3 items observed for auto-title, 2 for compaction); continuations after assistant text or compaction are 4 typeless items [developer, user, assistant, user] with the byte-exact summary in the assistant slot",
+    "correction: the 228-b order prose described the auto-title request as non-streaming; the captured receipt (report-fix2, gates.defaulttitle.aux_request_facts.stream=true) outranks that prose; no non-streaming obligation invented; selected profile remains fail-closed on stream=false",
+    "228-b governance: canonical 228-b AMEND_EXISTING_PR order passes focused OAP governance 10/10 at the final b code head; a-era 1/10 preserved as immutable history; order, oap/active, and test unchanged in both rounds",
+    "factory-adapter settlement: 2 new PG cases run with gateway.get_provider_adapter unpatched (real factory selects the real registered adapter for openai and openai_compatible kinds; respx loopback interception; wire-level and settlement assertions)"
   ],
   "twenty_seven_reused": {
     "record": "docs/verification/2026-11-20-hermes-opencode-chat.md",
