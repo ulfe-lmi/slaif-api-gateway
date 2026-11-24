@@ -1,0 +1,195 @@
+{
+  "variant": "assistant_text_plus_tool_call_continuation",
+  "config_variant": "denied-web-baseline",
+  "endpoint": "POST /v1/responses",
+  "request_turn_1": {
+    "input_item_count": 2,
+    "input_items": [
+      {
+        "index": 0,
+        "type_key_state": "absent",
+        "role": "developer",
+        "content_form": "string",
+        "id_state": "absent",
+        "status_state": "absent",
+        "note": "agent instruction prompt; content not retained"
+      },
+      {
+        "index": 1,
+        "type_key_state": "absent",
+        "role": "user",
+        "content_form": "array",
+        "content_part_types": [
+          "input_text"
+        ],
+        "id_state": "absent",
+        "status_state": "absent",
+        "note": "typeless message items (no 'type' key) carry role + content on the Responses wire"
+      }
+    ],
+    "tools_count": 9,
+    "contract_facts": {
+      "max_output_tokens": {
+        "state": "present",
+        "type": "integer",
+        "observed": 32000,
+        "note": "configured limit.output 32768 emits 32000 (same runtime cap as the Chat capture)"
+      },
+      "store": {
+        "state": "present",
+        "type": "boolean",
+        "observed": false
+      },
+      "stream": {
+        "state": "present",
+        "type": "boolean",
+        "observed": true
+      },
+      "tool_choice": {
+        "state": "present",
+        "type": "string",
+        "observed": "auto"
+      },
+      "include": {
+        "state": "present",
+        "type": "array",
+        "observed": [
+          "reasoning.encrypted_content"
+        ]
+      },
+      "reasoning": {
+        "state": "present",
+        "type": "object",
+        "observed": {
+          "effort": "xhigh"
+        },
+        "note": "PROVEN DIFFERENCE: nested reasoning object with effort xhigh, not a top-level reasoning_effort string as in the Chat wire"
+      },
+      "model": {
+        "state": "present",
+        "type": "string",
+        "observed": "agent-responses-fake-model",
+        "note": "synthetic task-configured model id bound to the loopback fake provider"
+      }
+    }
+  },
+  "tool_call_issuance": {
+    "output_slot_assignment": {
+      "assistant_text_message": 0,
+      "function_call": 1
+    },
+    "function_call_item_fields": {
+      "type": "function_call",
+      "id": "issued by fake",
+      "call_id": "issued by fake",
+      "name": "string",
+      "arguments": "json_string"
+    },
+    "done_item_status": "completed",
+    "call_id_correlated_to_result": true,
+    "note": "turn one emits an assistant text message at output slot 0 plus a function_call at output slot 1; both consumed by the client without error"
+  },
+  "request_turn_2_continuation": {
+    "input_item_count": 5,
+    "input_item_types": [
+      null,
+      null,
+      null,
+      "function_call",
+      "function_call_output"
+    ],
+    "appended_items": [
+      {
+        "index": 2,
+        "type_key_state": "absent",
+        "role": "assistant",
+        "content_form": "array",
+        "content_part_types": [
+          "output_text"
+        ],
+        "id_state": "absent",
+        "status_state": "absent",
+        "note": "turn-1 assistant text message KEPT by the SDK in the continuation input as a typeless assistant message (content part output_text); no raw text retained"
+      },
+      {
+        "index": 3,
+        "type": "function_call",
+        "keys_sorted": [
+          "arguments",
+          "call_id",
+          "name",
+          "type"
+        ],
+        "arguments_form": "json string",
+        "call_id_state": "present",
+        "id_state": "absent",
+        "status_state": "absent"
+      },
+      {
+        "index": 4,
+        "type": "function_call_output",
+        "keys_sorted": [
+          "call_id",
+          "output",
+          "type"
+        ],
+        "output_form": "string",
+        "call_id_state": "present",
+        "id_state": "absent",
+        "status_state": "absent"
+      }
+    ],
+    "issued_call_id_correlated": true
+  },
+  "assistant_message_observation": {
+    "assistant_message_count": 1,
+    "assistant_message_items": [
+      {
+        "type": null,
+        "keys_sorted": [
+          "content",
+          "role"
+        ],
+        "role": "assistant",
+        "content_form": "list",
+        "content_part_types": [
+          "output_text"
+        ]
+      }
+    ],
+    "lead_text_replayed_in_input": true,
+    "note": "the SDK kept the turn-1 assistant lead text in the continuation input; the verifier checks the exact lead-text replay predicate only (content not retained)"
+  },
+  "read_tool": {
+    "declared_name": "read",
+    "native_output_wrap": {
+      "content_is_raw_file_bytes": false,
+      "marker_present": true,
+      "marker_occurrences_in_output": 1,
+      "content_byte_length": 192,
+      "marker_byte_length": 38,
+      "content_equals_marker": false,
+      "note": "the native read tool wraps file content in an envelope (192 B observed for the 38 B marker); the wrapped output is not raw file bytes and is not byte-equal to the marker"
+    }
+  },
+  "verification_gate": {
+    "correlation": "issued call_id matched the single function_call_output (correlated_outputs=1, fc_outputs_total=1)",
+    "exact_result_roundtrip": "final client text equals the 38-byte unpredictable marker exactly (no whitespace normalization)",
+    "final_text_source": "correlated_tool_result",
+    "final_text_length": 38,
+    "marker_length": 38,
+    "result": "verified"
+  },
+  "session": {
+    "stable_across_two_requests": true,
+    "session_value_sha256_8": "01d4076c"
+  },
+  "client_behavior": {
+    "exit_code": 0,
+    "elapsed_s": 5.728
+  },
+  "privacy": {
+    "raw_content_retained": false,
+    "provider_call_performed": false
+  }
+}

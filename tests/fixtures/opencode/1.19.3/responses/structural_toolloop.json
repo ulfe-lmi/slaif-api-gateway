@@ -146,11 +146,11 @@
   },
   "session": {
     "stable_across_two_requests": true,
-    "session_value_sha256_8": "2ee98e47"
+    "session_value_sha256_8": "9c20a369"
   },
   "client_behavior": {
     "exit_code": 0,
-    "elapsed_s": 5.53
+    "elapsed_s": 5.578
   },
   "privacy": {
     "raw_content_retained": false,

@@ -19,10 +19,10 @@
       "probe": "toolloop",
       "requests": {
         "A1": {
-          "session_value_sha256_8": "2ee98e47"
+          "session_value_sha256_8": "9c20a369"
         },
         "A2": {
-          "session_value_sha256_8": "2ee98e47"
+          "session_value_sha256_8": "9c20a369"
         }
       },
       "note": "two same-session requests of the toolloop probe"
@@ -31,7 +31,7 @@
       "probe": "reasoning",
       "requests": {
         "B1": {
-          "session_value_sha256_8": "760705ef"
+          "session_value_sha256_8": "080846e0"
         }
       },
       "note": "first request of the reasoning-replay probe (fresh session)"
@@ -40,7 +40,7 @@
       "probe": "text",
       "requests": {
         "C1": {
-          "session_value_sha256_8": "74551a8e"
+          "session_value_sha256_8": "b728f8db"
         }
       },
       "note": "single request of the text probe (fresh session)"

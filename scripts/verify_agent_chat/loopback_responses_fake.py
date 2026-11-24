@@ -11,6 +11,13 @@ Serves:
                         reasoning_summary_text.delta,
                         reasoning_summary_part.done, response.completed)
 
+Events are standard-shaped: ``type`` + ``sequence_number`` + per-event
+fields only, with no artificial top-level ``response_id``; the response id
+appears only inside the ``response`` objects of ``response.created`` /
+``response.completed``. If the pinned client consumes these events without
+error, the client consumes standards-shaped SSE (the Gateway validator is
+not relaxed by this change; the proof is client-side consumption).
+
 Privacy: the raw request journal is written only into the 0700 run directory
 at 0600 and is ephemeral; verifiers must commit only sanitized structural
 facts. Synthetic credentials only; the fake never contacts any provider.
@@ -31,6 +38,25 @@ continuation records per-item replay facts with FULL-BYTE equality against
 the issued encrypted_content and exact call_id/tool_name call/output
 linkage. The verifier gates the final sentinel on those facts; presence,
 a short hash, or SDK tolerance alone is not correct producer proof.
+
+Assistant-tool mode: turn one emits an assistant text message at output slot
+0 plus a function_call at output slot 1; the continuation gates on the
+correlated native tool result (same marker rule as toolloop) and records
+what the SDK kept or dropped of the turn-1 assistant message (item shapes
+plus an exact lead-text replay predicate; no raw text retained).
+
+Visible-reasoning mode: turn one emits a reasoning item carrying a visible
+summary plus a per-scenario ``encrypted_content`` state (absent / null /
+empty string) and a function_call; the continuation records the replayed
+``encrypted_content`` state, call/output linkage, and the final tool/text
+outcome. These variants are observation probes only: they are NOT
+encrypted-ownership passes and grant no opaque authority; the full-cipher
+gate remains required for the encrypted ``reasoning_continuation`` case.
+
+Auxiliary requests (no tools, no function_call_output) additionally record
+sanitized structural facts (top-level fields, model, stream/store, field
+presence, input form) into state so default-title behavior can be reported.
+
 """
 
 from __future__ import annotations
@@ -98,7 +124,9 @@ def sse(payload):
 
 
 def _ev(resp_id, seq, etype, **fields):
-    return {"type": etype, "sequence_number": seq, "response_id": resp_id, **fields}
+    # Standard shape: type + sequence_number + per-event fields only; the
+    # response id lives inside the created/completed `response` objects.
+    return {"type": etype, "sequence_number": seq, **fields}
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -291,9 +319,23 @@ class Handler(BaseHTTPRequestHandler):
         has_fc_output = any(i.get("type") == "function_call_output"
                             for i in items)
         if not (has_tools or has_fc_output):
+            input_form = (type(raw_input).__name__
+                          if raw_input is not None else "absent")
             with LOCK:
                 st = load(STATE, {})
                 st["aux_requests"] = st.get("aux_requests", 0) + 1
+                st.setdefault("aux_request_facts", []).append({
+                    "top_level_fields": sorted(
+                        k for k in req.keys() if isinstance(k, str)),
+                    "model": model,
+                    "stream": stream,
+                    "store": req.get("store"),
+                    "max_output_tokens_present": "max_output_tokens" in req,
+                    "tool_choice_present": "tool_choice" in req,
+                    "include_present": "include" in req,
+                    "reasoning_present": "reasoning" in req,
+                    "input_form": input_form,
+                })
                 save(STATE, st)
             self._emit_text(model, stream,
                             scenario.get("aux_final_text", "ok"), [4, 2])
@@ -308,6 +350,10 @@ class Handler(BaseHTTPRequestHandler):
             self._toolloop(req, model, stream, n, scenario, st, items)
         elif mode == "reasoning_continuation":
             self._reasoning(req, model, stream, n, scenario, st, items)
+        elif mode == "assistant_tool":
+            self._assistant_tool(req, model, stream, n, scenario, st, items)
+        elif mode == "reasoning_visible":
+            self._reasoning_visible(req, model, stream, n, scenario, st, items)
         else:
             self._emit_text(model, stream,
                             scenario.get("final_text", "AGENT_RESP_TEXT_OK"),
@@ -490,6 +536,302 @@ class Handler(BaseHTTPRequestHandler):
         self._emit_text(model, stream,
                         scenario.get("final_text", "AGENT_RESP_REASONING_OK"),
                         scenario.get("usage") or [12, 8])
+
+    def _reasoning_events_visible(self, resp_id, seq0, cipher_state):
+        rs_id = "rs_fake_" + uuid.uuid4().hex[:20]
+        summary_text = "synthetic reasoning summary"
+        added_item = {"type": "reasoning", "id": rs_id}
+        if cipher_state == "null":
+            added_item["encrypted_content"] = None
+        elif cipher_state == "empty_string":
+            added_item["encrypted_content"] = ""
+        done_item = {**added_item,
+                     "summary": [{"type": "summary_text",
+                                  "text": summary_text}]}
+        out = [
+            _ev(resp_id, seq0, "response.output_item.added", output_index=0,
+                item=added_item),
+            _ev(resp_id, seq0 + 1, "response.reasoning_summary_part.added",
+                item_id=rs_id, output_index=0, summary_index=0,
+                part={"type": "summary_text", "text": ""}),
+            _ev(resp_id, seq0 + 2, "response.reasoning_summary_text.delta",
+                item_id=rs_id, output_index=0, summary_index=0,
+                delta=summary_text),
+            _ev(resp_id, seq0 + 3, "response.reasoning_summary_part.done",
+                item_id=rs_id, output_index=0, summary_index=0,
+                part={"type": "summary_text", "text": summary_text}),
+            _ev(resp_id, seq0 + 4, "response.output_item.done", output_index=0,
+                item=done_item),
+        ]
+        return out, seq0 + 5, [done_item]
+
+    def _assistant_tool(self, req, model, stream, n, scenario, st, items):
+        with LOCK:
+            st = load(STATE, {})
+        if n == 1:
+            tool_name = scenario.get("tool_name", "read")
+            arg_key = scenario.get("arg_key", "filePath")
+            tool_file = scenario.get("tool_file", "probe.txt")
+            lead_text = scenario.get("lead_text", "AGENT_RESP_ASSISTANT_LEAD")
+            call_id = "call_fake_" + uuid.uuid4().hex[:20]
+            st["issued"] = {"call_id": call_id, "path": tool_file,
+                            "tool_name": tool_name, "arg_key": arg_key,
+                            "lead_text": lead_text}
+            with LOCK:
+                save(STATE, st)
+            resp_id = "resp_fake_" + uuid.uuid4().hex[:24]
+            if stream:
+                m_events, nxt, m_items = self._message_events(
+                    resp_id, 1, lead_text)
+                f_events, nxt2, f_items = self._function_call_events(
+                    resp_id, nxt, call_id, tool_name, {arg_key: tool_file},
+                    output_index=1)
+                events = [self._created(resp_id, model), *m_events,
+                          *f_events,
+                          self._completed(resp_id, nxt2, model,
+                                          scenario.get("tool_usage") or [30, 6],
+                                          m_items + f_items)]
+                self._stream(events)
+            else:
+                _m, _n, m_items = self._message_events(resp_id, 1, lead_text)
+                _f, _n2, f_items = self._function_call_events(
+                    resp_id, 4, call_id, tool_name, {arg_key: tool_file},
+                    output_index=1)
+                self._nonstream(model, scenario.get("tool_usage") or [30, 6],
+                                m_items + f_items)
+            return
+        # Continuation: gate on the correlated native tool result and record
+        # what the SDK kept or dropped of the turn-1 assistant message
+        # (item shapes plus an exact lead-text replay predicate only).
+        issued = st.get("issued", {})
+        call_id = issued.get("call_id")
+        try:
+            with open(MARKER_FILE, "rb") as f:
+                marker = f.read().decode("utf-8")
+        except Exception:
+            marker = None
+        facts = {"call_id_issued": call_id is not None,
+                 "fc_outputs_total": 0, "correlated_outputs": 0,
+                 "marker_present": False, "marker_occurrences": 0,
+                 "content_equals_marker": False,
+                 "content_byte_length": None, "marker_byte_length": None}
+        fc_outputs = [i for i in items
+                      if i.get("type") == "function_call_output"]
+        facts["fc_outputs_total"] = len(fc_outputs)
+        matched = None
+        for i in fc_outputs:
+            if i.get("call_id") == call_id:
+                matched = i
+                break
+        if matched is not None:
+            facts["correlated_outputs"] += 1
+        if marker is not None:
+            facts["marker_byte_length"] = len(marker.encode("utf-8"))
+        content = None
+        if matched is not None and marker is not None \
+                and isinstance(matched.get("output"), str):
+            content = matched["output"]
+            facts["content_byte_length"] = len(content.encode("utf-8"))
+            facts["marker_occurrences"] = content.count(marker)
+            facts["marker_present"] = facts["marker_occurrences"] >= 1
+            facts["content_equals_marker"] = content == marker
+        lead_text = issued.get("lead_text")
+        assistant_items = [i for i in items
+                           if i.get("role") == "assistant"
+                           and "content" in i]
+        replayed = False
+        for i in assistant_items:
+            c = i.get("content")
+            if isinstance(c, str):
+                replayed = replayed or (lead_text is not None
+                                        and c == lead_text)
+            elif isinstance(c, list):
+                replayed = replayed or any(
+                    isinstance(p, dict) and p.get("text") == lead_text
+                    for p in c)
+        at_facts = dict(facts)
+        at_facts.update({
+            "assistant_message_items": [_item_shape(i)
+                                        for i in assistant_items],
+            "assistant_message_count": len(assistant_items),
+            "lead_text_replayed_in_input": replayed,
+        })
+        st["assistant_tool_facts"] = at_facts
+        st["assistant_verified"] = (facts["correlated_outputs"] >= 1
+                                    and facts["marker_present"])
+        if st["assistant_verified"]:
+            _i = content.find(marker)
+            text = content[_i:_i + len(marker)]
+            st["final_text_source"] = "correlated_tool_result"
+        else:
+            text = "AGENT_RESP_ASSISTANT_UNVERIFIED"
+            st["final_text_source"] = "unverified_static"
+        with LOCK:
+            save(STATE, st)
+        self._emit_text(model, stream, text, [40, 10])
+
+    def _reasoning_visible(self, req, model, stream, n, scenario, st, items):
+        with LOCK:
+            st = load(STATE, {})
+        if n == 1:
+            tool_name = scenario.get("tool_name", "read")
+            arg_key = scenario.get("arg_key", "filePath")
+            tool_file = scenario.get("tool_file", "probe.txt")
+            cipher_state = scenario.get("cipher_state", "absent")
+            emit_state = {"empty": "empty_string"}.get(
+                cipher_state, cipher_state)
+            call_id = "call_fake_" + uuid.uuid4().hex[:20]
+            resp_id = "resp_fake_" + uuid.uuid4().hex[:24]
+            created = self._created(resp_id, model)
+            r_events, nxt, r_items = self._reasoning_events_visible(
+                resp_id, 1, emit_state)
+            f_events, nxt2, f_items = self._function_call_events(
+                resp_id, nxt, call_id, tool_name, {arg_key: tool_file},
+                output_index=1)
+            st["issued"] = {"call_id": call_id, "path": tool_file,
+                            "tool_name": tool_name,
+                            "cipher_state": cipher_state}
+            with LOCK:
+                save(STATE, st)
+            if stream:
+                events = [created, *r_events, *f_events,
+                          self._completed(resp_id, nxt2, model,
+                                          scenario.get("first_usage") or [30, 6],
+                                          r_items + f_items)]
+                self._stream(events)
+            else:
+                self._nonstream(model, scenario.get("first_usage") or [30, 6],
+                                r_items + f_items)
+            return
+        # Continuation: observation probe of the replayed encrypted_content
+        # state; NOT an encrypted-ownership pass (the full-cipher gate stays
+        # on the reasoning_continuation case).
+        issued = st.get("issued", {})
+        per_item = [_item_shape(i) for i in items]
+        reasoning_items = [f for f in per_item if f["type"] == "reasoning"]
+        replayed_state = (reasoning_items[0].get("encrypted_content_state")
+                          if reasoning_items else None)
+        expected = {"absent": "absent", "null": "null",
+                    "empty": "empty_string"}.get(issued.get("cipher_state"))
+        call_id = issued.get("call_id")
+        try:
+            with open(MARKER_FILE, "rb") as f:
+                marker = f.read().decode("utf-8")
+        except Exception:
+            marker = None
+        facts = {"fc_outputs_total": 0, "correlated_outputs": 0,
+                 "marker_present": False, "marker_occurrences": 0,
+                 "content_equals_marker": False,
+                 "content_byte_length": None, "marker_byte_length": None}
+        fc_outputs = [i for i in items
+                      if i.get("type") == "function_call_output"]
+        facts["fc_outputs_total"] = len(fc_outputs)
+        matched = None
+        for i in fc_outputs:
+            if i.get("call_id") == call_id:
+                matched = i
+                break
+        if matched is not None:
+            facts["correlated_outputs"] += 1
+        if marker is not None:
+            facts["marker_byte_length"] = len(marker.encode("utf-8"))
+        content = None
+        if matched is not None and marker is not None \
+                and isinstance(matched.get("output"), str):
+            content = matched["output"]
+            facts["content_byte_length"] = len(content.encode("utf-8"))
+            facts["marker_occurrences"] = content.count(marker)
+            facts["marker_present"] = facts["marker_occurrences"] >= 1
+            facts["content_equals_marker"] = content == marker
+        rv_facts = {
+            "cipher_state_issued": issued.get("cipher_state"),
+            "cipher_state_replayed": replayed_state,
+            "cipher_state_matches_issued":
+                expected is not None and replayed_state == expected,
+            "input_item_count": len(items),
+            "input_item_types": [f["type"] for f in per_item],
+            "reasoning_items": reasoning_items,
+            "function_call_items": [f for f in per_item
+                                    if f["type"] == "function_call"],
+            "function_call_output_items": [f for f in per_item
+                                           if f["type"] == "function_call_output"],
+            "message_items": [f for f in per_item
+                              if f.get("role") is not None
+                              and f["type"] in (None, "message")],
+            "issued_call_id_correlated": (
+                call_id is not None
+                and any(i.get("type") == "function_call"
+                        and i.get("call_id") == call_id
+                        and i.get("name") == issued.get("tool_name")
+                        for i in items)
+                and any(i.get("type") == "function_call_output"
+                        and i.get("call_id") == call_id
+                        for i in items)),
+            "marker_gate": facts,
+        }
+        st["reasoning_visible"] = rv_facts
+        st["reasoning_visible_verified"] = (facts["correlated_outputs"] >= 1
+                                            and facts["marker_present"])
+        if st["reasoning_visible_verified"]:
+            _i = content.find(marker)
+            text = content[_i:_i + len(marker)]
+            st["final_text_source"] = "correlated_tool_result"
+        else:
+            text = "AGENT_RESP_REASONING_VISIBLE_UNVERIFIED"
+            st["final_text_source"] = "unverified_static"
+        with LOCK:
+            save(STATE, st)
+        self._emit_text(model, stream, text, [40, 10])
+
+
+def _cipher_state(i):
+    if "encrypted_content" not in i:
+        return "absent"
+    v = i["encrypted_content"]
+    if v is None:
+        return "null"
+    if isinstance(v, str):
+        return "empty_string" if v == "" else "nonempty_string"
+    return "other_typed"
+
+
+def _item_shape(i, issued_enc=None):
+    f = {
+        "type": i.get("type"),
+        "keys_sorted": sorted(k for k in i.keys() if isinstance(k, str)),
+        "id_present": i.get("id") is not None,
+        "status_present": i.get("status") is not None,
+    }
+    t = i.get("type")
+    if t == "message" or (t is None and i.get("role") is not None
+                          and "content" in i):
+        f["role"] = i.get("role")
+        c = i.get("content")
+        f["content_form"] = type(c).__name__
+        if isinstance(c, list):
+            f["content_part_types"] = sorted(
+                {p.get("type") for p in c if isinstance(p, dict)})
+    elif t == "function_call":
+        f["call_id_present"] = i.get("call_id") is not None
+        f["name"] = i.get("name")
+        f["arguments_present"] = i.get("arguments") is not None
+        f["arguments_type"] = type(i.get("arguments")).__name__
+    elif t == "function_call_output":
+        f["call_id_present"] = i.get("call_id") is not None
+        f["output_present"] = i.get("output") is not None
+        f["output_type"] = type(i.get("output")).__name__
+    elif t == "reasoning":
+        state = _cipher_state(i)
+        f["encrypted_content_state"] = state
+        if state == "nonempty_string":
+            enc = i["encrypted_content"]
+            f["encrypted_sha256_8"] = hashlib.sha256(
+                enc.encode()).hexdigest()[:8]
+            f["encrypted_byte_length"] = len(enc)
+            f["full_byte_equals_issued"] = (
+                issued_enc is not None and enc == issued_enc)
+        f["summary_present"] = i.get("summary") is not None
+    return f
 
 
 def main():

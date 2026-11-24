@@ -97,7 +97,7 @@
       "status_state": "absent",
       "encrypted_content": "synthetic 64-char base64 string issued by the loopback fake",
       "encrypted_byte_length": 64,
-      "encrypted_sha256_8": "f2719d31"
+      "encrypted_sha256_8": "d1c28cd0"
     },
     "function_call_item_issued_fields": {
       "type": "function_call",
@@ -137,7 +137,7 @@
         "status_state": "absent",
         "encrypted_content_replayed": "verbatim",
         "encrypted_byte_length": 64,
-        "encrypted_sha256_8": "f2719d31",
+        "encrypted_sha256_8": "d1c28cd0",
         "full_byte_equals_issued": true,
         "note": "ID-less verbatim replay: full-byte equality of the replayed encrypted_content with the issued value is verified, and the exact issued call_id/tool_name call/output linkage holds (presence or a short hash alone never passes; SDK tolerance is not correct producer proof); the replayed item carries no id/status"
       },
@@ -173,11 +173,11 @@
   },
   "session": {
     "stable_across_two_requests": true,
-    "session_value_sha256_8": "760705ef"
+    "session_value_sha256_8": "080846e0"
   },
   "client_behavior": {
     "exit_code": 0,
-    "elapsed_s": 5.578,
+    "elapsed_s": 5.581,
     "final_text_exact": true
   },
   "privacy": {

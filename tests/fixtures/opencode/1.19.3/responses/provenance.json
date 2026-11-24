@@ -24,7 +24,7 @@
     "vocabulary_decision": "v1 ships the 9-tool denied-web-baseline reviewed capture vocabulary; webfetch (configuration-dependent, observed only under the permissive task variant in the Chat capture) is outside v1 and requires a reviewed DATA revision with a new digest"
   },
   "capture_environment": {
-    "captured_utc_date": "2026-11-23",
+    "captured_utc_date": "2026-11-24",
     "mode": "pinned executable against task-owned 127.0.0.1 loopback fake (Responses wire); isolated task-owned HOME/XDG dirs; task-owned config with synthetic bearer bound to a custom provider entry with explicit npm=@ai-sdk/openai; --pure; bounded 240s timeouts",
     "user_saved_profiles_touched": false,
     "user_credentials_read": false,
@@ -40,7 +40,16 @@
         "note": "same 9-tool baseline as the Chat capture; verifier report label 'denyweb'"
       }
     ],
-    "configuration_difference_note": "single config variant captured for the Responses wire; the custom provider entry must name npm=@ai-sdk/openai explicitly (the built-in 'openai' provider entry selects the OpenAI/Responses default path and would not bind this capture's model selector)."
+    "configuration_difference_note": "single config variant captured for the Responses wire; the custom provider entry must name npm=@ai-sdk/openai explicitly (the built-in 'openai' provider entry selects the OpenAI/Responses default path and would not bind this capture's model selector).",
+    "executed_artifacts": {
+      "verifier_sha256": "9b531cb02a3bef99d9ee32abb4442897058e43efaf7676680272deb23e79df14",
+      "fake_sha256": "3dc2120712a24780e3918a3e39be00c45c1c42981bfefcd643a6b75b524f2527",
+      "worktree_head_sha_at_run_time": "569f2f11afdaa7aacd8556c29ee7e3b28505feea",
+      "head_note": "HEAD at the moment the capture was executed, recorded as executed-script provenance; it is NOT the post-run commit that updates these fixtures",
+      "verifier_report_path": "/home/janezp/codex-work/slaif-228-task/report-fix2.json",
+      "report_result": "EXIT=0 all_pass=true, finished 2026-11-24T01:07:42Z, cleanup_verified, all privacy flags false, sessions distinct",
+      "probe_count": 8
+    }
   },
   "privacy": {
     "raw_content_retained": false,
@@ -50,5 +59,5 @@
     "home_workspace_paths_retained": false
   },
   "structural_fixture_digest_rule": "sha256 over, for each structural_*.json in tests/fixtures/opencode/1.19.3/responses sorted by filename: filename + NUL + file bytes (provenance.json excluded)",
-  "structural_fixture_sha256": "b8d6f6c3ca61806b68d980286144a870e71099c36a0713c07ca85b99e16639b6"
+  "structural_fixture_sha256": "1497c513c2fffa0fbee09b0a6d1ff32c8bfef990becfabf7b7f105bd976f72a2"
 }

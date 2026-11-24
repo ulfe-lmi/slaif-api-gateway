@@ -17,6 +17,27 @@ Probes (each in its own session):
             issued call_id/tool_name call/output linkage (presence or a
             short hash alone never passes; SDK tolerance is not correct
             producer proof)
+  assistant turn one emits an assistant text message at output slot 0 plus
+            a function_call at slot 1; the continuation is gated on the
+            correlated native tool result and records what the SDK kept or
+            dropped of the turn-1 assistant message (item shapes + exact
+            lead-text replay predicate only)
+  defaulttitle the text probe WITHOUT --title, so the default auto-title
+            request is observed and its sanitized shape recorded
+  reasoning_visible x3 (absent / null / empty encrypted_content)
+            observation probes: record the replayed cipher state, call
+            linkage, and final tool/text outcome. These are NOT
+            encrypted-ownership passes; the full-cipher gate of the
+            reasoning probe stays required
+
+SSE shape proof: emitted events carry only type + sequence_number +
+per-event fields (no artificial top-level response_id); if the pinned
+client consumes them without error, it consumes standards-shaped SSE
+(the Gateway validator is not relaxed by this change). The report carries
+the executed verifier/fake SHA-256 hashes and worktree HEAD at run time
+(executed_artifacts; a post-run commit is not the executed head), and a
+compaction_trace of any non-Responses POST forms the client attempted
+(empty list = none observed; no compaction-form pass follows).
 
 Gates and honesty rules mirror verify_opencode_chat_capture.py:
   - pinned binary SHA-256 preflight; overrides labelled override_unqualified
@@ -156,17 +177,21 @@ def client_env(run_root: Path, config_path: Path) -> dict:
 
 
 def run_client(exe: str, run_root: Path, config_path: Path, prompt: str,
-               title: str, timeout: int) -> tuple[int | None, str | None, float]:
+               title: str | None, timeout: int,
+               slug: str | None = None) -> tuple[int | None, str | None, float]:
     """Run one bounded client invocation in its own process group.
 
     Returns (return_code, error_label, elapsed_s). On timeout the owned child
     group is killed deterministically and the probe records 'client_timeout'.
     """
-    out = run_root / "logs" / f"{title.replace(' ', '_')}.out"
-    err = run_root / "logs" / f"{title.replace(' ', '_')}.err"
+    slug = slug or (title or "notitled").replace(" ", "_")
+    out = run_root / "logs" / f"{slug}.out"
+    err = run_root / "logs" / f"{slug}.err"
     cmd = [exe, "--pure", "run", "--dir", str(run_root / "workspace"),
-           "--format", "json", "--title", title,
-           "--model", f"{PROVIDER}/{MODEL}", prompt]
+           "--format", "json"]
+    if title is not None:
+        cmd += ["--title", title]
+    cmd += ["--model", f"{PROVIDER}/{MODEL}", prompt]
     start = time.monotonic()
     with open(out, "wb") as fo, open(err, "wb") as fe:
         proc = subprocess.Popen(cmd, env=client_env(run_root, config_path),
@@ -455,6 +480,9 @@ def verify_reasoning_replay(issued: dict, input_items: list) -> dict:
     issued_call_id = issued.get("call_id")
     issued_tool = issued.get("tool_name")
     issued_enc = issued.get("encrypted_content_issued")
+    call_id_valid = isinstance(issued_call_id, str) and bool(issued_call_id)
+    tool_valid = isinstance(issued_tool, str) and bool(issued_tool)
+    enc_valid = isinstance(issued_enc, str) and bool(issued_enc)
     reasoning_items = []
     full_equal = False
     for i in items:
@@ -463,20 +491,23 @@ def verify_reasoning_replay(issued: dict, input_items: list) -> dict:
         enc = i.get("encrypted_content")
         f = {
             "encrypted_content_present": enc is not None,
+            "encrypted_content_is_nonempty_string":
+                isinstance(enc, str) and bool(enc),
             "encrypted_sha256_8": (hashlib.sha256(str(enc).encode())
                                    .hexdigest()[:8]
                                    if enc is not None else None),
             "encrypted_byte_length": (len(str(enc))
                                       if enc is not None else None),
-            "full_equals_issued": (enc is not None
-                                   and issued_enc is not None
-                                   and str(enc) == str(issued_enc)),
+            "full_equals_issued": (isinstance(enc, str) and bool(enc)
+                                   and enc_valid
+                                   and enc == issued_enc),
         }
         if f["full_equals_issued"]:
             full_equal = True
         reasoning_items.append(f)
     call_linkage_exact = (
-        issued_call_id is not None
+        call_id_valid
+        and tool_valid
         and any(i.get("type") == "function_call"
                 and i.get("call_id") == issued_call_id
                 and i.get("name") == issued_tool for i in items)
@@ -486,10 +517,11 @@ def verify_reasoning_replay(issued: dict, input_items: list) -> dict:
         "reasoning_item_count": len(reasoning_items),
         "reasoning_items": reasoning_items,
         "encrypted_replay_verified": full_equal,
-        "issued_call_id_present": issued_call_id is not None,
-        "issued_encrypted_content_present": issued_enc is not None,
+        "issued_call_id_present": call_id_valid,
+        "issued_tool_name_present": tool_valid,
+        "issued_encrypted_content_present": enc_valid,
         "call_linkage_exact": call_linkage_exact,
-        "pass": full_equal and call_linkage_exact,
+        "pass": enc_valid and full_equal and call_linkage_exact,
     }
 
 
@@ -528,6 +560,51 @@ def _raw_input_items(run_root: Path) -> list:
                for i in items):
             result = items
     return result
+
+
+def journal_other_paths(run_root: Path) -> set:
+    """POST paths other than /v1/responses seen in the probe journal.
+
+    The fake journals BEFORE the path check, so 404'd attempts (e.g. a
+    compaction endpoint probe) are observed. Trace of request forms the
+    client attempted only; empty set = none observed (no pass follows).
+    """
+    journal = run_root / "run" / "requests.jsonl"
+    paths: set = set()
+    try:
+        lines = journal.read_text(errors="replace").splitlines()
+    except OSError:
+        return paths
+    for line in lines:
+        try:
+            e = json.loads(line)
+        except Exception:
+            continue
+        if isinstance(e, dict) and e.get("method") == "POST" \
+                and e.get("path") not in (None, "/v1/responses"):
+            paths.add(e["path"])
+    return paths
+
+
+def executed_artifacts(script_path: Path) -> dict:
+    """Verifier/fake SHA-256 and worktree HEAD at run time (not post-run).
+
+    A commit made after the run is not the executed head.
+    """
+    fake = script_path.with_name("loopback_responses_fake.py")
+    head = None
+    try:
+        head = subprocess.run(
+            ["git", "-C", str(script_path.parents[2]), "rev-parse", "HEAD"],
+            capture_output=True, text=True, timeout=10).stdout.strip() or None
+    except Exception:
+        head = None
+    return {
+        "verifier_sha256": sha256_file(str(script_path)),
+        "fake_sha256": sha256_file(str(fake)),
+        "worktree_head_sha": head,
+        "note": "artifacts and HEAD at run time, not any post-run commit",
+    }
 
 
 def sdk_provenance(run_root: Path, exe: str, observed_ua: str | None) -> dict:
@@ -599,11 +676,15 @@ def main() -> None:
                                  env=fake_env, stdout=fake_log,
                                  stderr=subprocess.STDOUT, start_new_session=True)
 
+    script_path = Path(__file__).resolve()
+    executed = executed_artifacts(script_path)
+
     gates: dict = {}
     global_errors: list[str] = []
     fake_ready = False
     fake_ready_s = None
     session_hashes: list[str | None] = []
+    other_paths_seen: set = set()
     try:
         fake_ready, fake_ready_s = wait_fake_ready(port)
         if not fake_ready:
@@ -634,6 +715,7 @@ def main() -> None:
             }
             if gates["text"]["session"]["session_value_sha256_8_first"]:
                 session_hashes.append(gates["text"]["session"]["session_value_sha256_8_first"])
+            other_paths_seen |= journal_other_paths(run_root)
             clear_probe_journal()
 
             # ---- toolloop probe (fresh session, two main requests) --------
@@ -677,6 +759,7 @@ def main() -> None:
                 }
                 if session["session_value_sha256_8_first"]:
                     session_hashes.append(session["session_value_sha256_8_first"])
+                other_paths_seen |= journal_other_paths(run_root)
                 clear_probe_journal()
 
             # ---- reasoning probe (fresh session, two main requests) -------
@@ -718,6 +801,146 @@ def main() -> None:
                 }
                 if session["session_value_sha256_8_first"]:
                     session_hashes.append(session["session_value_sha256_8_first"])
+                other_paths_seen |= journal_other_paths(run_root)
+                clear_probe_journal()
+            # ---- assistant_tool probe (fresh session, two main requests) -
+            marker = f"SLAIF228-MARK-{secrets.token_hex(12)}"
+            write_private(run_root / "workspace" / "probe.txt", marker.encode())
+            write_private(run_root / "run" / "expected_marker.bin",
+                          marker.encode())
+            (run_root / "run" / "scenario.json").write_text(json.dumps(
+                {"mode": "assistant_tool", "tool_file": "probe.txt"}))
+            (run_root / "run" / "scenario.json").chmod(0o600)
+            rc, err_label, elapsed = run_client(
+                exe, run_root, config_path,
+                "Read the file probe.txt in the workspace using the read tool, then reply with the exact marker text from that file.",
+                "228 assistant tool", args.timeout)
+            final = last_text_event(run_root / "logs" / "228_assistant_tool.out")
+            state = safe_load_json(run_root / "run" / "state.json")
+            if state is None or not isinstance(state, dict):
+                err_label = err_label or "state_missing_or_unparseable"
+                state = {}
+            at_facts = state.get("assistant_tool_facts", {})
+            if not isinstance(at_facts, dict):
+                at_facts = {}
+            structural = per_request_structural(run_root)
+            session = session_facts(structural)
+            gates["assistant_tool"] = {
+                "exit_code": rc, "error": err_label, "elapsed_s": elapsed,
+                "assistant_verified": state.get("assistant_verified") is True,
+                "final_text_source": state.get("final_text_source"),
+                "final_text_equals_marker": final == marker,
+                "final_text_length": len(final) if isinstance(final, str) else None,
+                "marker_length": len(marker),
+                "assistant_tool_facts": at_facts,
+                "session": session,
+                "structural": structural,
+                "contract_facts": contract_facts(structural),
+                "pass": (rc == 0 and state.get("assistant_verified") is True
+                         and state.get("final_text_source")
+                         == "correlated_tool_result"
+                         and final == marker),
+            }
+            if session["session_value_sha256_8_first"]:
+                session_hashes.append(session["session_value_sha256_8_first"])
+            other_paths_seen |= journal_other_paths(run_root)
+            clear_probe_journal()
+            # ---- defaulttitle probe (no --title; default auto-title) -----
+            (run_root / "run" / "scenario.json").write_text(json.dumps(
+                {"mode": "text", "final_text": TEXT_SENTINEL,
+                 "aux_final_text": "aux-ok"}))
+            (run_root / "run" / "scenario.json").chmod(0o600)
+            rc, err_label, elapsed = run_client(
+                exe, run_root, config_path,
+                f"Reply with exactly {TEXT_SENTINEL}. Do not use tools, inspect files, or run commands.",
+                None, args.timeout, slug="228_defaulttitle")
+            final = last_text_event(run_root / "logs" / "228_defaulttitle.out")
+            state = safe_load_json(run_root / "run" / "state.json")
+            if state is None or not isinstance(state, dict):
+                err_label = err_label or "state_missing_or_unparseable"
+                state = {}
+            aux_facts = state.get("aux_request_facts", [])
+            if not isinstance(aux_facts, list):
+                aux_facts = []
+            structural = per_request_structural(run_root)
+            session = session_facts(structural)
+            tools_counts = [r.get("tools_count")
+                            for r in structural.get("requests", [])]
+            main_idx = [j for j, c in enumerate(tools_counts) if c == 9]
+            gates["defaulttitle"] = {
+                "exit_code": rc, "error": err_label, "elapsed_s": elapsed,
+                "final_text_exact": final == TEXT_SENTINEL,
+                "title_flag_supplied": False,
+                "aux_requests": state.get("aux_requests"),
+                "aux_request_facts": aux_facts,
+                "request_order_tools_count": tools_counts,
+                "main_request_index": (main_idx[0] if len(main_idx) == 1
+                                       else main_idx),
+                "session": session,
+                "structural": structural,
+                "contract_facts": contract_facts(structural),
+                "pass": (rc == 0 and final == TEXT_SENTINEL
+                         and state.get("aux_requests") is not None
+                         and state.get("aux_requests") >= 1
+                         and bool(aux_facts)),
+            }
+            if session["session_value_sha256_8_first"]:
+                session_hashes.append(session["session_value_sha256_8_first"])
+            other_paths_seen |= journal_other_paths(run_root)
+            clear_probe_journal()
+            # ---- reasoning_visible probes x3 (observation only) ----------
+            for cs in ("absent", "null", "empty"):
+                marker = f"SLAIF228-MARK-{secrets.token_hex(12)}"
+                write_private(run_root / "workspace" / "probe.txt",
+                              marker.encode())
+                write_private(run_root / "run" / "expected_marker.bin",
+                              marker.encode())
+                (run_root / "run" / "scenario.json").write_text(json.dumps(
+                    {"mode": "reasoning_visible", "cipher_state": cs,
+                     "tool_file": "probe.txt"}))
+                (run_root / "run" / "scenario.json").chmod(0o600)
+                rc, err_label, elapsed = run_client(
+                    exe, run_root, config_path,
+                    "Read the file probe.txt in the workspace using the read tool, then reply with the exact marker text from that file.",
+                    f"228 visible {cs}", args.timeout,
+                    slug=f"228_reasoning_visible_{cs}")
+                final = last_text_event(
+                    run_root / "logs" / f"228_reasoning_visible_{cs}.out")
+                state = safe_load_json(run_root / "run" / "state.json")
+                if state is None or not isinstance(state, dict):
+                    err_label = err_label or "state_missing_or_unparseable"
+                    state = {}
+                rv_facts = state.get("reasoning_visible", {})
+                if not isinstance(rv_facts, dict):
+                    rv_facts = {}
+                structural = per_request_structural(run_root)
+                session = session_facts(structural)
+                gates[f"reasoning_visible_{cs}"] = {
+                    "exit_code": rc, "error": err_label, "elapsed_s": elapsed,
+                    "final_text_equals_marker": final == marker,
+                    "final_text_length": len(final)
+                        if isinstance(final, str) else None,
+                    "marker_length": len(marker),
+                    "cipher_state_issued": rv_facts.get("cipher_state_issued"),
+                    "reasoning_visible_verified":
+                        state.get("reasoning_visible_verified") is True,
+                    "reasoning_visible_facts": rv_facts,
+                    "observation_only": True,
+                    "not_encrypted_ownership": True,
+                    "session": session,
+                    "structural": structural,
+                    "contract_facts": contract_facts(structural),
+                    "pass": (rc == 0
+                             and state.get("reasoning_visible_verified") is True
+                             and state.get("final_text_source")
+                             == "correlated_tool_result"
+                             and final == marker
+                             and bool(rv_facts)),
+                }
+                if session["session_value_sha256_8_first"]:
+                    session_hashes.append(
+                        session["session_value_sha256_8_first"])
+                other_paths_seen |= journal_other_paths(run_root)
                 clear_probe_journal()
     except Exception as exc:  # unexpected: report honestly, never crash silent
         global_errors.append(f"unexpected:{type(exc).__name__}")
@@ -744,6 +967,13 @@ def main() -> None:
         rz_stable = gates["reasoning"]["session"]["stable_across_requests"]
         if rz_stable is not True:
             global_errors.append("reasoning_session_not_stable_across_requests")
+    for name in ("assistant_tool", "reasoning_visible_absent",
+                 "reasoning_visible_null", "reasoning_visible_empty"):
+        if name in gates:
+            sv_stable = gates[name]["session"]["stable_across_requests"]
+            if sv_stable is not True:
+                global_errors.append(
+                    f"{name}_session_not_stable_across_requests")
     observed_ua = None
     for g in gates.values():
         reqs = g.get("structural", {}).get("requests", [])
@@ -782,7 +1012,16 @@ def main() -> None:
         "fake_ready": fake_ready,
         "fake_ready_wait_s": fake_ready_s,
         "fake_process_terminated": fake_terminated,
+        "executed_artifacts": executed,
         "gates": gates,
+        "compaction_trace": {
+            "post_paths_other_than_responses_seen":
+                sorted(other_paths_seen),
+            "responses_compact_endpoint_observed":
+                "/v1/responses/compact" in other_paths_seen,
+            "note": ("empty list means no other POST forms were attempted "
+                     "in this run; no compaction-form pass follows"),
+        },
         "session_distinct_across_probes": session_distinct_across_probes,
         "errors": global_errors,
         "privacy": {

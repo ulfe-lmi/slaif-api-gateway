@@ -57,8 +57,8 @@ the packaged profile DATA is pending primary packaging, and no
   No provider, no user profile, no real key, no network beyond loopback.
 - Structural capture facts (sanitized):
   `tests/fixtures/opencode/1.19.3/responses/` (structural digest
-  `b8d6f6c3ca61806b68d980286144a870e71099c36a0713c07ca85b99e16639b6`
-  over the four `structural_*.json` files); public provenance in
+  `1497c513c2fffa0fbee09b0a6d1ff32c8bfef990becfabf7b7f105bd976f72a2`
+  over the seven `structural_*.json` files); public provenance in
   `provenance.json`. Raw content, raw IDs, and credentials are not
   retained; session values appear only as sha256-8.
 - Verifier:
@@ -102,10 +102,60 @@ the packaged profile DATA is pending primary packaging, and no
   `3c61d6c3`; source SHA in the handoff notice). Cleanup predicates
   `artifacts.run_root_cleaned=true`, `artifacts.cleanup_verified=true`,
   `fake_process_terminated=true` are in the report.
+- Extended recapture (fix2, 2026-11-24, eight probes): sanitized receipt
+  `/home/janezp/codex-work/slaif-228-task/report-fix2.json` — `all_pass=true`,
+  `EXIT=0`, finished `2026-11-24T01:07:42Z`, cleanup verified, all privacy
+  flags false, sessions distinct. Executed-artifact provenance (recorded in
+  `provenance.json`): verifier sha256
+  `9b531cb02a3bef99d9ee32abb4442897058e43efaf7676680272deb23e79df14`,
+  loopback fake sha256
+  `3dc2120712a24780e3918a3e39be00c45c1c42981bfefcd643a6b75b524f2527`,
+  executed against worktree HEAD `569f2f11afdaa7aacd8556c29ee7e3b28505feea`
+  at run time (NOT the post-run commit that updates these fixtures).
+  Per probe (all exit 0, denied-web 9-tool / xhigh / 32000 baseline):
+  - text: 5.828 s, 1 request (session sha8 `b728f8db`), exact final text;
+  - toolloop: 5.578 s, 2 requests (session sha8 `9c20a369` stable),
+    correlated `read` tool result, final 38 B == marker 38 B exact;
+  - reasoning replay: 5.581 s, 2 requests (session sha8 `080846e0`
+    stable), full-byte cipher equality (sha8 `d1c28cd0`) + exact issued
+    call/output linkage, gate passed;
+  - assistant text + tool continuation (NEW): 5.728 s, 2 requests (session
+    sha8 `01d4076c`), turn-1 output slots assistant text 0 / function_call 1
+    (created status valid); the SDK KEPT the turn-1 assistant lead text in
+    the turn-2 continuation input as a typeless assistant message
+    (`{role: assistant, content: [{type: output_text, ...}]}`); final text
+    from the correlated tool result, exact marker equality;
+  - default auto-title auxiliary (NEW, run WITHOUT `--title` suppression):
+    5.678 s, 2 requests (session sha8 `221d1bea` stable across both),
+    request order `[0 tools, 9 tools]` — the auto-title auxiliary request
+    goes FIRST with 7 top-level fields (no `tools`, no `tool_choice`;
+    `model`/`stream`/`store`/`max_output_tokens`/`include`/`reasoning`/
+    `input` all present, input a 3-item list); the main request is second;
+  - visible reasoning states (NEW, observation-only, three probes): the
+    fake issues the reasoning item's `encrypted_content` as absent / null /
+    empty string. The SDK DROPPED absent and null (turn-2 input 4 items,
+    no reasoning item, replayed state `null`, `matches_issued` false) and
+    KEPT the empty string verbatim (turn-2 input 5 items, item keys
+    `[encrypted_content, summary, type]`, no `id`/`status`, replayed
+    `empty_string`, `matches_issued` true; `e3b0c442`/0 bytes recorded as
+    values DERIVED from the empty-string state). All three still reach the
+    exact 38 B marker final text with correlated tool results. These are
+    NOT encrypted-ownership passes: the full-cipher gate remains required
+    on the encrypted case, and visible states grant no opaque authority.
+  - compaction trace: `post_paths_other_than_responses_seen = []`, no
+    `/v1/responses/compact` endpoint observed — an EMPTY trace, i.e. no
+    compaction-form pass is claimed for this client.
+- Prior receipts remain as-is: `report-final.json` (provisional
+  pre-correction) and `report-fix1.json` (accepted corrected run).
 - SSE consumption: the client consumed the native `@ai-sdk/openai` 3.x
   event vocabulary without error (envelope keys `type`,
-  `sequence_number`, `response_id`; reasoning summary part/delta events;
-  `response.completed` with `usage.input_tokens/output_tokens/total_tokens`).
+  `sequence_number`, plus per-event fields; reasoning summary part/delta
+  events; `response.completed` with
+  `usage.input_tokens/output_tokens/total_tokens`). Standards-shape proof:
+  the SSE event envelope carries NO top-level `response_id`; the response
+  `id` appears only inside the `response.created` and `response.completed`
+  `response` objects, and the client consumed that standards-shaped stream
+  cleanly with no Gateway validator relaxation.
 
 ## 4. Evidence boundary (what this is and is not)
 
@@ -118,6 +168,9 @@ the packaged profile DATA is pending primary packaging, and no
   or PostgreSQL settlement. The loopback fake is a synthetic peer; no
   gateway request was processed and no ledger row exists. Fake-SDK usage
   must never be cited as settlement evidence.
+- **Observation-only probes**: the assistant-text-continuation and
+  visible-reasoning-state probes document SDK keep/drop behavior only; they
+  are not ownership, settlement, or provider guarantees.
 - **Protected gate**: `not_run`. No live LAN or provider run occurred for
   the Responses wire in 228-a (preprotected candidate stage only). No
   `PREPROTECTED_READY` claim is made while the module DATA is unpackaged

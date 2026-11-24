@@ -1,0 +1,179 @@
+{
+  "variant": "default_auto_title_aux_request_shape",
+  "config_variant": "denied-web-baseline",
+  "endpoint": "POST /v1/responses",
+  "title_flag_supplied": false,
+  "request_order": {
+    "tools_count_per_request": [
+      0,
+      9
+    ],
+    "main_request_index": 1,
+    "note": "WITHOUT --title the default auto-title auxiliary request goes FIRST (index 0, 0 tools, no tool_choice); the 9-tool main request is second (index 1)"
+  },
+  "aux_request": {
+    "aux_requests": 1,
+    "top_level_fields": [
+      "include",
+      "input",
+      "max_output_tokens",
+      "model",
+      "reasoning",
+      "store",
+      "stream"
+    ],
+    "top_level_field_count": 7,
+    "tool_choice_present": false,
+    "include_present": true,
+    "reasoning_present": true,
+    "contract_facts": {
+      "model": {
+        "state": "present",
+        "type": "string",
+        "observed": "agent-responses-fake-model",
+        "note": "same synthetic task-configured model id as the main request"
+      },
+      "stream": {
+        "state": "present",
+        "type": "boolean",
+        "observed": true
+      },
+      "store": {
+        "state": "present",
+        "type": "boolean",
+        "observed": false
+      },
+      "max_output_tokens_present": true,
+      "include": {
+        "state": "present",
+        "type": "array",
+        "observed": [
+          "reasoning.encrypted_content"
+        ]
+      },
+      "reasoning": {
+        "state": "present",
+        "type": "object",
+        "observed": {
+          "effort": "xhigh"
+        }
+      }
+    },
+    "input_form": "list",
+    "input_item_count": 3,
+    "input_items": [
+      {
+        "index": 0,
+        "type_key_state": "absent",
+        "role": "developer",
+        "content_form": "string",
+        "note": "agent instruction prompt; content not retained"
+      },
+      {
+        "index": 1,
+        "type_key_state": "absent",
+        "role": "user",
+        "content_form": "array",
+        "content_part_types": [
+          "input_text"
+        ],
+        "note": "typeless message item (no 'type' key); content not retained"
+      },
+      {
+        "index": 2,
+        "type_key_state": "absent",
+        "role": "user",
+        "content_form": "array",
+        "content_part_types": [
+          "input_text"
+        ],
+        "note": "typeless message item (no 'type' key); content not retained"
+      }
+    ],
+    "note": "the auto-title auxiliary request omits tools and tool_choice relative to the main request; it is a standards-shaped streaming Responses create request on the same session, consumed by the client without error; its final text is not part of the probe gate"
+  },
+  "main_request": {
+    "input_item_count": 2,
+    "input_items": [
+      {
+        "index": 0,
+        "type_key_state": "absent",
+        "role": "developer",
+        "content_form": "string",
+        "id_state": "absent",
+        "status_state": "absent",
+        "note": "agent instruction prompt; content not retained"
+      },
+      {
+        "index": 1,
+        "type_key_state": "absent",
+        "role": "user",
+        "content_form": "array",
+        "content_part_types": [
+          "input_text"
+        ],
+        "id_state": "absent",
+        "status_state": "absent",
+        "note": "typeless message item (no 'type' key); content not retained"
+      }
+    ],
+    "tools_count": 9,
+    "contract_facts": {
+      "max_output_tokens": {
+        "state": "present",
+        "type": "integer",
+        "observed": 32000,
+        "note": "configured limit.output 32768 emits 32000 (same runtime cap as the Chat capture)"
+      },
+      "store": {
+        "state": "present",
+        "type": "boolean",
+        "observed": false
+      },
+      "stream": {
+        "state": "present",
+        "type": "boolean",
+        "observed": true
+      },
+      "tool_choice": {
+        "state": "present",
+        "type": "string",
+        "observed": "auto"
+      },
+      "include": {
+        "state": "present",
+        "type": "array",
+        "observed": [
+          "reasoning.encrypted_content"
+        ]
+      },
+      "reasoning": {
+        "state": "present",
+        "type": "object",
+        "observed": {
+          "effort": "xhigh"
+        },
+        "note": "PROVEN DIFFERENCE: nested reasoning object with effort xhigh, not a top-level reasoning_effort string as in the Chat wire"
+      },
+      "model": {
+        "state": "present",
+        "type": "string",
+        "observed": "agent-responses-fake-model",
+        "note": "synthetic task-configured model id bound to the loopback fake provider"
+      }
+    }
+  },
+  "session": {
+    "stable_across_two_requests": true,
+    "session_value_sha256_8": "221d1bea"
+  },
+  "client_behavior": {
+    "exit_code": 0,
+    "elapsed_s": 5.678,
+    "final_text_exact": true
+  },
+  "privacy": {
+    "raw_content_retained": false,
+    "provider_call_performed": false
+  }
+}

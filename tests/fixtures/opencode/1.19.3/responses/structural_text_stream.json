@@ -164,7 +164,6 @@
     "event_envelope_keys": [
       "type",
       "sequence_number",
-      "response_id",
       "<per-event fields>"
     ],
     "event_sequence_observed": [
@@ -174,7 +173,7 @@
       "response.output_item.done",
       "response.completed"
     ],
-    "note": "event vocabulary emitted by the loopback fake in native @ai-sdk/openai 3.x consumer shapes and consumed by the client without error; response_id issued per response by the fake",
+    "note": "each SSE event envelope carries only type + sequence_number plus the per-event fields; the response id appears only inside the response.created and response.completed response objects, never as a top-level event field; the client's clean consumption of this standards-shaped SSE is the proof - no Gateway validator relaxation is involved",
     "completed_payload_fields": [
       "id",
       "object",
@@ -196,7 +195,7 @@
     "nonstreaming_responses_observed": false,
     "final_text_exact_match": true,
     "exit_code": 0,
-    "elapsed_s": 5.978
+    "elapsed_s": 5.828
   },
   "privacy": {
     "raw_content_retained": false,

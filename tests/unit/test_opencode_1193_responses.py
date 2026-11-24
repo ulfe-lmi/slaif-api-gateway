@@ -33,6 +33,9 @@ STRUCTURAL_FIXTURES = [
     "structural_toolloop.json",
     "structural_reasoning_replay.json",
     "structural_session_identity.json",
+    "structural_assistant_tool.json",
+    "structural_defaulttitle.json",
+    "structural_reasoning_visible.json",
 ]
 NINE_FIELDS = ["include", "input", "max_output_tokens", "model", "reasoning",
                "store", "stream", "tool_choice", "tools"]
@@ -67,7 +70,7 @@ def test_provenance_fixture_integrity():
     assert prof["packaged_profile_digest"] is None
     assert "pending" in prof["packaged_profile_digest_state"]
     env = prov["capture_environment"]
-    assert env["captured_utc_date"] == "2026-11-23"
+    assert env["captured_utc_date"] == "2026-11-24"
     assert env["user_saved_profiles_touched"] is False
     assert env["user_credentials_read"] is False
     assert env["production_provider_key_used"] is False
@@ -140,11 +143,13 @@ def test_text_stream_envelope_facts():
         "response.completed",
     ]
     assert resp["usage_fields"] == ["input_tokens", "output_tokens", "total_tokens"]
+    assert resp["event_envelope_keys"] == ["type", "sequence_number", "<per-event fields>"]
+    assert "response_id" not in resp["event_envelope_keys"]
     beh = data["client_behavior"]
     assert beh["exit_code"] == 0
     assert beh["final_text_exact_match"] is True
     assert beh["nonstreaming_responses_observed"] is False
-    assert beh["elapsed_s"] == 5.978
+    assert beh["elapsed_s"] == 5.828
 
 
 def test_toolloop_wire_facts():
@@ -173,10 +178,10 @@ def test_toolloop_wire_facts():
     assert gate["final_text_source"] == "correlated_tool_result"
     assert gate["final_text_length"] == 38
     assert data["session"]["stable_across_two_requests"] is True
-    assert data["session"]["session_value_sha256_8"] == "2ee98e47"
+    assert data["session"]["session_value_sha256_8"] == "9c20a369"
     beh = data["client_behavior"]
     assert beh["exit_code"] == 0
-    assert beh["elapsed_s"] == 5.53
+    assert beh["elapsed_s"] == 5.578
 
 
 def test_reasoning_replay_wire_facts():
@@ -204,18 +209,18 @@ def test_reasoning_replay_wire_facts():
     assert ri["id_state"] == "absent"
     assert ri["status_state"] == "absent"
     assert ri["encrypted_byte_length"] == 64
-    assert ri["encrypted_sha256_8"] == "f2719d31"
+    assert ri["encrypted_sha256_8"] == "d1c28cd0"
     assert ri["full_byte_equals_issued"] is True
     assert added["function_call"]["name"] == "read"
     assert added["function_call"]["id_state"] == "absent"
     assert added["function_call_output"]["id_state"] == "absent"
     assert cont["issued_call_id_correlated"] is True
     assert data["session"]["stable_across_two_requests"] is True
-    assert data["session"]["session_value_sha256_8"] == "760705ef"
+    assert data["session"]["session_value_sha256_8"] == "080846e0"
     beh = data["client_behavior"]
     assert beh["exit_code"] == 0
     assert beh["final_text_exact"] is True
-    assert beh["elapsed_s"] == 5.578
+    assert beh["elapsed_s"] == 5.581
 
 
 def test_session_identity_predicates():
@@ -227,9 +232,9 @@ def test_session_identity_predicates():
     assert cf["value_retention"].startswith("sha256_8 only")
     exp = data["experiments"]
     assert exp["A"]["requests"]["A1"] == exp["A"]["requests"]["A2"]
-    assert exp["A"]["requests"]["A1"]["session_value_sha256_8"] == "2ee98e47"
-    assert exp["B"]["requests"]["B1"]["session_value_sha256_8"] == "760705ef"
-    assert exp["C"]["requests"]["C1"]["session_value_sha256_8"] == "74551a8e"
+    assert exp["A"]["requests"]["A1"]["session_value_sha256_8"] == "9c20a369"
+    assert exp["B"]["requests"]["B1"]["session_value_sha256_8"] == "080846e0"
+    assert exp["C"]["requests"]["C1"]["session_value_sha256_8"] == "b728f8db"
     pred = data["predicates"]
     assert pred["A1_equals_A2"] is True
     assert pred["A1_distinct_from_B1"] is True
@@ -288,6 +293,135 @@ def _items(encrypted=_ISSUED_ENC, call_id="call_synthetic_1",
     items.append({"type": "function_call_output", "call_id": out_call_id,
                   "output": "x"})
     return items
+
+
+def test_assistant_tool_continuation_facts():
+    data = _load("structural_assistant_tool.json")
+    _assert_contract(data["request_turn_1"])
+    issue = data["tool_call_issuance"]
+    assert issue["output_slot_assignment"] == {"assistant_text_message": 0,
+                                               "function_call": 1}
+    assert issue["done_item_status"] == "completed"
+    assert issue["call_id_correlated_to_result"] is True
+    cont = data["request_turn_2_continuation"]
+    assert cont["input_item_count"] == 5
+    assert cont["input_item_types"] == [None, None, None,
+                                        "function_call", "function_call_output"]
+    obs = data["assistant_message_observation"]
+    assert obs["assistant_message_count"] == 1
+    item = obs["assistant_message_items"][0]
+    assert item["type"] is None
+    assert item["keys_sorted"] == ["content", "role"]
+    assert item["role"] == "assistant"
+    assert item["content_form"] == "list"
+    assert item["content_part_types"] == ["output_text"]
+    assert obs["lead_text_replayed_in_input"] is True
+    wrap = data["read_tool"]["native_output_wrap"]
+    assert wrap["content_is_raw_file_bytes"] is False
+    assert wrap["marker_present"] is True
+    assert wrap["marker_occurrences_in_output"] == 1
+    assert wrap["content_byte_length"] == 192
+    assert wrap["marker_byte_length"] == 38
+    assert wrap["content_equals_marker"] is False
+    gate = data["verification_gate"]
+    assert gate["result"] == "verified"
+    assert gate["final_text_source"] == "correlated_tool_result"
+    assert gate["final_text_length"] == 38
+    assert data["session"]["session_value_sha256_8"] == "01d4076c"
+    beh = data["client_behavior"]
+    assert beh["exit_code"] == 0
+    assert beh["elapsed_s"] == 5.728
+
+
+def test_default_title_aux_request_facts():
+    data = _load("structural_defaulttitle.json")
+    assert data["title_flag_supplied"] is False
+    order = data["request_order"]
+    assert order["tools_count_per_request"] == [0, 9]
+    assert order["main_request_index"] == 1
+    aux = data["aux_request"]
+    assert aux["aux_requests"] == 1
+    assert aux["top_level_field_count"] == 7
+    assert aux["top_level_fields"] == [
+        "include", "input", "max_output_tokens", "model", "reasoning",
+        "store", "stream"]
+    assert aux["tool_choice_present"] is False
+    assert aux["include_present"] is True
+    assert aux["reasoning_present"] is True
+    assert aux["input_form"] == "list"
+    assert aux["input_item_count"] == 3
+    cf = aux["contract_facts"]
+    assert cf["model"]["observed"] == "agent-responses-fake-model"
+    assert cf["stream"]["observed"] is True
+    assert cf["store"]["observed"] is False
+    assert cf["max_output_tokens_present"] is True
+    assert cf["include"]["observed"] == ["reasoning.encrypted_content"]
+    assert cf["reasoning"]["observed"] == {"effort": "xhigh"}
+    main = data["main_request"]
+    assert main["input_item_count"] == 2
+    _assert_contract(main)
+    assert data["session"]["stable_across_two_requests"] is True
+    assert data["session"]["session_value_sha256_8"] == "221d1bea"
+    beh = data["client_behavior"]
+    assert beh["exit_code"] == 0
+    assert beh["final_text_exact"] is True
+    assert beh["elapsed_s"] == 5.678
+
+
+def test_reasoning_visible_states_facts():
+    data = _load("structural_reasoning_visible.json")
+    assert data["observation_only"] is True
+    assert data["not_encrypted_ownership"] is True
+    assert "NOT encrypted-ownership passes" in data["authority_note"]
+    _assert_contract(data["request_turn_1"])
+    sc = data["scenarios"]
+    assert set(sc) == {"absent", "null", "empty"}
+    for name, s in sc.items():
+        assert s["verification_gate"]["result"] == "verified", name
+        assert s["verification_gate"]["final_text_source"] == "correlated_tool_result", name
+        assert s["session"]["stable_across_two_requests"] is True, name
+        assert s["client_behavior"]["exit_code"] == 0, name
+        assert s["sdk_replay_behavior"]["issued_call_id_correlated"] is True, name
+    assert sc["absent"]["reasoning_item_issued_state"] == "absent"
+    a = sc["absent"]["sdk_replay_behavior"]
+    assert a["input_item_count"] == 4
+    assert a["input_item_types"] == [None, None, "function_call",
+                                     "function_call_output"]
+    assert a["reasoning_replayed_state"] == "null"
+    assert a["replayed_matches_issued"] is False
+    assert sc["null"]["reasoning_item_issued_state"] == "null"
+    n = sc["null"]["sdk_replay_behavior"]
+    assert n["input_item_count"] == 4
+    assert n["input_item_types"] == [None, None, "function_call",
+                                     "function_call_output"]
+    assert n["reasoning_replayed_state"] == "null"
+    assert n["replayed_matches_issued"] is False
+    assert sc["empty"]["reasoning_item_issued_state"] == "empty_string"
+    e = sc["empty"]["sdk_replay_behavior"]
+    assert e["input_item_count"] == 5
+    assert e["input_item_types"] == [None, None, "reasoning", "function_call",
+                                     "function_call_output"]
+    kept = e["appended_items"][0]
+    assert kept["type"] == "reasoning"
+    assert kept["keys_sorted"] == ["encrypted_content", "summary", "type"]
+    assert kept["id_state"] == "absent" and kept["status_state"] == "absent"
+    assert kept["encrypted_content_state"] == "empty_string"
+    assert kept["summary_present"] is True
+    assert kept["derived_sha256_8_of_empty_string"] == "e3b0c442"
+    assert kept["derived_byte_length_of_empty_string"] == 0
+    assert "DERIVED" in kept["derived_note"]
+    assert kept["replayed_state"] == "empty_string"
+    assert kept["replayed_matches_issued"] is True
+    assert sc["absent"]["session"]["session_value_sha256_8"] == "b0f486a3"
+    assert sc["absent"]["client_behavior"]["elapsed_s"] == 5.831
+    assert sc["null"]["session"]["session_value_sha256_8"] == "425f751c"
+    assert sc["null"]["client_behavior"]["elapsed_s"] == 5.48
+    assert sc["empty"]["session"]["session_value_sha256_8"] == "3c472fa9"
+    assert sc["empty"]["client_behavior"]["elapsed_s"] == 5.528
+    gate = data["shared_marker_gate"]
+    assert gate["result"] == "verified"
+    assert gate["final_text_length"] == 38
+    assert gate["marker_length"] == 38
 
 
 def test_replay_gate_positive():
