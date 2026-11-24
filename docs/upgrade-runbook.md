@@ -6,6 +6,13 @@
 
 ## Before changing a deployment
 
+For `responses_input_item_count_exceeded`, follow the
+[Codex input-item ceiling runbook](runbooks/codex-input-item-count.md).
+The deployment's 65,536-item override is an API environment setting: recreate
+HTTP API workers through a rolling replacement. It needs no rebuilt image,
+schema migration, route edit or key rotation. This differs from the hot-read
+PostgreSQL adapter-byte settings below.
+
 For large Codex image histories, align both ingress and route adapter byte
 ceilings using the [image-history payload runbook](runbooks/codex-image-payload-size.md).
 The six local Qwen adapter ceilings can be raised from the inherited 64 MiB

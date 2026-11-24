@@ -835,7 +835,9 @@ provider usage finalization. Ordinary create reuses
 `max_output_tokens`, and adds bounded request-shape caps:
 
 - `RESPONSES_MAX_INPUT_TEXT_BYTES=262144`
-- `RESPONSES_MAX_INPUT_ITEMS=128`
+- `RESPONSES_MAX_INPUT_ITEMS=128` (packaged default; the local Codex deployment
+  overrides this with `65536`, see the
+  [input-item ceiling runbook](runbooks/codex-input-item-count.md))
 - `RESPONSES_MAX_INPUT_ITEM_TEXT_BYTES=262144`
 - `RESPONSES_MAX_TOTAL_INPUT_TEXT_BYTES=1048576`
 - `RESPONSES_MAX_TEXT_CONTENT_PARTS_PER_ITEM=64`
