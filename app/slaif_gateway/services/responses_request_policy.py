@@ -250,6 +250,7 @@ class ResponsesRequestPolicy:
         adapter_managed_declaration_candidates: frozenset[str] = frozenset(),
         adapter_managed_declaration_shapes: Mapping[str, frozenset[str]] | None = None,
         codex_top_level_tool_taxonomy: frozenset[tuple[str, str, str]] | None = None,
+        selected_profile_flat_function_streaming: bool = False,
         scope: Mapping[str, Any] | None = None,
     ) -> ResponsesPolicyResult:
         self._active_scope = scope
@@ -441,6 +442,7 @@ class ResponsesRequestPolicy:
                 codex_streaming_tool_events_requested
                 or adapter_managed_streaming_allowed
                 or continuation_taxonomy is not None
+                or selected_profile_flat_function_streaming
             )
         ):
             _raise(

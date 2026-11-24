@@ -477,8 +477,17 @@ def _derive_pair_local_codex_top_level_profile(
     effective_body: Mapping[str, object],
     declared_tool_taxonomy: frozenset[tuple[str, str, str]] | None = None,
 ) -> tuple[frozenset[tuple[str, str, str]], bool]:
-    """Derive 0.149 top-level tool facts only after Local route resolution."""
+    """Derive pair-local top-level tool facts after route resolution.
 
+    The OpenCode 1.19.3 profile dispatches its streaming flat-function
+    lifecycle from the validated top-level taxonomy alone; its key and
+    route capability gates run in the caller. The 0.149 dialect remains
+    local-server-context gated.
+    """
+    if client_module_id == OPENCODE_1193_RESPONSES_CLIENT_MODULE_ID:
+        if declared_tool_taxonomy is None or effective_body.get("stream") is not True:
+            return frozenset(), False
+        return declared_tool_taxonomy, True
     if client_module_id != CODEX_0149_CLIENT_MODULE_ID or local_coding_server_context is None:
         return frozenset(), False
     declarations = (
@@ -1344,6 +1353,16 @@ async def handle_response_create(
         allow_codex_encrypted_reasoning_replay
         and client_module.encrypted_reasoning_output_requested(body)
     )
+    # The pinned OpenCode SDK supplies strict flat function declarations with
+    # required indexes, so streaming them is qualified by the validated
+    # top-level taxonomy rather than the 0.149 local-server context. The
+    # key/route capability gates below remain authoritative.
+    selected_profile_flat_function_streaming = (
+        client_module.module_id == OPENCODE_1193_RESPONSES_CLIENT_MODULE_ID
+        and body.get("stream") is True
+        and responses_function_tools_requested(body)
+        and codex_0149_full_tool_taxonomy is not None
+    )
     policy = ResponsesRequestPolicy(
         settings=settings,
         client_spec=client_module.policy_spec,
@@ -1368,6 +1387,7 @@ async def handle_response_create(
                 normalized_client_request.adapter_managed_declaration_shapes
             ),
             codex_top_level_tool_taxonomy=codex_0149_continuation_taxonomy,
+            selected_profile_flat_function_streaming=selected_profile_flat_function_streaming,
             scope=request.scope if request is not None else None,
         )
     except RequestPolicyError as exc:

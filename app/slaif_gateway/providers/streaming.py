@@ -30,6 +30,7 @@ RESPONSES_CODEX_STREAM_EVENT_TYPES = frozenset(
         "response.function_call_arguments.done",
         "response.custom_tool_call_input.delta",
         "response.reasoning_summary_part.added",
+        "response.reasoning_summary_part.done",
         "response.reasoning_summary_text.delta",
         "response.reasoning_summary_text.done",
         "response.reasoning_text.delta",
@@ -611,6 +612,7 @@ class ResponsesStreamEventValidator:
             return self._validate_sparse_function_arguments_done(payload)
         if event_type in {
             "response.reasoning_summary_part.added",
+            "response.reasoning_summary_part.done",
             "response.reasoning_summary_text.delta",
             "response.reasoning_summary_text.done",
             "response.reasoning_text.delta",
@@ -1150,6 +1152,8 @@ class ResponsesStreamEventValidator:
             allowed = common | {"summary_index", "text"}
         elif event_type == "response.reasoning_summary_text.delta":
             allowed = common | {"summary_index", "delta"}
+        elif event_type == "response.reasoning_summary_part.done":
+            allowed = common | {"summary_index", "part"}
         elif event_type == "response.reasoning_text.done":
             allowed = common | {"content_index", "text"}
         else:
@@ -1187,6 +1191,24 @@ class ResponsesStreamEventValidator:
             if not isinstance(part, Mapping) or not _validate_reasoning_text_part(
                 part, expected_type="summary_text"
             ):
+                return False
+            return True
+
+        if not strict_codex and event_type == "response.reasoning_summary_part.done":
+            # Summary-part closure for the OpenCode selected-profile stream:
+            # the delivered part text must equal the accumulated deltas.
+            # The strict 0.149 dialect rejects this event type as before.
+            if not _required_index(payload, "summary_index"):
+                return False
+            part = payload.get("part")
+            if not isinstance(part, Mapping) or not _validate_reasoning_text_part(
+                part, expected_type="summary_text"
+            ):
+                return False
+            accumulated = self._reasoning_deltas.get(
+                (str(item_id), "summary", int(payload["summary_index"]))
+            )
+            if accumulated is not None and part.get("text") != accumulated:
                 return False
             return True
 
@@ -2061,9 +2083,32 @@ def _validate_reasoning_item(
             if not _optional_item_status(item):
                 return None
             encrypted_value = item.get("encrypted_content")
-            if encrypted_value not in (None, ""):
+            if encrypted_value in (None, ""):
+                encrypted_bytes = 0
+            elif not allow_idless:
+                # Only the qualified OpenCode selected-profile stream emits
+                # the ciphertext on the reasoning added item; every other
+                # encrypted-replay profile keeps added items ciphertext-free.
                 return None
-            encrypted_bytes = 0
+            elif not isinstance(encrypted_value, str) or not _bounded_utf8(
+                encrypted_value,
+                _MAX_STREAM_ENCRYPTED_REASONING_ITEM_BYTES,
+                nonempty=True,
+            ):
+                return None
+            elif set(item) != {"type", "id", "encrypted_content"} or not _bounded_identifier(
+                item.get("id"), required=True
+            ):
+                # The observed OpenCode added item carries exactly type/id/
+                # encrypted_content -- no summary, status, or content.  Only
+                # that bounded exact shape is a qualified added item; every
+                # other combination fails closed on this profile.
+                return None
+            else:
+                # Exact observed shape: the shared summary/content lifecycle
+                # tail carries neither field by construction, so it is not
+                # applied; the ciphertext bytes are already bounded above.
+                return len(encrypted_value.encode("utf-8"))
     else:
         if not _only_fields(
             item, {"type", "id", "status", "summary", "content", "encrypted_content"}
