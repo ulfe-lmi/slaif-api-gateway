@@ -117,6 +117,12 @@ class ResponsesClientPolicySpec:
     allow_sparse_visible_reasoning: bool = False
     allow_empty_visible_reasoning: bool = False
     allow_sparse_function_events: bool = False
+    # Selected native profiles whose pinned SDK wire requires a valid
+    # ``output_index`` on every ``response.output_item.added``/``done``
+    # event. Optional-index acceptance is not conformance proof for those
+    # profiles: the producer must supply the index or fail safely. Legacy
+    # presets stay False and keep the existing optional behavior.
+    require_stream_output_indices: bool = False
     allow_tool_output_images: bool = False
     # Explicit versioned declaration-history mode selected by the profile
     # data (see modules/codex_tool_history.py). ``None`` keeps the legacy

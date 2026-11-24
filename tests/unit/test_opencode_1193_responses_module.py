@@ -35,6 +35,10 @@ from slaif_gateway.modules.servers.registry import (
     ensure_client_server_pair,
 )
 from slaif_gateway.providers.errors import ProviderConfigurationError
+from slaif_gateway.providers.streaming import (
+    ResponsesStreamEventValidator,
+    ResponsesStreamValidationProfile,
+)
 from slaif_gateway.services.responses_request_policy import (
     responses_codex_0149_tool_roundtrip_requested,
 )
@@ -697,6 +701,7 @@ def test_normalize_rejects_authority_shapes():
 
 def test_policy_spec_owned_overrides():
     assert SPEC.allow_idless_encrypted_reasoning is True
+    assert SPEC.require_stream_output_indices is True
     assert SPEC.reasoning_efforts == EFFORTS
     assert SPEC.client_metadata_keys == frozenset()
     assert SPEC.max_client_metadata_keys == 0
@@ -713,7 +718,257 @@ def test_policy_spec_inherited_codex_gates():
     assert SPEC.function_call_item_id_optional is True
     assert SPEC.custom_tool_call_item_id_optional is True
     assert SPEC.reasoning_visible_id_optional is True
+    assert SPEC.allow_sparse_function_events is False
+    assert CODEX_0149_POLICY_SPEC.require_stream_output_indices is False
     assert CODEX_0149_POLICY_SPEC.allow_idless_encrypted_reasoning is False
+
+
+# ---------------------------------------------------------------------------
+# Pinned-SDK output_index conformance on the selected-profile stream
+# ---------------------------------------------------------------------------
+
+
+def _oc_stream_profile(**overrides):
+    kwargs = dict(
+        codex_streaming_tool_events=True,
+        require_output_indices=True,
+        declared_client_tools=frozenset(
+            ("functions", n, "function") for n in NAMES
+        ),
+    )
+    kwargs.update(overrides)
+    return ResponsesStreamValidationProfile(**kwargs)
+
+
+def _oc_validator(**overrides):
+    return ResponsesStreamEventValidator(_oc_stream_profile(**overrides))
+
+
+def _created():
+    return {
+        "type": "response.created",
+        "sequence_number": 0,
+        "response": {"id": "resp_1", "status": "in_progress"},
+    }
+
+
+def _in_progress():
+    return {
+        "type": "response.in_progress",
+        "sequence_number": 1,
+        "response": {"id": "resp_1", "status": "in_progress"},
+    }
+
+
+def _completed():
+    return {
+        "type": "response.completed",
+        "sequence_number": 2,
+        "response": {"id": "resp_1", "status": "completed"},
+    }
+
+
+def _fc_item(
+    item_id="fc_1",
+    call_id="call_1",
+    name="read",
+    status="in_progress",
+    arguments="",
+):
+    return {
+        "type": "function_call",
+        "id": item_id,
+        "status": status,
+        "namespace": None,
+        "name": name,
+        "arguments": arguments,
+        "call_id": call_id,
+    }
+
+
+def _item_event(event, item, output_index=None, index_override=None):
+    payload = {"type": event, "item": item}
+    if index_override is not None:
+        payload["output_index"] = index_override
+    elif output_index is not None:
+        payload["output_index"] = output_index
+    return payload
+
+
+def _arg_delta(item_id, output_index, delta, sequence_number):
+    payload = {
+        "type": "response.function_call_arguments.delta",
+        "sequence_number": sequence_number,
+        "item_id": item_id,
+        "delta": delta,
+    }
+    if output_index is not None:
+        payload["output_index"] = output_index
+    return payload
+
+
+def test_stream_full_indexed_function_lifecycle_accepted():
+    v = _oc_validator()
+    assert v.validate(_created())
+    assert v.validate(_in_progress())
+    assert v.validate(_item_event("response.output_item.added", _fc_item(), 0))
+    assert v.validate(_arg_delta("fc_1", 0, '{"path":', 3))
+    assert v.validate(_arg_delta("fc_1", 0, '"./marker"}', 4))
+    assert v.validate(
+        _item_event(
+            "response.output_item.done",
+            _fc_item(status="completed", arguments='{"path":"./marker"}'),
+            0,
+        )
+    )
+    assert v.validate(_completed())
+
+
+def test_stream_added_missing_output_index_rejected():
+    v = _oc_validator()
+    v.validate(_created())
+    v.validate(_in_progress())
+    assert (
+        v.validate(_item_event("response.output_item.added", _fc_item(), None))
+        is False
+    )
+
+
+def test_stream_done_missing_output_index_rejected():
+    v = _oc_validator()
+    v.validate(_created())
+    v.validate(_in_progress())
+    v.validate(_item_event("response.output_item.added", _fc_item(), 0))
+    v.validate(_arg_delta("fc_1", 0, "{}", 3))
+    assert (
+        v.validate(
+            _item_event(
+                "response.output_item.done",
+                _fc_item(status="completed", arguments="{}"),
+                None,
+            )
+        )
+        is False
+    )
+
+
+def test_stream_added_invalid_output_index_rejected():
+    for bad in ("0", -1, True):
+        v = _oc_validator()
+        v.validate(_created())
+        v.validate(_in_progress())
+        assert (
+            v.validate(
+                _item_event(
+                    "response.output_item.added", _fc_item(), index_override=bad
+                )
+            )
+            is False
+        )
+
+
+def test_stream_done_wrong_output_index_rejected():
+    v = _oc_validator()
+    v.validate(_created())
+    v.validate(_in_progress())
+    v.validate(_item_event("response.output_item.added", _fc_item(), 0))
+    v.validate(_arg_delta("fc_1", 0, "{}", 3))
+    assert (
+        v.validate(
+            _item_event(
+                "response.output_item.done",
+                _fc_item(status="completed", arguments="{}"),
+                1,
+            )
+        )
+        is False
+    )
+
+
+def test_stream_duplicate_output_index_on_added_rejected():
+    v = _oc_validator()
+    v.validate(_created())
+    v.validate(_in_progress())
+    v.validate(_item_event("response.output_item.added", _fc_item(), 0))
+    second = _fc_item(item_id="fc_2", call_id="call_2", name="grep")
+    assert v.validate(_item_event("response.output_item.added", second, 0)) is False
+
+
+def test_stream_done_unknown_item_with_used_index_rejected():
+    v = _oc_validator()
+    v.validate(_created())
+    v.validate(_in_progress())
+    v.validate(_item_event("response.output_item.added", _fc_item(), 0))
+    rogue = _fc_item(
+        item_id="fc_9",
+        call_id="call_9",
+        name="grep",
+        status="completed",
+        arguments="{}",
+    )
+    assert v.validate(_item_event("response.output_item.done", rogue, 0)) is False
+
+
+def test_stream_two_items_distinct_indices_accepted():
+    v = _oc_validator()
+    assert v.validate(_created())
+    assert v.validate(_in_progress())
+    assert v.validate(_item_event("response.output_item.added", _fc_item(), 0))
+    assert v.validate(_arg_delta("fc_1", 0, '{"a":', 3))
+    assert v.validate(_arg_delta("fc_1", 0, "1}", 4))
+    assert v.validate(
+        _item_event(
+            "response.output_item.done",
+            _fc_item(status="completed", arguments='{"a":1}'),
+            0,
+        )
+    )
+    second = _fc_item(item_id="fc_2", call_id="call_2", name="grep")
+    assert v.validate(_item_event("response.output_item.added", second, 1))
+    assert v.validate(_arg_delta("fc_2", 1, "{}", 5))
+    assert v.validate(
+        _item_event(
+            "response.output_item.done",
+            _fc_item(
+                item_id="fc_2",
+                call_id="call_2",
+                name="grep",
+                status="completed",
+                arguments="{}",
+            ),
+            1,
+        )
+    )
+    assert v.validate(_completed())
+
+
+def test_stream_arg_delta_missing_output_index_rejected():
+    v = _oc_validator()
+    v.validate(_created())
+    v.validate(_in_progress())
+    v.validate(_item_event("response.output_item.added", _fc_item(), 0))
+    assert v.validate(_arg_delta("fc_1", None, "{}", 3)) is False
+
+
+def test_stream_legacy_profile_keeps_optional_output_indices():
+    v = ResponsesStreamEventValidator(
+        ResponsesStreamValidationProfile(
+            codex_streaming_tool_events=True,
+            declared_client_tools=frozenset(
+                ("functions", n, "function") for n in NAMES
+            ),
+        )
+    )
+    assert v.validate(_created())
+    assert v.validate(_in_progress())
+    assert v.validate(_item_event("response.output_item.added", _fc_item(), None))
+    assert v.validate(
+        _item_event(
+            "response.output_item.done",
+            _fc_item(status="completed", arguments="{}"),
+            None,
+        )
+    )
 
 
 # ---------------------------------------------------------------------------

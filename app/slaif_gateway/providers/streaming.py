@@ -151,6 +151,9 @@ class ResponsesStreamValidationProfile:
     allow_sparse_visible_reasoning: bool = False
     allow_sparse_function_events: bool = False
     allow_idless_encrypted_reasoning: bool = False
+    # Selected native profiles whose pinned SDK wire requires a valid
+    # output_index on every response.output_item.added/done event.
+    require_output_indices: bool = False
 
 
 @dataclass(slots=True)
@@ -198,6 +201,9 @@ class ResponsesStreamEventValidator:
         self._message_parts_done: set[tuple[str, int]] = set()
         self._message_output_done: set[str] = set()
         self._function_output_indices: dict[str, int] = {}
+        # Populated only for require_output_indices profiles: every index
+        # the pinned SDK assigns stays occupied for the response lifetime.
+        self._used_output_indices: set[int] = set()
         self._function_arguments_done: set[str] = set()
         self._function_output_done: set[str] = set()
         self._function_delta_seen: set[str] = set()
@@ -625,7 +631,12 @@ class ResponsesStreamEventValidator:
     def _validate_output_item(self, payload: Mapping[str, Any], event_type: str) -> bool:
         if not _only_fields(payload, {"type", "output_index", "item", "sequence_number"}):
             return False
-        if not _optional_index(payload, "output_index") or not _optional_index(
+        # The pinned OpenCode SDK wire requires a valid output_index on
+        # every output-item event; other profiles keep it optional.
+        index_check = (
+            _required_index if self._profile.require_output_indices else _optional_index
+        )
+        if not index_check(payload, "output_index") or not _optional_index(
             payload, "sequence_number"
         ):
             return False
@@ -650,6 +661,22 @@ class ResponsesStreamEventValidator:
             ):
                 return False
 
+        if self._profile.require_output_indices and event_type == (
+            "response.output_item.done"
+        ):
+            # The done event must reuse the exact index its item was added
+            # at; an index already occupied by another item is a duplicate.
+            stored = (
+                self._function_output_indices.get(item_id)
+                if isinstance(item_id, str)
+                else None
+            )
+            output_index = payload["output_index"]
+            if stored is None and output_index in self._used_output_indices:
+                return False
+            if stored is not None and stored != output_index:
+                return False
+
         if isinstance(item_id, str):
             active = self._active_items.get(item_id)
             if (
@@ -665,6 +692,11 @@ class ResponsesStreamEventValidator:
                     return False
                 if state.call_id is not None and state.call_id in self._seen_call_ids:
                     return False
+                if self._profile.require_output_indices:
+                    if payload["output_index"] in self._used_output_indices:
+                        return False
+                    self._used_output_indices.add(payload["output_index"])
+                    self._function_output_indices[item_id] = payload["output_index"]
                 self._seen_item_ids.add(item_id)
                 if state.call_id is not None:
                     self._seen_call_ids.add(state.call_id)

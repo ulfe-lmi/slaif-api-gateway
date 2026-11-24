@@ -419,6 +419,10 @@ OPENCODE_1193_RESPONSES_POLICY_SPEC = dataclasses.replace(
     # still replay after its same-key CALL-ID HMAC proof, without ever
     # rejoining the active declaration set.
     historical_flat_tool_identity=True,
+    # The pinned OpenCode SDK wire requires a valid ``output_index`` on
+    # every ``response.output_item.added``/``done`` event; optional-index
+    # acceptance is not conformance proof for this profile.
+    require_stream_output_indices=True,
     reasoning_efforts=OPENCODE_1193_RESPONSES_PROFILE_DATA.reasoning_efforts,
     client_metadata_keys=frozenset(),
     max_client_metadata_keys=0,

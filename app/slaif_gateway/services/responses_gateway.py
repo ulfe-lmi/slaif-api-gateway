@@ -1976,6 +1976,13 @@ async def handle_response_create(
                             and client_module.policy_spec.allow_idless_encrypted_reasoning
                             and codex_encrypted_reasoning_event_requested
                         ),
+                        # Client-module wire property: the selected native
+                        # profile's pinned SDK supplies required indexes, so
+                        # this is not gated on the local server context.
+                        require_output_indices=(
+                            client_module.policy_spec is not None
+                            and client_module.policy_spec.require_stream_output_indices
+                        ),
                         declared_client_tools=(
                             pair_local_codex_top_level_tools
                             if pair_local_codex_streaming_tools
