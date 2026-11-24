@@ -150,6 +150,11 @@ class ResponsesStreamValidationProfile:
     codex_reasoning_events: bool = False
     custom_client_tools: frozenset[tuple[str, str, str]] = frozenset({("functions", "exec", "custom")})
     allow_sparse_visible_reasoning: bool = False
+    # Selected native profiles whose captured visible reasoning lifecycle
+    # omits the ``content`` key on done items and the ``summary`` key on
+    # added items (OpenCode 1.19.3). Legacy profiles keep both keys
+    # required and byte-identical.
+    allow_empty_visible_reasoning: bool = False
     allow_sparse_function_events: bool = False
     allow_idless_encrypted_reasoning: bool = False
     # Selected native profiles whose pinned SDK wire requires a valid
@@ -654,29 +659,30 @@ class ResponsesStreamEventValidator:
         if event_type == "response.output_item.done" and not isinstance(item_id, str):
             if state.item_type in {"function_call", "custom_tool_call"}:
                 return False
-            if state.item_type == "reasoning" and (
-                self._profile.codex_encrypted_reasoning_replay
-                and not (
-                    state.encrypted_reasoning
-                    and self._profile.allow_idless_encrypted_reasoning
-                )
-            ):
+            if state.item_type == "reasoning" and self._profile.codex_encrypted_reasoning_replay:
+                # Observed provider added/done items carry real IDs; the
+                # pinned SDK drops IDs only on request-side replay, which
+                # input eligibility covers separately. Provider output
+                # without an ID fails closed on every encrypted-replay
+                # profile.
                 return False
 
         if self._profile.require_output_indices and event_type == (
             "response.output_item.done"
         ):
-            # The done event must reuse the exact index its item was added
-            # at; an index already occupied by another item is a duplicate.
+            # The pinned native wire assigns the output index on added and
+            # every accepted added item registers its ID at that index, so
+            # a done without that registration is an orphan (never added)
+            # or a duplicate; both fail closed.  Legacy sparse paths without
+            # required indexes keep their existing behavior.
             stored = (
                 self._function_output_indices.get(item_id)
                 if isinstance(item_id, str)
                 else None
             )
-            output_index = payload["output_index"]
-            if stored is None and output_index in self._used_output_indices:
+            if stored is None:
                 return False
-            if stored is not None and stored != output_index:
+            if stored != payload["output_index"]:
                 return False
 
         if isinstance(item_id, str):
@@ -722,7 +728,10 @@ class ResponsesStreamEventValidator:
                     state=state,
                     encrypted_content=(
                         item.get("encrypted_content")
-                        if state.item_type == "reasoning"
+                        if (
+                            state.item_type == "reasoning"
+                            and self._profile.allow_idless_encrypted_reasoning
+                        )
                         else None
                     ),
                 )
@@ -742,22 +751,12 @@ class ResponsesStreamEventValidator:
                     state=state,
                     encrypted_content=(
                         item.get("encrypted_content")
-                        if state.item_type == "reasoning"
+                        if (
+                            state.item_type == "reasoning"
+                            and self._profile.allow_idless_encrypted_reasoning
+                        )
                         else None
                     ),
-                )
-            elif (
-                state.item_type == "reasoning"
-                and state.encrypted_reasoning
-                and self._profile.allow_idless_encrypted_reasoning
-            ):
-                # Ciphertext is read directly from the already-validated done
-                # payload and held in validator memory only until the
-                # post-accounting persist call consumes the candidate.
-                self._capture_replay_candidate(
-                    item_id=None,
-                    state=state,
-                    encrypted_content=item.get("encrypted_content"),
                 )
         return True
 
@@ -805,6 +804,7 @@ class ResponsesStreamEventValidator:
                 encrypted_replay=self._profile.codex_encrypted_reasoning_replay,
                 allow_visible_reasoning=self._profile.allow_sparse_visible_reasoning,
                 allow_idless=self._profile.allow_idless_encrypted_reasoning,
+                allow_empty_visible=self._profile.allow_empty_visible_reasoning,
             )
             if encrypted_bytes is None:
                 return None
@@ -2037,6 +2037,7 @@ def _validate_reasoning_item(
     encrypted_replay: bool,
     allow_visible_reasoning: bool = False,
     allow_idless: bool = False,
+    allow_empty_visible: bool = False,
 ) -> int | None:
     if (
         allow_visible_reasoning
@@ -2044,8 +2045,14 @@ def _validate_reasoning_item(
         and event_type == "response.output_item.done"
         and item.get("encrypted_content") in (None, "")
     ):
-        fields = {"type", "id", "summary", "content"}
-        if not fields.issubset(item) or not _only_fields(item, fields | {"status", "encrypted_content"}):
+        required = {"type", "id", "summary"}
+        if not allow_empty_visible:
+            # Legacy visible done requires the content key; the captured
+            # selected-native done carries only type/id/summary.
+            required = required | {"content"}
+        if not required.issubset(item) or not _only_fields(
+            item, required | {"content", "status", "encrypted_content"}
+        ):
             return None
         if "status" in item and item["status"] != "completed":
             return None
@@ -2059,11 +2066,6 @@ def _validate_reasoning_item(
                 # Present ID: exact-set shape plus bounded identifier, so a
                 # null or malformed ID is still denied.
                 if not _bounded_identifier(item.get("id"), required=True):
-                    return None
-            elif set(item) == {"type", "summary", "encrypted_content"}:
-                # ID-less done is only ever a qualified profile path; the
-                # reference is derived from the ciphertext, never a fabricated ID.
-                if not allow_idless:
                     return None
             else:
                 return None
@@ -2120,7 +2122,16 @@ def _validate_reasoning_item(
         if encrypted_value not in (None, ""):
             return None
         encrypted_bytes = 0
-    summary = item.get("summary")
+    if "summary" not in item:
+        # The captured native added item omits the summary key entirely and
+        # the selected profile treats the omission as an empty list. An
+        # explicit null summary is malformed and stays denied; legacy
+        # profiles and done events keep the key required.
+        if not (allow_empty_visible and event_type == "response.output_item.added"):
+            return None
+        summary = []
+    else:
+        summary = item["summary"]
     if not isinstance(summary, list) or len(summary) > _MAX_STREAM_CONTENT_PARTS:
         return None
     total_bytes = 0
