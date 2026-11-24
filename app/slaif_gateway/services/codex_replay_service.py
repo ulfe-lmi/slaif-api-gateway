@@ -349,8 +349,12 @@ class CodexReplayService:
                     **shared,
                 )
             ]
+            # The profile-qualified v3 ciphertext alias is issued only for
+            # the selected native profile; legacy encrypted-replay profiles
+            # keep their single ID reference.
             if (
-                candidate.item_kind == "reasoning"
+                allow_idless_encrypted_reasoning
+                and candidate.item_kind == "reasoning"
                 and candidate.item_id is not None
                 and (v3_digest := _reasoning_v3_digest(candidate, secret=secret))
                 is not None
