@@ -415,6 +415,10 @@ OPENCODE_1193_RESPONSES_PROFILE_FIXTURE_SHA256 = (
 OPENCODE_1193_RESPONSES_POLICY_SPEC = dataclasses.replace(
     CODEX_0149_POLICY_SPEC,
     allow_idless_encrypted_reasoning=True,
+    # Native wire is flat (no namespace field): a removed function tool may
+    # still replay after its same-key CALL-ID HMAC proof, without ever
+    # rejoining the active declaration set.
+    historical_flat_tool_identity=True,
     reasoning_efforts=OPENCODE_1193_RESPONSES_PROFILE_DATA.reasoning_efforts,
     client_metadata_keys=frozenset(),
     max_client_metadata_keys=0,

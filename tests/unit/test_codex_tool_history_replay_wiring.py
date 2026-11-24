@@ -14,9 +14,16 @@ import pytest
 
 from slaif_gateway.api.errors import OpenAICompatibleError
 from slaif_gateway.config import Settings
+from slaif_gateway.modules.clients.codex_0149 import (
+    CODEX_0149_POLICY_SPEC,
+    codex_0149_declared_tool_taxonomy,
+)
 from slaif_gateway.modules.clients.codex_0162 import (
     Codex0162ResponsesClientModule,
     codex_0162_lower_positional_tool_history,
+)
+from slaif_gateway.modules.clients.registry import (
+    OPENCODE_1193_RESPONSES_CLIENT_MODULE_INSTANCE,
 )
 from slaif_gateway.modules.codex_profile_data import load_codex_profile_file
 from slaif_gateway.modules.codex_tool_history import (
@@ -1284,3 +1291,262 @@ def test_lowering_bound_namespace_fail_closed_on_tampered_facts_body():
     with pytest.raises(ModuleSelectionError) as unbound_exc:
         codex_0162_lower_positional_tool_history(unbound, facts)
     assert unbound_exc.value.error_code == "codex_0162_tool_declaration"
+
+
+# --- F. flat removed-tool historical identity (228-a native profile) ---------
+
+
+OC_NAMES = [
+    "bash",
+    "edit",
+    "glob",
+    "grep",
+    "read",
+    "skill",
+    "task",
+    "todowrite",
+    "write",
+]
+
+
+def oc_tool(name):
+    return {
+        "type": "function",
+        "name": name,
+        "description": f"Tool {name}",
+        "parameters": {"type": "object", "properties": {}, "additionalProperties": False},
+        "strict": True,
+    }
+
+
+def oc_body(input_items, tools=None):
+    return {
+        "model": "qwen38-27b",
+        "stream": True,
+        "store": False,
+        "tool_choice": "auto",
+        "include": ["reasoning.encrypted_content"],
+        "reasoning": {"effort": "xhigh"},
+        "max_output_tokens": 32000,
+        "input": list(input_items),
+        "tools": [oc_tool(n) for n in (tools if tools is not None else OC_NAMES)],
+    }
+
+
+def removed_call():
+    return {
+        "type": "function_call",
+        "name": "oldtool",
+        "arguments": "{}",
+        "call_id": "call_old",
+    }
+
+
+def removed_out():
+    return {"type": "function_call_output", "call_id": "call_old", "output": "ok"}
+
+
+def oc_normalize(body):
+    return OPENCODE_1193_RESPONSES_CLIENT_MODULE_INSTANCE.normalize_responses(body).body
+
+
+def opencode_apply_body(body, **gates):
+    oc = OPENCODE_1193_RESPONSES_CLIENT_MODULE_INSTANCE
+    policy = ResponsesRequestPolicy(Settings(), client_spec=oc.policy_spec)
+    normalized = oc_normalize(body)
+    result = policy.apply(
+        normalized,
+        codex_top_level_tool_taxonomy=codex_0149_declared_tool_taxonomy(normalized),
+        **_options(**gates),
+    )
+    return result, policy
+
+
+def handcrafted_apply(body, *, spec=None, tax, **gates):
+    policy = ResponsesRequestPolicy(
+        Settings(),
+        client_spec=spec or OPENCODE_1193_RESPONSES_CLIENT_MODULE_INSTANCE.policy_spec,
+    )
+    return (
+        policy.apply(body, codex_top_level_tool_taxonomy=tax, **_options(**gates)),
+        policy,
+    )
+
+
+def test_flat_removed_tool_emits_historical_candidate_for_call_hmac():
+    nb = oc_normalize(
+        oc_body(
+            [
+                {"role": "developer", "content": "bounded"},
+                user(),
+                removed_call(),
+                removed_out(),
+            ]
+        )
+    )
+    tax = codex_0149_declared_tool_taxonomy(nb)
+    candidates = codex_replay_request_candidates(
+        nb,
+        top_level_tool_taxonomy=tax,
+        allow_idless_tool_call_replay=True,
+        historical_flat_tool_identity=True,
+        require_call_completeness=True,
+    )
+    assert len(candidates) == 1
+    candidate = candidates[0]
+    assert candidate.item_kind == "function_call"
+    assert candidate.tool_namespace == "functions"
+    assert candidate.tool_name == "oldtool"
+    assert candidate.item_id is None
+    assert candidate.call_id == "call_old"
+
+
+def test_flat_removed_tool_roundtrip_passes_and_is_preserved():
+    result, _ = opencode_apply_body(
+        oc_body(
+            [
+                {"role": "developer", "content": "bounded"},
+                user(),
+                removed_call(),
+                removed_out(),
+            ]
+        )
+    )
+    input_items = result.effective_body["input"]
+    assert any(
+        item.get("type") == "function_call"
+        and item.get("call_id") == "call_old"
+        and item.get("name") == "oldtool"
+        for item in input_items
+    )
+    assert any(
+        item.get("type") == "function_call_output"
+        and item.get("call_id") == "call_old"
+        for item in input_items
+    )
+
+
+def test_flag_off_keeps_legacy_denials():
+    nb = oc_normalize(
+        oc_body(
+            [
+                {"role": "developer", "content": "bounded"},
+                user(),
+                removed_call(),
+                removed_out(),
+            ]
+        )
+    )
+    tax = codex_0149_declared_tool_taxonomy(nb)
+
+    # Extractor: legacy union mode still fails closed on the removed call.
+    with pytest.raises(ValueError, match="codex_replay_candidate_extraction_failed"):
+        codex_replay_request_candidates(
+            nb,
+            top_level_tool_taxonomy=tax,
+            allow_idless_tool_call_replay=True,
+            historical_flat_tool_identity=False,
+            require_call_completeness=True,
+        )
+
+    # Policy walk: the Codex 0.149 preset denies the removed tool entirely.
+    with pytest.raises(ResponsesRequestPolicyError) as exc_info:
+        handcrafted_apply(
+            {
+                "model": "synthetic",
+                "max_output_tokens": 64,
+                "input": [call("oldtool", "call_old"), out("call_old")],
+            },
+            spec=CODEX_0149_POLICY_SPEC,
+            tax=frozenset({("functions", "read", "function")}),
+        )
+    assert exc_info.value.error_code == "responses_codex_tool_roundtrip_invalid"
+
+
+def test_namespace_bearing_or_custom_removed_calls_are_never_historical():
+    tax = codex_0149_declared_tool_taxonomy(oc_normalize(oc_body([user()])))
+
+    namespaced = {
+        "model": "synthetic",
+        "max_output_tokens": 64,
+        "input": [call("oldtool", "call_old", namespace="functions"), out("call_old")],
+    }
+    with pytest.raises(ResponsesRequestPolicyError) as walk_exc:
+        handcrafted_apply(namespaced, tax=tax)
+    assert walk_exc.value.error_code == "responses_codex_tool_roundtrip_invalid"
+    with pytest.raises(ValueError, match="codex_replay_candidate_extraction_failed"):
+        codex_replay_request_candidates(
+            namespaced,
+            top_level_tool_taxonomy=tax,
+            allow_idless_tool_call_replay=True,
+            historical_flat_tool_identity=True,
+            require_call_completeness=True,
+        )
+
+    custom_only = {
+        "model": "synthetic",
+        "max_output_tokens": 64,
+        "input": [custom_call("oldtool", "call_c")],
+    }
+    with pytest.raises(ResponsesRequestPolicyError) as custom_walk_exc:
+        handcrafted_apply(custom_only, tax=tax)
+    assert custom_walk_exc.value.error_code == "responses_codex_tool_roundtrip_invalid"
+    with pytest.raises(ValueError, match="codex_replay_candidate_extraction_failed"):
+        codex_replay_request_candidates(
+            custom_only,
+            top_level_tool_taxonomy=tax,
+            allow_idless_tool_call_replay=True,
+            historical_flat_tool_identity=True,
+            require_call_completeness=True,
+        )
+
+
+def test_ghost_output_after_historical_call_still_denied():
+    tax = codex_0149_declared_tool_taxonomy(oc_normalize(oc_body([user()])))
+    with pytest.raises(ResponsesRequestPolicyError) as exc_info:
+        handcrafted_apply(
+            {
+                "model": "synthetic",
+                "max_output_tokens": 64,
+                "input": [removed_call(), removed_out(), out("call_ghost")],
+            },
+            tax=tax,
+        )
+    assert exc_info.value.error_code == "responses_codex_tool_roundtrip_invalid"
+
+
+def test_historical_identity_never_overrides_reference_or_ambiguity_laws():
+    nb = oc_normalize(
+        oc_body(
+            [
+                {"role": "developer", "content": "bounded"},
+                user(),
+                removed_call(),
+                removed_out(),
+            ]
+        )
+    )
+    tax = codex_0149_declared_tool_taxonomy(nb)
+
+    # Id-less replay not qualified: validated call denied, not dropped.
+    with pytest.raises(ValueError, match="codex_replay_reference_form_unavailable"):
+        codex_replay_request_candidates(
+            nb,
+            top_level_tool_taxonomy=tax,
+            allow_idless_tool_call_replay=False,
+            historical_flat_tool_identity=True,
+            require_call_completeness=True,
+        )
+
+    # Ambiguous declaration matches are never resolved historically.
+    ambiguous = {
+        "model": "synthetic",
+        "max_output_tokens": 64,
+        "input": [
+            decl(ns("functions", fn("oldtool")), ns("alpha", fn("oldtool"))),
+            user(),
+            call("oldtool", "call_amb"),
+        ],
+    }
+    with pytest.raises(ValueError, match="codex_replay_candidate_extraction_failed"):
+        codex_replay_request_candidates(ambiguous, require_call_completeness=True)

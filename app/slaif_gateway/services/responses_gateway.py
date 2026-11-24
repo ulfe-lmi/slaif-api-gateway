@@ -1397,11 +1397,19 @@ async def handle_response_create(
         client_module.policy_spec is not None
         and client_module.policy_spec.allow_idless_encrypted_reasoning
     )
+    # Selected native profile: flat historical function identity is proven by
+    # the existing same-key CALL-ID HMAC after local validation; it never
+    # joins the active tool authority.
+    historical_flat_tool_identity = bool(
+        client_module.policy_spec is not None
+        and client_module.policy_spec.historical_flat_tool_identity
+    )
     try:
         replay_candidates = codex_replay_request_candidates(
             policy_result.effective_body,
             allow_idless_tool_call_replay=allow_idless_tool_call_replay,
             allow_idless_encrypted_reasoning=allow_idless_encrypted_reasoning,
+            historical_flat_tool_identity=historical_flat_tool_identity,
             top_level_tool_taxonomy=codex_0149_continuation_taxonomy,
             codex_tool_call_bindings=(
                 positional_facts.call_bindings if positional_facts is not None else None

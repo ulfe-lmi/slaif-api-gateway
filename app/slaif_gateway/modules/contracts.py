@@ -99,6 +99,11 @@ class ResponsesClientPolicySpec:
     function_call_item_id_optional: bool = False
     custom_tool_call_item_id_optional: bool = False
     allow_idless_tool_call_replay: bool = False
+    # Selected native profile: flat historical tool identity (namespace-free
+    # function calls) may be proven by the existing same-key CALL-ID HMAC even
+    # when the tool is no longer declared in the current request. It never
+    # joins the active tool authority. Legacy presets stay False.
+    historical_flat_tool_identity: bool = False
     reasoning_visible_id_optional: bool = False
     reasoning_visible_content_fields: frozenset[str] = frozenset()
     reasoning_visible_content_types: frozenset[str] = frozenset()

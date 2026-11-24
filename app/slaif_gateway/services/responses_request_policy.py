@@ -55,6 +55,7 @@ from slaif_gateway.modules.clients.responses_support import (
     _FILE_DATA_URL_BASE64_SUFFIX,
     _BASE64_CHARS_RE,
 )
+from slaif_gateway.modules.clients.codex_0149 import CODEX_0149_DECLARED_TOOL_NAMESPACE
 from slaif_gateway.modules.contracts import ResponsesClientPolicySpec
 from slaif_gateway.modules.codex_named_context import (
     is_codex_named_context_output,
@@ -368,6 +369,10 @@ class ResponsesRequestPolicy:
                     allow_idless_encrypted_reasoning=(
                         self._codex_spec is not None
                         and self._codex_spec.allow_idless_encrypted_reasoning
+                    ),
+                    historical_flat_tool_identity=(
+                        self._codex_spec is not None
+                        and self._codex_spec.historical_flat_tool_identity
                     ),
                     top_level_tool_taxonomy=continuation_taxonomy,
                     codex_tool_call_bindings=(
@@ -2459,8 +2464,22 @@ class ResponsesRequestPolicy:
                     and declaration[2] == tool_type
                     and (namespace is None or declaration[0] == namespace)
                 ]
-                if len(matches) != 1 or (
-                    tool_type == "custom" and matches[0] not in self._codex_spec.custom_client_tools
+                # Selected native profile: a flat function call whose tool is
+                # no longer in the current declarations may still pass the
+                # roundtrip shape check. Ownership is proven later by the
+                # existing same-key CALL-ID HMAC; the historical identity
+                # never joins the active declaration set above.
+                historical = (
+                    len(matches) == 0
+                    and self._codex_spec.historical_flat_tool_identity
+                    and namespace is None
+                    and tool_type == "function"
+                    and top_level_tool_taxonomy is not None
+                )
+                if (len(matches) != 1 and not historical) or (
+                    len(matches) == 1
+                    and tool_type == "custom"
+                    and matches[0] not in self._codex_spec.custom_client_tools
                 ):
                     _raise(
                         f"input[{index}].name",
@@ -2474,7 +2493,11 @@ class ResponsesRequestPolicy:
                         "responses_codex_tool_roundtrip_invalid",
                         "Codex tool-call IDs must be unique.",
                     )
-                calls[call_id] = matches[0]
+                calls[call_id] = (
+                    matches[0]
+                    if matches
+                    else (CODEX_0149_DECLARED_TOOL_NAMESPACE, name, tool_type)
+                )
                 pending.add(call_id)
             elif item_type in {"function_call_output", "custom_tool_call_output"}:
                 if (
@@ -4975,6 +4998,7 @@ def codex_replay_request_candidates(
     top_level_tool_taxonomy: frozenset[tuple[str, str, str]] | None = None,
     allow_idless_tool_call_replay: bool = False,
     allow_idless_encrypted_reasoning: bool = False,
+    historical_flat_tool_identity: bool = False,
     codex_tool_call_bindings: Mapping[str, tuple[str | None, str, str]] | None = None,
     require_call_completeness: bool = False,
 ) -> tuple[CodexReplayRequestCandidate | CodexCompactionReplayCandidate, ...]:
@@ -5080,14 +5104,28 @@ def codex_replay_request_candidates(
             item_id is None and allow_idless_tool_call_replay
         )
         shape_ok = isinstance(call_id, str) and isinstance(name, str)
-        if shape_ok and len(matches) == 1:
+        # Selected native profile: a flat, namespace-free function call with
+        # no current declaration is emitted with its claimed identity so the
+        # existing same-key CALL-ID HMAC can prove (or deny) ownership.
+        # Explicit namespace, custom kind, or an active-set match never take
+        # this path, and it never alters the active declaration set.
+        historical = (
+            len(matches) == 0
+            and historical_flat_tool_identity
+            and namespace is None
+            and tool_type == "function"
+            and top_level_tool_taxonomy is not None
+        )
+        if shape_ok and (len(matches) == 1 or historical):
             if id_ok:
                 candidates.append(
                     CodexReplayRequestCandidate(
                         item_kind=str(item_type),
                         item_id=item_id,
                         call_id=call_id,
-                        tool_namespace=matches[0][0],
+                        tool_namespace=(
+                            matches[0][0] if matches else CODEX_0149_DECLARED_TOOL_NAMESPACE
+                        ),
                         tool_name=name,
                     )
                 )
