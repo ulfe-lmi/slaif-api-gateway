@@ -522,15 +522,17 @@ def _aux_reject(mutate, code):
     assert exc.value.error_code == code
 
 
-def test_aux_title_accepts_stream_bools():
-    for stream in (True, False):
-        result = _norm(_aux_body(stream=stream))
-        assert result.module_id == MOD_ID
-        assert result.module_version == "1"
-        assert result.endpoint == "/v1/responses"
-        assert result.body == _aux_body(stream=stream)
-        assert result.zero_argument_function_names == frozenset()
-        assert result.stream_profile == MOD_ID
+def test_aux_title_requires_stream_true():
+    # Every captured auxiliary summary request (auto-title and compaction)
+    # has stream true; false is an unobserved shape and fails closed.
+    result = _norm(_aux_body(stream=True))
+    assert result.module_id == MOD_ID
+    assert result.module_version == "1"
+    assert result.endpoint == "/v1/responses"
+    assert result.body == _aux_body(stream=True)
+    assert result.zero_argument_function_names == frozenset()
+    assert result.stream_profile == MOD_ID
+    _aux_reject(lambda b: b.update({"stream": False}), "opencode_1193_field_shape")
 
 
 def test_aux_title_rejects_field_set():
@@ -541,6 +543,7 @@ def test_aux_title_rejects_field_set():
 
 def test_aux_title_rejects_field_shapes():
     _aux_reject(lambda b: b.update({"stream": "true"}), "opencode_1193_field_shape")
+    _aux_reject(lambda b: b.update({"stream": False}), "opencode_1193_field_shape")
     _aux_reject(lambda b: b.update({"store": True}), "opencode_1193_field_shape")
     _aux_reject(lambda b: b.update({"input": []}), "opencode_1193_field_shape")
 
@@ -819,6 +822,7 @@ def test_normalize_rejects_authority_shapes():
 def test_policy_spec_owned_overrides():
     assert SPEC.allow_idless_encrypted_reasoning is True
     assert SPEC.allow_empty_visible_reasoning is True
+    assert SPEC.allow_sparse_visible_reasoning is True
     assert SPEC.require_stream_output_indices is True
     assert SPEC.reasoning_efforts == EFFORTS
     assert SPEC.client_metadata_keys == frozenset()

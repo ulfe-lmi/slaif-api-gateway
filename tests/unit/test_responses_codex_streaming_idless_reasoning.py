@@ -1,12 +1,18 @@
-"""Stream-level validation for the qualified id-less encrypted reasoning path.
+"""Stream-level validation for the selected-profile encrypted reasoning wire.
 
-The OpenCode Responses wire replays provider-encrypted reasoning as
-``response.output_item.done`` items carrying exactly
-``{type, summary, encrypted_content}`` -- no item ID, no status.  The
-``allow_idless_encrypted_reasoning`` profile flag (default False) is the only
-way such an item becomes valid; the captured reference then binds the
-ciphertext itself instead of a fabricated protocol ID.  Legacy ID-bearing
-streams stay byte-identical: their candidates carry ``encrypted_content=None``.
+Observed provider output items carry real IDs on both added and done; the
+pinned OpenCode SDK drops IDs only on the request-side replay it sends back
+in the next turn, which input eligibility covers separately.  Provider
+output without an ID therefore fails closed on every encrypted-replay
+profile, including the selected one.
+
+The ``allow_idless_encrypted_reasoning`` profile flag (default False) scopes
+the qualified OpenCode 1.19.3 additions: the exact observed id-bearing
+``{type, id, encrypted_content}`` added shape, and the capture of the
+ciphertext on replay candidates so the post-accounting v3 ciphertext alias
+can bind the ciphertext itself instead of a fabricated protocol ID.  Legacy
+profiles keep their single ID reference: their candidates carry
+``encrypted_content=None``.
 """
 
 from __future__ import annotations
@@ -81,16 +87,11 @@ def test_idless_encrypted_reasoning_done_rejected_without_replay_flag() -> None:
     assert validator.take_replay_reference_candidates() == ()
 
 
-def test_idless_encrypted_reasoning_done_accepted_when_flag_on() -> None:
+def test_idless_encrypted_reasoning_done_rejected_even_when_flag_on() -> None:
+    """Provider output requires real IDs; the SDK drops them request-side only."""
     validator = ResponsesStreamEventValidator(_profile())
-    assert validator.validate(_idless_reasoning_done()) is True
-    (candidate,) = validator.take_replay_reference_candidates()
-    assert candidate.item_kind == "reasoning"
-    assert candidate.item_id is None
-    assert candidate.encrypted_content == CIPHER
-    assert candidate.call_id is None
-    assert candidate.tool_namespace is None
-    assert candidate.tool_name is None
+    assert validator.validate(_idless_reasoning_done()) is False
+    assert validator.take_replay_reference_candidates() == ()
 
 
 def test_idless_encrypted_reasoning_added_rejected_even_when_flag_on() -> None:
@@ -173,18 +174,207 @@ def test_idbearing_reasoning_candidate_carries_cipher() -> None:
     assert candidate.encrypted_content == CIPHER
 
 
-def test_distinct_idless_ciphers_produce_distinct_candidates() -> None:
+def test_distinct_idless_ciphers_are_rejected_without_ids() -> None:
     validator = ResponsesStreamEventValidator(_profile())
-    assert validator.validate(_idless_reasoning_done(seq=1)) is True
+    assert validator.validate(_idless_reasoning_done(seq=1)) is False
     assert (
         validator.validate(
             _idless_reasoning_done(seq=2, item_overrides={"encrypted_content": CIPHER_B})
         )
+        is False
+    )
+    assert validator.take_replay_reference_candidates() == ()
+
+
+def test_idbearing_reasoning_candidate_cipher_gated_by_profile_flag() -> None:
+    """Legacy encrypted-replay profiles keep cipher-free single references."""
+    validator = ResponsesStreamEventValidator(
+        _profile(allow_idless_encrypted_reasoning=False)
+    )
+    payload = _idless_reasoning_done()
+    payload["item"]["id"] = "rs_1"
+    assert validator.validate(payload) is True
+    (candidate,) = validator.take_replay_reference_candidates()
+    assert candidate.item_kind == "reasoning"
+    assert candidate.item_id == "rs_1"
+    assert candidate.encrypted_content is None
+
+
+def _visible_reasoning_item(
+    event_type: str,
+    item_id: str,
+    seq: int,
+    *,
+    item_overrides: dict | None = None,
+    drop_fields: tuple[str, ...] = (),
+) -> dict:
+    item: dict = {
+        "type": "reasoning",
+        "id": item_id,
+        "summary": [{"type": "summary_text", "text": "visible"}],
+    }
+    if item_overrides is not None:
+        item.update(item_overrides)
+    for field in drop_fields:
+        item.pop(field)
+    return {
+        "type": f"response.output_item.{event_type}",
+        "output_index": 0,
+        "sequence_number": seq,
+        "item": item,
+    }
+
+
+def _visible_profile(**overrides) -> ResponsesStreamValidationProfile:
+    base = {
+        "allow_sparse_visible_reasoning": True,
+        "allow_empty_visible_reasoning": True,
+    }
+    base.update(overrides)
+    return _profile(**base)
+
+
+def test_selected_profile_visible_reasoning_lifecycle_omits_content_key() -> None:
+    """Captured native lifecycle: added without summary, done with summary."""
+    validator = ResponsesStreamEventValidator(_visible_profile())
+    assert (
+        validator.validate(
+            _visible_reasoning_item("added", "vs_1", seq=0, drop_fields=("summary",))
+        )
         is True
     )
-    candidates = validator.take_replay_reference_candidates()
-    assert [c.encrypted_content for c in candidates] == [CIPHER, CIPHER_B]
-    assert all(c.item_id is None for c in candidates)
+    assert validator.validate(_visible_reasoning_item("done", "vs_1", seq=1)) is True
+    # A second item may carry the content key; both shapes stay bounded.
+    assert (
+        validator.validate(
+            _visible_reasoning_item(
+                "added", "vs_2", seq=2, item_overrides={"content": []}
+            )
+        )
+        is True
+    )
+    assert (
+        validator.validate(
+            _visible_reasoning_item(
+                "done",
+                "vs_2",
+                seq=3,
+                item_overrides={
+                    "content": [{"type": "reasoning_text", "text": "visible"}]
+                },
+            )
+        )
+        is True
+    )
+    # Visible states grant zero opaque authority: no candidates are captured.
+    assert validator.take_replay_reference_candidates() == ()
+
+
+def test_selected_profile_visible_reasoning_empty_cipher_states() -> None:
+    """Absent/null/empty cipher on added and done stays a visible item."""
+    for cipher_value in (None, ""):
+        validator = ResponsesStreamEventValidator(_visible_profile())
+        assert (
+            validator.validate(
+                _visible_reasoning_item(
+                    "added",
+                    "vs_e",
+                    seq=0,
+                    item_overrides={"encrypted_content": cipher_value},
+                )
+            )
+            is True
+        )
+    # Done closure with an explicit empty cipher and empty summary.
+    validator = ResponsesStreamEventValidator(_visible_profile())
+    assert (
+        validator.validate(_visible_reasoning_item("added", "vs_e", seq=0))
+        is True
+    )
+    assert (
+        validator.validate(
+            _visible_reasoning_item(
+                "done",
+                "vs_e",
+                seq=1,
+                item_overrides={"summary": [], "encrypted_content": ""},
+            )
+        )
+        is True
+    )
+    assert validator.take_replay_reference_candidates() == ()
+
+
+def test_selected_profile_visible_reasoning_explicit_null_summary_rejected() -> None:
+    validator = ResponsesStreamEventValidator(_visible_profile())
+    assert (
+        validator.validate(
+            _visible_reasoning_item(
+                "added", "vs_n", seq=0, item_overrides={"summary": None}
+            )
+        )
+        is False
+    )
+    # Explicit null on the done of an active item is malformed, not an
+    # omission: it stays denied while the item itself was addable.
+    validator = ResponsesStreamEventValidator(_visible_profile())
+    assert (
+        validator.validate(_visible_reasoning_item("added", "vs_n1", seq=0))
+        is True
+    )
+    assert (
+        validator.validate(
+            _visible_reasoning_item(
+                "done", "vs_n1", seq=1, item_overrides={"summary": None}
+            )
+        )
+        is False
+    )
+    assert validator.take_replay_reference_candidates() == ()
+
+
+def test_legacy_visible_reasoning_keeps_content_key_required() -> None:
+    """Legacy sparse-visible profiles stay byte-identical (content required)."""
+    validator = ResponsesStreamEventValidator(
+        _visible_profile(allow_empty_visible_reasoning=False)
+    )
+    assert (
+        validator.validate(
+            _visible_reasoning_item(
+                "added", "vs_l", seq=0, item_overrides={"content": []}
+            )
+        )
+        is True
+    )
+    # Legacy done requires the content key even when empty.
+    assert (
+        validator.validate(
+            _visible_reasoning_item(
+                "done", "vs_l", seq=1, item_overrides={"content": []}
+            )
+        )
+        is True
+    )
+    validator = ResponsesStreamEventValidator(
+        _visible_profile(allow_empty_visible_reasoning=False)
+    )
+    assert (
+        validator.validate(
+            _visible_reasoning_item(
+                "added", "vs_l2", seq=0, drop_fields=("summary",)
+            )
+        )
+        is False
+    )
+    validator = ResponsesStreamEventValidator(
+        _visible_profile(allow_empty_visible_reasoning=False)
+    )
+    assert (
+        validator.validate(
+            _visible_reasoning_item("done", "vs_l2", seq=1, drop_fields=("summary",))
+        )
+        is False
+    )
 
 
 def test_visible_idless_reasoning_done_preserves_legacy_behavior() -> None:

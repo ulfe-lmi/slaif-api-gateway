@@ -208,7 +208,8 @@ async def test_idless_reasoning_rejects_duplicate_identical_cipher() -> None:
 
 @pytest.mark.asyncio
 async def test_idpresent_reasoning_with_valid_cipher_is_accepted() -> None:
-    """ID-bearing issuance persists the v1 row plus a v3 ciphertext alias."""
+    """ID-bearing issuance persists the v1 row; the v3 ciphertext alias is
+    issued only for the selected native profile (flag on)."""
 
     key_id = uuid.uuid4()
     route_id = uuid.uuid4()
@@ -236,13 +237,21 @@ async def test_idpresent_reasoning_with_valid_cipher_is_accepted() -> None:
             now=now,
             allow_idless_encrypted_reasoning=flag,
         )
-        assert len(repository.rows) == 2
+        if flag:
+            # Selected native profile: v1 ID reference plus v3 alias.
+            assert len(repository.rows) == 2
+        else:
+            # Legacy profiles keep their single ID reference.
+            assert len(repository.rows) == 1
         v1_row = next(row for row in repository.rows if row.item_id_hmac == v1_digest)
-        v3_row = next(
-            row for row in repository.rows if row.item_id_hmac == _expected_v3_digest(_CIPHER)
-        )
-        assert v1_row.id != v3_row.id
-        assert v1_row.hmac_key_version == v3_row.hmac_key_version
+        if flag:
+            v3_row = next(
+                row
+                for row in repository.rows
+                if row.item_id_hmac == _expected_v3_digest(_CIPHER)
+            )
+            assert v1_row.id != v3_row.id
+            assert v1_row.hmac_key_version == v3_row.hmac_key_version
         for row in repository.rows:
             assert row.item_kind == "reasoning"
             assert row.call_id_hmac is None
@@ -251,19 +260,6 @@ async def test_idpresent_reasoning_with_valid_cipher_is_accepted() -> None:
             assert _HEX64.fullmatch(row.item_id_hmac) is not None
             assert _CIPHER not in row.item_id_hmac
             assert row.expires_at == now + CODEX_REPLAY_REFERENCE_TTL
-
-        # SDK-style idless replay matches the v3 alias row.
-        authorization = await service.verify_owned_replay(
-            candidates=(_idless_reasoning(),),
-            gateway_key_id=key_id,
-            now=now + timedelta(minutes=1),
-            allow_idless_encrypted_reasoning=True,
-        )
-        (reference,) = authorization.references
-        assert reference.item_kind == "reasoning"
-        assert reference.route_id == route_id
-        assert reference.upstream_model == "gpt-test"
-        assert reference.expires_at == v3_row.expires_at
 
         # ID-bearing replay matches the v1 row with the legacy (no-flag) path.
         authorization = await service.verify_owned_replay(
@@ -277,6 +273,31 @@ async def test_idpresent_reasoning_with_valid_cipher_is_accepted() -> None:
         assert reference.item_kind == "reasoning"
         assert reference.route_id == route_id
         assert reference.expires_at == v1_row.expires_at
+        if flag:
+            # SDK-style idless replay matches the v3 alias row.
+            authorization = await service.verify_owned_replay(
+                candidates=(_idless_reasoning(),),
+                gateway_key_id=key_id,
+                now=now + timedelta(minutes=1),
+                allow_idless_encrypted_reasoning=True,
+            )
+            (reference,) = authorization.references
+            assert reference.item_kind == "reasoning"
+            assert reference.route_id == route_id
+            assert reference.upstream_model == "gpt-test"
+            assert reference.expires_at == v3_row.expires_at
+        else:
+            # Without the v3 alias, id-less replay stays denied.
+            with pytest.raises(CodexReplayReferenceError) as exc_info:
+                await service.verify_owned_replay(
+                    candidates=(_idless_reasoning(),),
+                    gateway_key_id=key_id,
+                    now=now + timedelta(minutes=1),
+                    allow_idless_encrypted_reasoning=True,
+                )
+            assert exc_info.value.error_code == (
+                "responses_codex_replay_reference_not_found"
+            )
 
 
 @pytest.mark.asyncio

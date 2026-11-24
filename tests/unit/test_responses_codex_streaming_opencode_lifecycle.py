@@ -340,6 +340,202 @@ def test_cumulative_cipher_byte_cap_enforced() -> None:
     )
 
 
+# --- orphan done rejection under required indexes --------------------------
+
+
+def _function_item(
+    item_type: str,
+    *,
+    item_id: str = "fc_1",
+    call_id: str = "call_1",
+) -> dict:
+    return {
+        "type": "function_call",
+        "id": item_id,
+        "name": "probe",
+        "arguments": "{}",
+        "call_id": call_id,
+    }
+
+
+def _function_event(
+    event_type: str,
+    *,
+    seq: int = 0,
+    item_id: str = "fc_1",
+    call_id: str = "call_1",
+    output_index: int = 0,
+) -> dict:
+    return {
+        "type": f"response.output_item.{event_type}",
+        "output_index": output_index,
+        "sequence_number": seq,
+        "item": _function_item(item_id, item_id=item_id, call_id=call_id),
+    }
+
+
+def test_orphan_function_call_done_rejected() -> None:
+    """A done without a preceding added is an orphan and fails closed."""
+    validator = _validator(declared_client_tools=TAXONOMY)
+    assert validator.validate(_function_event("done")) is False
+    assert validator.take_replay_reference_candidates() == ()
+
+
+def test_orphan_encrypted_reasoning_done_rejected() -> None:
+    validator = _validator()
+    assert validator.validate(_id_done()) is False
+    assert validator.take_replay_reference_candidates() == ()
+
+
+def test_added_done_lifecycle_function_call_accepted() -> None:
+    """Normal lifecycle: added registers the index, done reuses it."""
+    validator = _validator(declared_client_tools=TAXONOMY)
+    _run(validator, _function_event("added", seq=0), _function_event("done", seq=1))
+    (candidate,) = validator.take_replay_reference_candidates()
+    assert candidate.item_kind == "function_call"
+    assert candidate.item_id == "fc_1"
+    assert candidate.call_id == "call_1"
+    assert candidate.encrypted_content is None
+    # A second done for the same item is rejected (seen-ID guard).
+    assert validator.validate(_function_event("done", seq=2)) is False
+
+
+def test_done_reuses_added_index_or_rejected() -> None:
+    validator = _validator(declared_client_tools=TAXONOMY)
+    _run(validator, _function_event("added", seq=0))
+    assert validator.validate(_function_event("done", seq=1, output_index=1)) is False
+
+
+def test_done_at_index_used_by_other_item_rejected() -> None:
+    validator = _validator(declared_client_tools=TAXONOMY)
+    _run(validator, _cipher_added(item_id="rs_1", output_index=0))
+    assert (
+        validator.validate(
+            _function_event("done", item_id="fc_1", output_index=0)
+        )
+        is False
+    )
+    assert validator.take_replay_reference_candidates() == ()
+
+
+# --- visible reasoning lifecycle on the selected native profile ------------
+
+
+def _visible_validator(**overrides) -> ResponsesStreamEventValidator:
+    base = {
+        "allow_sparse_visible_reasoning": True,
+        "allow_empty_visible_reasoning": True,
+    }
+    base.update(overrides)
+    return _validator(**base)
+
+
+def _visible_event(
+    event_type: str,
+    *,
+    seq: int = 0,
+    item_id: str = "vs_1",
+    output_index: int = 0,
+    item_overrides: dict | None = None,
+    drop_fields: tuple[str, ...] = (),
+) -> dict:
+    item: dict = {
+        "type": "reasoning",
+        "id": item_id,
+        "summary": [{"type": "summary_text", "text": "visible"}],
+    }
+    if item_overrides is not None:
+        item.update(item_overrides)
+    for field in drop_fields:
+        item.pop(field)
+    return {
+        "type": f"response.output_item.{event_type}",
+        "output_index": output_index,
+        "sequence_number": seq,
+        "item": item,
+    }
+
+
+def test_visible_reasoning_lifecycle_selected_profile_no_opaque_authority() -> None:
+    validator = _visible_validator()
+    _run(
+        validator,
+        _visible_event("added", seq=0, drop_fields=("summary",)),
+        _visible_event("done", seq=1),
+    )
+    # Empty cipher states on the done closure stay visible.
+    assert (
+        validator.validate(
+            _visible_event(
+                "added",
+                seq=2,
+                item_id="vs_2",
+                output_index=1,
+                item_overrides={"encrypted_content": ""},
+            )
+        )
+        is True
+    )
+    assert (
+        validator.validate(
+            _visible_event(
+                "done",
+                seq=3,
+                item_id="vs_2",
+                output_index=1,
+                item_overrides={"summary": [], "encrypted_content": ""},
+            )
+        )
+        is True
+    )
+    # Visible states capture no candidate: zero opaque-cipher authority.
+    assert validator.take_replay_reference_candidates() == ()
+
+
+def test_visible_reasoning_explicit_null_summary_rejected_selected_profile() -> None:
+    validator = _visible_validator()
+    assert (
+        validator.validate(
+            _visible_event(
+                "added", seq=0, item_overrides={"summary": None}
+            )
+        )
+        is False
+    )
+    validator = _visible_validator()
+    _run(validator, _visible_event("added", seq=0))
+    assert (
+        validator.validate(
+            _visible_event("done", seq=1, item_overrides={"summary": None})
+        )
+        is False
+    )
+
+
+def test_visible_reasoning_legacy_profile_keeps_content_key() -> None:
+    """Legacy sparse-visible (local context) stays byte-identical."""
+    legacy = _visible_validator(allow_empty_visible_reasoning=False)
+    assert (
+        legacy.validate(
+            _visible_event("added", seq=0, item_overrides={"content": []})
+        )
+        is True
+    )
+    assert (
+        legacy.validate(
+            _visible_event("done", seq=1, item_overrides={"content": []})
+        )
+        is True
+    )
+    legacy = _visible_validator(allow_empty_visible_reasoning=False)
+    # Legacy added requires the summary key; omission is not qualified.
+    assert (
+        legacy.validate(_visible_event("added", seq=0, drop_fields=("summary",)))
+        is False
+    )
+    legacy = _visible_validator(allow_empty_visible_reasoning=False)
+    # Legacy done requires the content key even when empty.
+    assert legacy.validate(_visible_event("done", seq=1)) is False
 # --- pair-local top-level profile dispatch ---------------------------------
 
 
