@@ -619,7 +619,11 @@ The separate pinned OpenCode Responses module
 `opencode-1.19.3-responses-v1` (objective 228-a) is a preprotected
 candidate selected from the key metadata pin
 `responses_policy.client_module`; its protected live-qualification gate is
-`not_run`. See [responses-compatibility.md](responses-compatibility.md).
+`not_run`. The gateway's strict zero-retry rule is gateway policy, not a
+native-client bound: the pinned OpenCode native session hardcodes
+`RETRY_MAX_RETRIES=5` with no override above the SDK default, so no
+zero-native-retry guarantee is claimed for this module. See
+[responses-compatibility.md](responses-compatibility.md).
 
 ## Real-Provider Smoke Test
 
