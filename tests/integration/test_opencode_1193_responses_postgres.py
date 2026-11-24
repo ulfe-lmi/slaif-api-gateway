@@ -6,6 +6,9 @@ settles a real streaming tool loop (encrypted reasoning plus flat
 function call) through ``handle_response_create`` against real PostgreSQL
 quota, ledger, reservation, and replay-reference state, with the provider
 mocked only at the gateway adapter boundary (no upstream HTTP wire).
+A final group settles the same loop with the REAL provider factory and
+adapter in place, intercepting only the upstream HTTP transport at
+loopback.
 The remaining cases pin the negative paths with no side effects.
 """
 
@@ -17,7 +20,9 @@ import json
 from types import SimpleNamespace
 import uuid
 
+import httpx
 import pytest
+import respx
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -301,19 +306,29 @@ def _route_caps(caps: tuple[str, ...]) -> dict:
     }
 
 
-def _probe(route_id: uuid.UUID, capabilities: dict) -> SimpleNamespace:
+def _probe(
+    route_id: uuid.UUID,
+    capabilities: dict,
+    *,
+    provider: str = _PROVIDER,
+    provider_kind: str = "openai_compatible",
+    base_url: str = "http://127.0.0.1:18031/v1",
+    api_key_env_var: str = "UPSTREAM_SERVICE_TOKEN",
+    public_model: str = _PUBLIC_MODEL,
+    upstream_model: str = _UPSTREAM,
+) -> SimpleNamespace:
     return SimpleNamespace(
-        provider=_PROVIDER,
-        provider_kind="openai_compatible",
-        provider_base_url="http://127.0.0.1:18031/v1",
-        provider_api_key_env_var="UPSTREAM_SERVICE_TOKEN",
+        provider=provider,
+        provider_kind=provider_kind,
+        provider_base_url=base_url,
+        provider_api_key_env_var=api_key_env_var,
         provider_timeout_seconds=10,
         provider_max_retries=0,
         route_id=route_id,
-        resolved_model=_UPSTREAM,
-        requested_model=_PUBLIC_MODEL,
+        resolved_model=upstream_model,
+        requested_model=public_model,
         route_match_type="exact",
-        route_pattern=_PUBLIC_MODEL,
+        route_pattern=public_model,
         priority=1,
         supports_streaming=True,
         capabilities=capabilities,
@@ -321,7 +336,13 @@ def _probe(route_id: uuid.UUID, capabilities: dict) -> SimpleNamespace:
 
 
 async def _seed_opencode_world(
-    session: AsyncSession, *, caps: tuple[str, ...], route: object = None
+    session: AsyncSession,
+    *,
+    caps: tuple[str, ...],
+    route: object = None,
+    provider: str = _PROVIDER,
+    public_model: str = _PUBLIC_MODEL,
+    upstream_model: str = _UPSTREAM,
 ):
     now = datetime.now(UTC)
     unique = uuid.uuid4().hex
@@ -345,7 +366,7 @@ async def _seed_opencode_world(
         rate_limit_tokens_per_minute=120_000,
         max_concurrent_requests=4,
         allow_all_models=False,
-        allowed_models=[_PUBLIC_MODEL],
+        allowed_models=[public_model],
         allow_all_endpoints=False,
         allowed_endpoints=["/v1/responses"],
         metadata_json={
@@ -354,7 +375,7 @@ async def _seed_opencode_world(
                 "allowed_capabilities": list(caps),
                 "client_module": dict(_PIN),
             },
-            "allowed_providers": [_PROVIDER],
+            "allowed_providers": [provider],
         },
     )
     # Pre-existing settled usage. This world seeds NO ledger rows, so tests
@@ -364,14 +385,14 @@ async def _seed_opencode_world(
     key.requests_used_total = 9
     if route is None:
         route = await ModelRoutesRepository(session).create_model_route(
-            requested_model=_PUBLIC_MODEL,
-            provider=_PROVIDER,
-            upstream_model=_UPSTREAM,
+            requested_model=public_model,
+            provider=provider,
+            upstream_model=upstream_model,
             endpoint="/v1/responses",
         )
         await PricingRulesRepository(session).create_pricing_rule(
-            provider=_PROVIDER,
-            upstream_model=_UPSTREAM,
+            provider=provider,
+            upstream_model=upstream_model,
             valid_from=now - timedelta(minutes=1),
             endpoint="/v1/responses",
             currency="EUR",
@@ -548,11 +569,18 @@ def _patch_streaming(
 
 
 async def _settle_turn1(
-    session: AsyncSession, auth: object, settings: Settings, key: object
+    session: AsyncSession,
+    auth: object,
+    settings: Settings,
+    key: object,
+    *,
+    model: str = _PUBLIC_MODEL,
 ) -> None:
     """Issue turn 1 and pin its successful settlement (completed, not failed)."""
+    body = _full_body(stream=True)
+    body["model"] = model
     response = await handle_response_create(
-        payload=_payload(_full_body(stream=True)),
+        payload=_payload(body),
         authenticated_key=auth,
         settings=settings,
     )
@@ -843,3 +871,158 @@ async def test_opencode_streaming_toolloop_missing_replay_capability_denied(
     assert key.tokens_used_total == 12_345
     assert len(await _ledger_rows(session, key.id)) == 0
     assert adapter.calls == 0
+
+
+# --- HTTP-mock factory-adapter settlement (228-b focused item) --------------
+#
+# These cases leave ``gateway.get_provider_adapter`` UNPATCHED: the real
+# provider factory resolves the route probe to the registered OpenAI or
+# OpenAI-compatible server module, performs the static client/server pair
+# check, reads the operator credential from the route-named environment
+# variable, and the real adapter issues a real ``httpx`` call that ``respx``
+# intercepts at loopback. Request body shape, public-to-upstream model
+# substitution, Bearer substitution, and PostgreSQL settlement are therefore
+# real gateway behavior; only the upstream HTTP transport is mocked. No
+# live provider, LAN, or real credential is involved.
+
+
+def _sse_body(events: list[dict]) -> bytes:
+    return b"".join(b"data: " + json.dumps(event).encode() + b"\n\n" for event in events)
+
+
+_MOCK_ADAPTER_CASES = [
+    {
+        "provider": "openai",
+        "provider_kind": "openai",
+        "base_url": "http://127.0.0.1:18099/v1",
+        "api_key_env_var": "MOCK228B_OPENAI_UPSTREAM_KEY",
+        "api_key_value": "mock228b-openai-upstream-secret",
+        "public_model": "oc228b-openai-model",
+        "upstream_model": "oc228b-openai-upstream",
+    },
+    {
+        "provider": "mock228b-compat",
+        "provider_kind": "openai_compatible",
+        "base_url": "http://127.0.0.1:18100/v1",
+        "api_key_env_var": "MOCK228B_COMPAT_UPSTREAM_KEY",
+        "api_key_value": "mock228b-compat-upstream-secret",
+        "public_model": "oc228b-compat-model",
+        "upstream_model": "oc228b-compat-upstream",
+    },
+]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "case", _MOCK_ADAPTER_CASES, ids=["openai-native", "openai-compatible"]
+)
+async def test_mock_http_factory_adapter_settles_both_turns(
+    async_test_session, monkeypatch, case
+):
+    session = async_test_session
+    owner, cohort, key, route = await _seed_opencode_world(
+        session,
+        caps=_OPENCODE_CAPS,
+        provider=case["provider"],
+        public_model=case["public_model"],
+        upstream_model=case["upstream_model"],
+    )
+    monkeypatch.setenv(case["api_key_env_var"], case["api_key_value"])
+    monkeypatch.delenv("OPENAI_UPSTREAM_API_KEY", raising=False)
+
+    async def db(request=None):
+        yield session
+
+    monkeypatch.setattr(gateway, "_get_db_session_after_auth_header_check", db)
+    monkeypatch.setattr(
+        gateway,
+        "_resolve_responses_route",
+        _gate_route_resolver(
+            _probe(
+                route.id,
+                _route_caps(_OPENCODE_CAPS),
+                provider=case["provider"],
+                provider_kind=case["provider_kind"],
+                base_url=case["base_url"],
+                api_key_env_var=case["api_key_env_var"],
+                public_model=case["public_model"],
+                upstream_model=case["upstream_model"],
+            )
+        ),
+    )
+
+    auth = _auth_key(key)
+    with respx.mock(assert_all_called=False) as router:
+        upstream = router.route(method="POST", url=f"{case['base_url']}/responses")
+        upstream.mock(
+            side_effect=[
+                httpx.Response(
+                    200,
+                    content=_sse_body(_turn1_events()),
+                    headers={"content-type": "text/event-stream"},
+                ),
+                httpx.Response(
+                    200,
+                    content=_sse_body(_turn2_events()),
+                    headers={"content-type": "text/event-stream"},
+                ),
+            ]
+        )
+
+        await _settle_turn1(session, auth, _settings(), key, model=case["public_model"])
+
+        body2 = _full_body(stream=True)
+        body2["model"] = case["public_model"]
+        body2["input"] = _turn2_input()
+        response2 = await handle_response_create(
+            payload=_payload(body2), authenticated_key=auth, settings=_settings()
+        )
+        joined2 = "".join([s async for s in response2.body_iterator])
+        assert "response.completed" in joined2
+        assert "response.failed" not in joined2
+
+        # Wire facts: exactly one upstream POST per admitted turn, exact
+        # public-to-upstream model substitution, stream true, and the
+        # operator credential in the Bearer header only (never in the body).
+        assert upstream.calls.call_count == 2
+        for call in upstream.calls:
+            request_body = json.loads(call.request.content)
+            assert request_body["model"] == case["upstream_model"]
+            assert request_body["stream"] is True
+            assert (
+                call.request.headers["authorization"] == f"Bearer {case['api_key_value']}"
+            )
+            content = call.request.content
+            assert _HMAC_SECRET.encode() not in content
+            assert key.token_hash.encode() not in content
+            assert case["api_key_value"].encode() not in content
+
+    await session.refresh(key)
+    # Settlement mirrors the adapter-mocked main case exactly: two finalized
+    # turns of 5 in / 2 out at the seeded 2.00/8.00 per-1M pricing.
+    assert key.requests_used_total == 11
+    assert key.tokens_used_total == 12_359
+    assert key.tokens_reserved_total == 0
+    assert key.requests_reserved_total == 0
+    assert key.cost_used_eur == Decimal("7.250052")
+    refs = await _ref_rows(session, key.id)
+    assert len(refs) == 3
+    assert {r.item_id_hmac for r in refs} == {D_V1_RS, D_V3_CIPHER, D_V1_FC}
+    assert {r.item_kind for r in refs} == {"reasoning", "function_call"}
+    fc = next(r for r in refs if r.item_kind == "function_call")
+    assert fc.call_id_hmac == D_V1_CALL
+    assert fc.tool_namespace == "functions"
+    assert fc.tool_name == "read"
+    assert fc.route_id == route.id
+    assert fc.provider == case["provider"]
+    assert fc.upstream_model == case["upstream_model"]
+    for reasoning in (r for r in refs if r.item_kind == "reasoning"):
+        assert reasoning.call_id_hmac is None
+        assert reasoning.tool_namespace is None
+        assert reasoning.tool_name is None
+    ledger = await _ledger_rows(session, key.id)
+    assert len(ledger) == 2
+    assert all(row.success is True and row.accounting_status == "finalized" for row in ledger)
+    reservations = await _reservation_rows(session, key.id)
+    assert len(reservations) == 2
+    assert all(reservation.status == "finalized" for reservation in reservations)
