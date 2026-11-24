@@ -20,6 +20,14 @@ Changing a gateway limit adds no backend capacity. Changing the loaded model or
 chat template can require requalification even when the public slug stays the
 same. Keep all three layers consistent.
 
+Conversation item counts are a separate gateway guard. The deployment's
+`RESPONSES_MAX_INPUT_ITEMS=65536` allows up to 65,536 top-level input items,
+including reasoning and tool history; it does not raise token, byte or backend
+context limits. This environment override requires rolling the HTTP API workers
+and applies across Responses routes. Follow the
+[input-item ceiling runbook](runbooks/codex-input-item-count.md) for verification
+and rollback; the packaged default remains 128.
+
 ## Worked budgets
 
 The example uses decimal token counts: **64K = 64,000; 128K = 128,000**.
