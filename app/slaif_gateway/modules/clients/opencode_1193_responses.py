@@ -13,9 +13,10 @@ request forms. The main streamed form carries the nine top-level fields
 ``include`` limited to ``reasoning.encrypted_content``, ``reasoning``
 limited to a five-valued ``effort``). The default auto-title auxiliary
 form carries exactly the seven fields without ``tool_choice``/``tools``
-(``stream`` bool, ``store`` false); the observed f3 capture sent
-``stream`` true although the order wording expected false, both bools are
-accepted, and the discrepancy is documented in the consolidated record.
+(``stream`` true, ``store`` false); every captured auxiliary summary
+request (auto-title and compaction) has ``stream`` true, so only true is
+accepted -- the earlier order wording expecting false is corrected by the
+captured receipts.
 Input accepts typeless developer/user messages, replayed typeless
 ``assistant`` ``output_text`` history (history only, not authority),
 id-less ``function_call``/``function_call_output`` replay, and id-less
@@ -436,6 +437,11 @@ OPENCODE_1193_RESPONSES_POLICY_SPEC = dataclasses.replace(
     # carries no ciphertext authority: v3 ciphertext references are issued
     # only from nonempty validated finalized output.
     allow_empty_visible_reasoning=True,
+    # The captured OpenCode 1.19.3 visible reasoning lifecycle (added item
+    # without summary, done item with summary and no content key) is a
+    # property of this selected native profile's wire, not of the local
+    # server context.
+    allow_sparse_visible_reasoning=True,
     # Native wire is flat (no namespace field): a removed function tool may
     # still replay after its same-key CALL-ID HMAC proof, without ever
     # rejoining the active declaration set.
@@ -807,10 +813,10 @@ class Opencode1193ResponsesClientModule:
                     "opencode_1193_field_shape",
                 )
         else:
-            # Observed auxiliary capture has ``stream`` true although the
-            # order wording expected false; both bools are accepted and the
-            # discrepancy is documented in the consolidated record.
-            if not isinstance(body["stream"], bool):
+            # Every captured auxiliary summary request (auto-title and
+            # compaction) has ``stream`` true; the earlier order wording
+            # expected false and is corrected by the captured receipts.
+            if body["stream"] is not True:
                 raise _error(
                     "The OpenCode 1.19.3 stream field has an invalid captured value",
                     "opencode_1193_field_shape",
