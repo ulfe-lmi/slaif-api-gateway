@@ -1177,6 +1177,54 @@ neither written nor printed. Pytest exercises only pure harness validators; CI,
 startup, Docker, migrations, and HPC verification never invoke the installed
 Codex binary.
 
+## OpenCode Responses Client Profile And Id-Less Reasoning Replay Boundary
+
+The pinned native OpenCode Responses module
+`opencode-1.19.3-responses-v1` is selected only from the authenticated
+server-side key metadata tuple
+`metadata_json.responses_policy.client_module` (`{id, version,
+fixture_sha256}`). An absent or `null` pin leaves the default Responses
+module unchanged. A present malformed, unknown, stale, or
+digest-mismatched pin fails closed before admission
+(`client_module_metadata_invalid`, `unsupported_client_module`, or
+`client_module_fixture_mismatch`; a present-but-`null` digest is a fixture
+mismatch), and a key/route pair outside the two reviewed server pairs,
+`openai` and `openai-compatible`, is denied
+`400 incompatible_client_server_pair` before forwarding. Headers, model
+names, and request metadata never select a module.
+
+The pinned SDK replays encrypted reasoning items without item IDs or
+statuses. A policy flag alone was therefore unsafe: the prior reasoning
+replay HMAC bound the item ID only, and the extraction path silently
+omitted ID-less encrypted reasoning, so allowing ID-less ciphertext would
+have admitted references that no keyed digest authenticated. The module
+instead uses an owned ciphertext-derived reference path: a domain-separated
+v3 digest (`slaif-codex-replay:v3:reasoning:{len}:{ciphertext}`) over the
+bounded ciphertext (non-empty, at most 1,048,576 bytes), held in immediate
+memory only and stored as an HMAC-only reference after successful finalized
+output. The flag `allow_idless_encrypted_reasoning` remains default `False`
+in every other policy spec and is AND-ed with
+`codex_encrypted_reasoning_event_requested` in the streaming profile
+policy. No fabricated protocol ID is introduced, no raw reasoning content
+is persisted or exposed, and no schema change is made. References are
+bound to the same key and the same route/provider/model; duplicate
+identical ciphers in one request, missing, empty, or oversized ciphertext,
+id-present reasoning carrying a ciphertext, altered, foreign, or stale
+references, and route/provider/model mismatch are all denied. Present
+invalid IDs and any issued-ID/ciphertext association keep their existing
+denials, and the legacy Codex and default presets, including the legacy
+digest bytes, are unchanged.
+
+The gateway strict zero-retry forwarding rule is a gateway policy, not a
+native client guarantee. The pinned OpenCode session hardcodes a bounded
+native retry policy (`RETRY_MAX_RETRIES=5`, no override parameter) above
+the SDK default of zero retries, so zero native HTTP retries are never
+claimed for this profile. The 227-c human-authorized bounded LAN Chat
+qualification remains the only recorded stock-retry exception, applied to
+that execution only. The module is a preprotected candidate: the protected
+live-qualification gate is `not_run`, and nothing in this boundary grants
+live qualification or production certification.
+
 ## Catalog Refresh Research Boundary
 
 The opt-in catalog-refresh research fallback (`collect --research`) runs a
