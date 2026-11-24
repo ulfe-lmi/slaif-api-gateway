@@ -1179,6 +1179,7 @@ The local/stored Responses foundation is implemented with:
 - route capability unit tests;
 - provider adapter tests for OpenAI and OpenRouter Responses forwarding;
 - endpoint allowlist and pipeline-ordering tests;
+- pinned OpenCode 1.19.3 Responses client-module unit and PostgreSQL no-side-effect tests;
 - PostgreSQL-backed mocked official OpenAI Python client E2E coverage.
 
 Broader hosted-tool, background, and streaming
@@ -1248,6 +1249,100 @@ This round changes no HTTP acceptance, frozen profile, or accounting
 behavior; gateway and adapter integration are staged for later
 same-PR rounds.
 
+## OpenCode 1.19.3 Responses client profile (objective 228-a)
+
+Pinned native OpenCode Responses support is a separate authenticated
+client module, `opencode_1193_responses` (module id
+`opencode-1.19.3-responses-v1`, engine version `1`), bound to one packaged
+profile document under
+`modules/clients/profiles/opencode-1.19.3-responses.json` (fixture digest
+`592c5d1baa7aa3a805320411f3f961521ba72b30cc34cafe01cb755ddf69f0ff`). The
+profile DATA records the reviewed client identity — OpenCode 1.19.3
+(source tag `v1.19.3`, source commit
+`e3c4eb242585dcd77be1a867391b7c25fd47ce52`), `@ai-sdk/openai` 3.0.88,
+Responses wire API — and a frozen dialect: reasoning efforts
+`minimal`…`xhigh`, the nine bounded local tool names `bash`, `edit`,
+`glob`, `grep`, `read`, `skill`, `task`, `todowrite`, `write`, and bounded
+declaration limits. The profile ships as validated DATA, not as a Python
+tool-name inventory; see the [module architecture
+description](module-architecture.md).
+
+The module is selected ONLY from the authenticated server-side key
+metadata tuple `metadata_json.responses_policy.client_module` (`{id,
+version, fixture_sha256}`). An absent or `null` pin keeps the default
+Responses module unchanged; a present malformed, unknown, stale, or
+digest-mismatched pin fails closed (`client_module_metadata_invalid`,
+`unsupported_client_module`, or `client_module_fixture_mismatch`) before
+admission — a present-but-`null` digest is rejected as a fixture mismatch.
+Headers, model names, and request metadata never select a module. Pin
+changes are data-only: new document bytes with a new digest, a re-pinned
+operator key, and process restart; the module introduces no database
+migration and no engine upgrade.
+
+The normalized body is the exact captured first-turn shape and is
+streaming-only: the top-level field set is exactly `{include, input,
+max_output_tokens, model, reasoning, store, stream, tool_choice, tools}`;
+`stream` must be `true` (a `false` value is denied with
+`opencode_1193_field_shape`), `store` must be `false`, `tool_choice` must
+be `"auto"`, `include` is limited to `reasoning.encrypted_content`, input
+roles are `developer`/`user` (sent without a type field), and `tools` is
+the flat strict function declaration list drawn from the nine bounded
+names. `reasoning` is exactly
+`{"effort": <minimal|low|medium|high|xhigh>}`; `max_output_tokens` is an
+integer `1..1,048,576` (captured first turn: `32000`, a captured
+observation, not a hard cap). Tool declarations are flat and strict: at
+most 32 declarations, descriptions at most 20,000 bytes, schema depth at
+most 8, at most 64 properties, declarations at most 65,536 bytes;
+tool-call ids are 1..128 characters and arguments at most 65,536 bytes.
+No per-request relaxation exists.
+
+The module pairs only with the two named server transports `openai` and
+`openai-compatible`; the signed Local Coding server module and every other
+server module are rejected. A key/route pair that is not one of the named
+pairs is denied `400 incompatible_client_server_pair` before forwarding,
+at both input-token counting and create. Pairing is compatibility data,
+not an endpoint, route, provider, capability, pricing, or authority grant.
+
+The pinned SDK replays `function_call` / `function_call_output` and
+encrypted reasoning items without item IDs or statuses, so the module opts
+into the `allow_idless_encrypted_reasoning` policy flag (default `False`
+in every other policy spec) and the owned ciphertext-derived reference
+path: a domain-separated v3 digest
+(`slaif-codex-replay:v3:reasoning:{len}:{ciphertext}`) of the bounded
+ciphertext (non-empty, at most 1,048,576 bytes, immediate memory only),
+stored as an HMAC-only reference. Function-call replay keeps the existing
+call-digest path. References persist only after successful finalized
+output and are bound to the same key and route/provider/model. No
+fabricated protocol IDs, no raw reasoning content, and no schema change
+are introduced; duplicate identical ciphers in one request,
+missing/empty/oversized ciphertext, id-present reasoning carrying a
+ciphertext, altered, foreign, or stale references, and route/provider/model
+mismatch are denied. Present invalid IDs and any issued-ID/ciphertext
+association keep their existing denials, and the legacy Codex and default
+presets, including the legacy digest bytes, are unchanged. See the
+[security model boundary](security-model.md).
+
+The gateway-side strict zero-retry forwarding rule is a gateway policy,
+not a promise about native client behavior. The pinned OpenCode session
+hardcodes a bounded native retry policy (`RETRY_MAX_RETRIES=5`, no
+override parameter) above an SDK default of zero retries, so zero native
+HTTP retries must never be claimed for this profile; the 227-c
+human-authorized bounded LAN qualification (Chat profiles) remains the
+only recorded stock-retry exception and applied to that execution only.
+
+The native flat tool-loop SSE stream is currently rejected by the
+three-layer Responses stream validation (progress events carrying
+`response_id` fail the strict field check); no L1/L2/L3 source change is
+made pending the root ruling on that gap.
+
+This profile is a **preprotected** candidate: the protected
+live-qualification gate is `not_run` for this module, it grants no
+production-certification claim, and the Hermes/OpenCode Chat behavior
+delivered in 227 is unchanged. Native installation and configuration
+provenance is recorded in the client dossier
+[agentic-clients/opencode-1.19.3-responses-v1.md](agentic-clients/opencode-1.19.3-responses-v1.md)
+and the [consolidated verification
+record](verification/2026-11-23-opencode-responses-preprotected.md).
 
 ## Failure before and after streaming starts
 
