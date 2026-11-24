@@ -36,6 +36,7 @@ STRUCTURAL_FIXTURES = [
     "structural_assistant_tool.json",
     "structural_defaulttitle.json",
     "structural_reasoning_visible.json",
+    "structural_compaction.json",
 ]
 NINE_FIELDS = ["include", "input", "max_output_tokens", "model", "reasoning",
                "store", "stream", "tool_choice", "tools"]
@@ -472,3 +473,81 @@ def test_replay_gate_empty_issued_fails_closed():
     assert r["encrypted_replay_verified"] is False
     assert r["call_linkage_exact"] is False
     assert r["pass"] is False
+
+
+def test_compaction_client_side_facts():
+    data = _load("structural_compaction.json")
+    assert data["endpoint"] == "POST /v1/responses"
+    assert data["fake_only_synthetic_trigger"] is True
+    assert data["not_gateway_provider_pass"] is True
+    assert "loopback fake" in data["authority_note"]
+    # no compaction endpoint participation claimed; empty trace is
+    # non-observation evidence only
+    trace = data["compaction_trace"]
+    assert trace["post_paths_other_than_responses_seen"] == []
+    assert trace["responses_compact_endpoint_observed"] is False
+    # turn 1: baseline contract + synthetic overflow trigger, tool not answered
+    t1 = data["request_turn_1"]
+    _assert_contract(t1)
+    assert t1["input_item_count"] == 2
+    assert t1["tools_count"] == 9
+    assert t1["tool_declaration_strict_present_count"] == 9
+    assert t1["issued_function_call"]["name"] == "read"
+    assert t1["issued_function_call"]["tool_executed"] is False
+    assert t1["issued_function_call"]["function_call_outputs_issued"] == 0
+    trig = t1["usage_emitted_by_fake"]
+    assert trig["usage_is_synthetic_trigger"] is True
+    assert trig["input_tokens"] == 225000
+    assert trig["output_tokens"] == 2000
+    # summary request: observed 7-field shape with recorded deviations
+    s = data["compaction_summary_request"]
+    assert s["top_level_field_count"] == 7
+    assert s["top_level_fields"] == sorted([
+        "include", "input", "max_output_tokens", "model", "reasoning",
+        "store", "stream"])
+    assert s["tools_form"] == "absent"
+    assert s["system_form"] == "absent"
+    assert s["tool_choice_present"] is False
+    assert s["max_output_tokens"] == 32000
+    assert s["input_item_count"] == 2
+    assert s["input_item_types"] == [None, None]
+    assert s["input_item_roles"] == ["developer", "user"]
+    assert "compaction.ts:161" in s["input_item_note"]
+    assert "OMITS the tools key" in s["observed_deviations_from_source_prediction"]["tools"]
+    assert "4096" in s["observed_deviations_from_source_prediction"]["max_output_tokens"]
+    # continuation: 4 typeless items, source-derived order, full replacement
+    c = data["continuation_request"]
+    assert c["input_item_count"] == 4
+    assert c["input_item_types"] == [None, None, None, None]
+    assert c["input_item_roles"] == ["developer", "user", "assistant", "user"]
+    assert c["compaction_user_item_index"] == 1
+    assert c["summary_item_index_byte_exact"] == 2
+    assert c["continue_user_item_index"] == 3
+    assert c["order_compaction_user_before_summary"] is True
+    assert c["order_summary_before_continue"] is True
+    assert c["fc_outputs_total"] == 0
+    assert c["first_user_text_equals_original_prompt"] is False
+    assert "fully replaced" in c["observed_deviation_from_source_prediction"]
+    assert c["tools_count"] == 9
+    assert c["tool_choice"] == "auto"
+    assert any("message-v2.ts:241" in r for r in data["source_refs"])
+    assert any("compaction.ts:531" in r for r in data["source_refs"])
+    # gate and session
+    gate = data["verification_gate"]
+    assert gate["result"] == "verified"
+    assert gate["compaction_request_seen"] is True
+    assert gate["summary_byte_exact_replay"] is True
+    assert gate["final_text_exact"] is True
+    assert gate["final_text_source"] == "static_sentinel"
+    assert gate["sentinel_length"] == 24
+    ses = data["session"]
+    assert ses["request_count"] == 3
+    assert ses["stable_across_requests"] is True
+    assert ses["session_value_sha256_8"] == "6145d992"
+    assert ses["session_header_names_present"] == [
+        "x-opencode-session-id", "x-session-affinity", "x-session-id"]
+    beh = data["client_behavior"]
+    assert beh["exit_code"] == 0
+    assert beh["elapsed_s"] == 5.528
+    assert data["privacy"]["raw_content_retained"] is False
+    assert data["privacy"]["provider_call_performed"] is False

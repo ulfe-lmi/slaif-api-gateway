@@ -42,13 +42,13 @@
     ],
     "configuration_difference_note": "single config variant captured for the Responses wire; the custom provider entry must name npm=@ai-sdk/openai explicitly (the built-in 'openai' provider entry selects the OpenAI/Responses default path and would not bind this capture's model selector).",
     "executed_artifacts": {
-      "verifier_sha256": "9b531cb02a3bef99d9ee32abb4442897058e43efaf7676680272deb23e79df14",
-      "fake_sha256": "3dc2120712a24780e3918a3e39be00c45c1c42981bfefcd643a6b75b524f2527",
-      "worktree_head_sha_at_run_time": "569f2f11afdaa7aacd8556c29ee7e3b28505feea",
-      "head_note": "HEAD at the moment the capture was executed, recorded as executed-script provenance; it is NOT the post-run commit that updates these fixtures",
-      "verifier_report_path": "/home/janezp/codex-work/slaif-228-task/report-fix2.json",
-      "report_result": "EXIT=0 all_pass=true, finished 2026-11-24T01:07:42Z, cleanup_verified, all privacy flags false, sessions distinct",
-      "probe_count": 8
+      "verifier_sha256": "21058f39d10e43fac0d3dea18c4d9042b28693616132cd6222a0aab9382f615f",
+      "fake_sha256": "f68cc805b14f33f66bab814ff3edced99a7e6e595ad243ecc7fc6552eac7eeba",
+      "worktree_head_sha_at_run_time": "f3af15335907fc5fe8c2f02705e7df4ad91d424a",
+      "head_note": "HEAD at the moment the compaction capture was executed; the fake/verifier scripts were uncommitted 228-b working-tree edits at run time, so this is executed-script provenance, NOT the post-run commit that updates these fixtures",
+      "verifier_report_path": "/home/janezp/codex-work/slaif-228-task/runs/228b-compaction-20261124T095812Z-report.json",
+      "report_result": "EXIT=0 all_pass=true, 9/9 gates pass (superset run re-executing all 8 prior probes plus compaction), finished 2026-11-24T09:59:04Z, run_root_cleaned, all privacy flags false, sessions distinct",
+      "probe_count": 9
     }
   },
   "privacy": {
@@ -59,5 +59,5 @@
     "home_workspace_paths_retained": false
   },
   "structural_fixture_digest_rule": "sha256 over, for each structural_*.json in tests/fixtures/opencode/1.19.3/responses sorted by filename: filename + NUL + file bytes (provenance.json excluded)",
-  "structural_fixture_sha256": "1497c513c2fffa0fbee09b0a6d1ff32c8bfef990becfabf7b7f105bd976f72a2"
+  "structural_fixture_sha256": "00127fa1b5ea43ac0a936ddf5d179d084eaf70512dc9d59a6e6f2a11253cbd53"
 }

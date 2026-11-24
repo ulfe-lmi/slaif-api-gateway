@@ -53,6 +53,17 @@ outcome. These variants are observation probes only: they are NOT
 encrypted-ownership passes and grant no opaque authority; the full-cipher
 gate remains required for the encrypted ``reasoning_continuation`` case.
 
+Compaction mode (228-b, fake-only): turn one emits a function_call carrying
+synthetic overflow usage (labelled usage_is_synthetic_trigger) so the pinned
+native client triggers its own CLIENT-SIDE compaction on loopback. The
+summary request is recognized by the source-backed buildPrompt marker and
+answered with a safe synthetic template-shaped summary (content is never
+persisted); the continuation records the observed input-item order and
+indices and gates the final sentinel on the source-backed literals
+(compaction-part user text present, byte-exact issued summary, continue
+text, zero function_call_output, tools present). This proves pinned-client
+behavior only; it is not a Gateway/provider pass.
+
 Auxiliary requests (no tools, no function_call_output) additionally record
 sanitized structural facts (top-level fields, model, stream/store, field
 presence, input form) into state so default-title behavior can be reported.
@@ -80,6 +91,46 @@ SCENARIO = os.path.join(RUN, "run", "scenario.json")
 STATE = os.path.join(RUN, "run", "state.json")
 MARKER_FILE = os.path.join(RUN, "run", "expected_marker.bin")
 LOCK = threading.RLock()
+
+
+# 228-b compaction mode: source-backed literals from pinned OpenCode 1.19.3
+# (core/src/session/compaction.ts:161 buildPrompt marker; session/compaction.ts:531
+# autocontinue text; message-v2.ts:241 compaction-part user text).
+COMPACTION_MARKER = "Here is the conversation so far:"
+COMPACTION_USER_TEXT = "What did we do so far?"
+CONTINUE_TEXT = ("Continue if you have next steps, or stop and ask for "
+                 "clarification if you are unsure how to proceed.")
+DEFAULT_COMPACTION_SUMMARY = (
+    "## Objective\n"
+    "- Verify the pinned OpenCode client-side compaction round-trip on an "
+    "owned loopback fake.\n"
+    "## Important Details\n"
+    "- Synthetic overflow trigger; no real provider content is involved.\n"
+    "## Work State\n"
+    "### Completed\n"
+    "- Compaction request received and summarized by the fake.\n"
+    "### Active\n"
+    "- Awaiting the continuation turn.\n"
+    "## Next Move\n"
+    "- Reply with the final sentinel and stop.\n"
+    "## Relevant Files\n"
+    "- probe.txt")
+
+
+def _item_text(item):
+    """Plain text of an input item (content str or text-bearing parts)."""
+    if not isinstance(item, dict):
+        return ""
+    content = item.get("content")
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return "".join(p.get("text", "") for p in content
+                       if isinstance(p, dict)
+                       and isinstance(p.get("text"), str))
+    if isinstance(item.get("text"), str):
+        return item["text"]
+    return ""
 
 
 def _write_private(path: str, data: bytes) -> None:
@@ -319,6 +370,69 @@ class Handler(BaseHTTPRequestHandler):
         has_fc_output = any(i.get("type") == "function_call_output"
                             for i in items)
         if not (has_tools or has_fc_output):
+            if scenario.get("mode") == "compaction" \
+                    and COMPACTION_MARKER in "\n".join(
+                        _item_text(i) for i in items):
+                # R2: the native client-side compaction summary request
+                # (buildPrompt, core compaction.ts). Record its safe shape;
+                # never persist its content.
+                tools_val = req.get("tools")
+                if tools_val is None:
+                    tools_form = "absent"
+                elif isinstance(tools_val, list) and not tools_val:
+                    tools_form = "empty_list"
+                elif isinstance(tools_val, dict) and not tools_val:
+                    tools_form = "empty_dict"
+                elif isinstance(tools_val, list):
+                    tools_form = f"list_{len(tools_val)}"
+                else:
+                    tools_form = type(tools_val).__name__
+                system_val = req.get("system")
+                if system_val is None:
+                    system_form = "absent"
+                elif isinstance(system_val, str):
+                    system_form = "string"
+                elif isinstance(system_val, list) and not system_val:
+                    system_form = "empty_list"
+                elif isinstance(system_val, list):
+                    system_form = f"list_{len(system_val)}"
+                else:
+                    system_form = type(system_val).__name__
+                summary = scenario.get(
+                    "summary_text", DEFAULT_COMPACTION_SUMMARY)
+                with LOCK:
+                    st = load(STATE, {})
+                    st["aux_requests"] = st.get("aux_requests", 0) + 1
+                    st["compaction_request_seen"] = True
+                    st["compaction_request_facts"] = {
+                        "top_level_fields": sorted(
+                            k for k in req.keys()
+                            if isinstance(k, str)),
+                        "model": model,
+                        "stream": stream,
+                        "store": req.get("store"),
+                        "tools_form": tools_form,
+                        "system_form": system_form,
+                        "input_form": (type(raw_input).__name__
+                                       if raw_input is not None
+                                       else "absent"),
+                        "input_item_count": len(items),
+                        "input_item_types": sorted(
+                            str(i.get("type")) for i in items),
+                        "input_item_roles": sorted({
+                            str(i.get("role")) for i in items
+                            if i.get("role") is not None}),
+                        "max_output_tokens": req.get("max_output_tokens"),
+                        "tool_choice_present": "tool_choice" in req,
+                        "include_present": "include" in req,
+                        "reasoning_present": "reasoning" in req,
+                        "marker_present": True,
+                    }
+                    st["issued_summary"] = summary
+                    save(STATE, st)
+                self._emit_text(model, stream, summary,
+                                scenario.get("summary_usage") or [300, 200])
+                return
             input_form = (type(raw_input).__name__
                           if raw_input is not None else "absent")
             with LOCK:
@@ -354,6 +468,8 @@ class Handler(BaseHTTPRequestHandler):
             self._assistant_tool(req, model, stream, n, scenario, st, items)
         elif mode == "reasoning_visible":
             self._reasoning_visible(req, model, stream, n, scenario, st, items)
+        elif mode == "compaction":
+            self._compaction(req, model, stream, n, scenario, st, items)
         else:
             self._emit_text(model, stream,
                             scenario.get("final_text", "AGENT_RESP_TEXT_OK"),
@@ -434,6 +550,123 @@ class Handler(BaseHTTPRequestHandler):
         with LOCK:
             save(STATE, st)
         self._emit_text(model, stream, text, [40, 10])
+
+    # -- compaction mode (228-b) ---------------------------------------------
+    def _compaction(self, req, model, stream, n, scenario, st, items):
+        with LOCK:
+            st = load(STATE, {})
+        if n == 1:
+            # R1: tool call carrying synthetic overflow usage; the native
+            # client halts the stream at step-finish (overflow detected)
+            # and never executes the tool, so no function_call_output is
+            # ever expected back.
+            tool_name = scenario.get("tool_name", "read")
+            arg_key = scenario.get("arg_key", "filePath")
+            tool_file = scenario.get("tool_file", "probe.txt")
+            call_id = "call_fake_" + uuid.uuid4().hex[:20]
+            usage = list(scenario.get("overflow_usage") or [225000, 2000])
+            st["compaction_r1_facts"] = {
+                "call_id": call_id,
+                "tool_name": tool_name,
+                "usage_emitted": usage,
+                "usage_is_synthetic_trigger": True,
+            }
+            with LOCK:
+                save(STATE, st)
+            resp_id = "resp_fake_" + uuid.uuid4().hex[:24]
+            if stream:
+                ev, _nxt, out_items = self._function_call_events(
+                    resp_id, 1, call_id, tool_name, {arg_key: tool_file})
+                events = [self._created(resp_id, model), *ev,
+                          self._completed(resp_id, _nxt, model, usage,
+                                          out_items)]
+                self._stream(events)
+            else:
+                _e, _n, out_items = self._function_call_events(
+                    resp_id, 1, call_id, tool_name, {arg_key: tool_file})
+                self._nonstream(model, usage, out_items)
+            return
+        # n >= 2: continuation after the compaction round-trip. Source
+        # (message-v2.ts:536-590 filterCompacted) orders the model input
+        # [compaction-user, summary, ...retained tail..., continue-user];
+        # record the actual shape and gate the source-backed literals.
+        prompt = scenario.get("original_prompt")
+        issued_summary = st.get("issued_summary")
+        user_items = [i for i in items if i.get("role") == "user"]
+        assistant_items = [i for i in items if i.get("role") == "assistant"]
+        first_user_text = _item_text(user_items[0]) if user_items else None
+        compaction_user_index = None
+        for idx in range(len(items)):
+            if items[idx].get("role") == "user" \
+                    and _item_text(items[idx]) == COMPACTION_USER_TEXT:
+                compaction_user_index = idx
+                break
+        summary_index = None
+        for idx, i in enumerate(items):
+            if i.get("role") == "assistant" \
+                    and _item_text(i) == issued_summary:
+                summary_index = idx
+                break
+        continue_index = None
+        for idx in range(len(items) - 1, -1, -1):
+            if items[idx].get("role") == "user" \
+                    and _item_text(items[idx]) == CONTINUE_TEXT:
+                continue_index = idx
+                break
+        fc_outputs = sum(1 for i in items
+                         if i.get("type") == "function_call_output")
+        tools = req.get("tools")
+        facts = {
+            "request_index": n,
+            "stream": stream,
+            "store": req.get("store"),
+            "tools_count": (len(tools) if isinstance(tools, list) else None),
+            "input_item_count": len(items),
+            "input_item_types": [str(i.get("type")) for i in items],
+            "input_item_roles": [
+                (str(i.get("role")) if i.get("role") is not None else None)
+                for i in items],
+            "user_item_count": len(user_items),
+            "assistant_item_count": len(assistant_items),
+            "fc_outputs_total": fc_outputs,
+            "compaction_user_item_index": compaction_user_index,
+            "summary_item_index_byte_exact": summary_index,
+            "continue_user_item_index": continue_index,
+            "order_compaction_user_before_summary": (
+                compaction_user_index is not None
+                and summary_index is not None
+                and compaction_user_index < summary_index),
+            "order_summary_before_continue": (
+                summary_index is not None
+                and continue_index is not None
+                and summary_index < continue_index),
+            "first_user_text_equals_original_prompt": (
+                prompt is not None and first_user_text == prompt),
+            "first_user_text_length": (
+                len(first_user_text) if first_user_text is not None
+                else None),
+        }
+        verified = (
+            compaction_user_index is not None
+            and summary_index is not None
+            and continue_index is not None
+            and facts["order_compaction_user_before_summary"] is True
+            and facts["order_summary_before_continue"] is True
+            and fc_outputs == 0
+            and isinstance(tools, list) and len(tools) >= 1
+            and st.get("compaction_request_seen") is True)
+        st["compaction_continuation_facts"] = facts
+        st["compaction_verified"] = verified
+        if verified:
+            text = scenario.get("final_text", "AGENT_RESP_COMPACTION_OK")
+            st["final_text_source"] = "static_sentinel"
+        else:
+            text = "AGENT_RESP_COMPACTION_UNVERIFIED"
+            st["final_text_source"] = "unverified_static"
+        with LOCK:
+            save(STATE, st)
+        self._emit_text(model, stream, text,
+                        scenario.get("final_usage") or [40, 10])
 
     def _reasoning(self, req, model, stream, n, scenario, st, items):
         with LOCK:

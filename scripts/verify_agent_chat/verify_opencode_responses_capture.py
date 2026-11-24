@@ -29,6 +29,14 @@ Probes (each in its own session):
             linkage, and final tool/text outcome. These are NOT
             encrypted-ownership passes; the full-cipher gate of the
             reasoning probe stays required
+  compaction fake-only synthetic-overflow trigger of the pinned client's
+            own CLIENT-SIDE compaction: R1 tool call carrying synthetic
+            usage, R2 summary request recognized by the source-backed
+            buildPrompt marker (safe synthetic summary issued; content
+            never retained), R3 continuation gated on the observed
+            compaction-part ordering and source-backed literals. No
+            /v1/responses/compact endpoint is involved; the trace section
+            plus this gate record the observed shape, not an endpoint claim
 
 SSE shape proof: emitted events carry only type + sequence_number +
 per-event fields (no artificial top-level response_id); if the pinned
@@ -81,6 +89,7 @@ MODEL = "agent-responses-fake-model"
 DUMMY_KEY_PREFIX = "sk-slaif-dummy"
 TEXT_SENTINEL = "AGENT_RESP_TEXT_OK"
 REASONING_SENTINEL = "AGENT_RESP_REASONING_OK"
+COMPACTION_SENTINEL = "AGENT_RESP_COMPACTION_OK"
 FAKE_READY_TIMEOUT_S = 20.0
 SESSION_HEADER_NAMES = ("x-opencode-session-id", "x-session-affinity", "x-session-id")
 BASELINE_TOOL_NAMES = ("bash", "edit", "glob", "grep", "read",
@@ -643,6 +652,7 @@ def main() -> None:
     ap.add_argument("--timeout", type=int, default=240)
     ap.add_argument("--skip-toolloop", action="store_true")
     ap.add_argument("--skip-reasoning", action="store_true")
+    ap.add_argument("--skip-compaction", action="store_true")
     ap.add_argument("--report", required=True)
     ap.add_argument("--keep-run-root", action="store_true",
                     help="retain the private run root (default: delete it after the report)")
@@ -942,6 +952,57 @@ def main() -> None:
                         session["session_value_sha256_8_first"])
                 other_paths_seen |= journal_other_paths(run_root)
                 clear_probe_journal()
+            # ---- compaction probe (fake-only synthetic overflow trigger) -
+            if not args.skip_compaction:
+                compaction_prompt = (
+                    f"Use the read tool on probe.txt in the workspace, then "
+                    f"finish with the exact text {COMPACTION_SENTINEL}.")
+                (run_root / "run" / "scenario.json").write_text(json.dumps(
+                    {"mode": "compaction",
+                     "original_prompt": compaction_prompt}))
+                (run_root / "run" / "scenario.json").chmod(0o600)
+                rc, err_label, elapsed = run_client(
+                    exe, run_root, config_path, compaction_prompt,
+                    "228 compaction", args.timeout, slug="228_compaction")
+                final = last_text_event(
+                    run_root / "logs" / "228_compaction.out")
+                state = safe_load_json(run_root / "run" / "state.json")
+                if state is None or not isinstance(state, dict):
+                    err_label = err_label or "state_missing_or_unparseable"
+                    state = {}
+                structural = per_request_structural(run_root)
+                session = session_facts(structural)
+                gates["compaction"] = {
+                    "exit_code": rc, "error": err_label, "elapsed_s": elapsed,
+                    "final_text_exact": final == COMPACTION_SENTINEL,
+                    "final_text_source": state.get("final_text_source"),
+                    "fake_only_synthetic_trigger": True,
+                    "not_gateway_provider_pass": True,
+                    "compaction_request_seen":
+                        state.get("compaction_request_seen") is True,
+                    "compaction_request_facts":
+                        state.get("compaction_request_facts"),
+                    "compaction_r1_facts": state.get("compaction_r1_facts"),
+                    "compaction_continuation_facts":
+                        state.get("compaction_continuation_facts"),
+                    "compaction_verified":
+                        state.get("compaction_verified") is True,
+                    "session": session,
+                    "structural": structural,
+                    "contract_facts": contract_facts(structural),
+                    "pass": (rc == 0
+                             and final == COMPACTION_SENTINEL
+                             and state.get("compaction_verified") is True
+                             and state.get("final_text_source")
+                             == "static_sentinel"
+                             and state.get("compaction_request_seen")
+                             is True),
+                }
+                if session["session_value_sha256_8_first"]:
+                    session_hashes.append(
+                        session["session_value_sha256_8_first"])
+                other_paths_seen |= journal_other_paths(run_root)
+                clear_probe_journal()
     except Exception as exc:  # unexpected: report honestly, never crash silent
         global_errors.append(f"unexpected:{type(exc).__name__}")
     finally:
@@ -957,6 +1018,8 @@ def main() -> None:
         global_errors.append("pinned_identity_override")
     if args.skip_reasoning:
         global_errors.append("reasoning_gate_skipped")
+    if args.skip_compaction:
+        global_errors.append("compaction_gate_skipped")
     if not fake_terminated:
         global_errors.append("fake_process_not_terminated")
     if "toolloop" in gates:
@@ -968,7 +1031,8 @@ def main() -> None:
         if rz_stable is not True:
             global_errors.append("reasoning_session_not_stable_across_requests")
     for name in ("assistant_tool", "reasoning_visible_absent",
-                 "reasoning_visible_null", "reasoning_visible_empty"):
+                 "reasoning_visible_null", "reasoning_visible_empty",
+                 "compaction"):
         if name in gates:
             sv_stable = gates[name]["session"]["stable_across_requests"]
             if sv_stable is not True:

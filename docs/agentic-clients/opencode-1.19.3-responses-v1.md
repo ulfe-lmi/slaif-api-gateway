@@ -57,8 +57,8 @@ the packaged profile DATA is pending primary packaging, and no
   No provider, no user profile, no real key, no network beyond loopback.
 - Structural capture facts (sanitized):
   `tests/fixtures/opencode/1.19.3/responses/` (structural digest
-  `1497c513c2fffa0fbee09b0a6d1ff32c8bfef990becfabf7b7f105bd976f72a2`
-  over the seven `structural_*.json` files); public provenance in
+  `00127fa1b5ea43ac0a936ddf5d179d084eaf70512dc9d59a6e6f2a11253cbd53`
+  over the eight `structural_*.json` files); public provenance in
   `provenance.json`. Raw content, raw IDs, and credentials are not
   retained; session values appear only as sha256-8.
 - Verifier:
@@ -145,8 +145,59 @@ the packaged profile DATA is pending primary packaging, and no
   - compaction trace: `post_paths_other_than_responses_seen = []`, no
     `/v1/responses/compact` endpoint observed — an EMPTY trace, i.e. no
     compaction-form pass is claimed for this client.
+- 228-b client-side compaction capture (2026-11-24, nine-probe superset
+  run re-executing all eight fix2 probes plus the new compaction
+  probe): sanitized receipt
+  `/home/janezp/codex-work/slaif-228-task/runs/228b-compaction-20261124T095812Z-report.json`
+  — `all_pass=true`, `EXIT=0`, finished `2026-11-24T09:59:04Z`, 9/9
+  gates pass, run root cleaned and verified, all privacy flags false,
+  sessions distinct across probes. Executed-artifact provenance
+  (recorded in `provenance.json`): verifier sha256
+  `21058f39d10e43fac0d3dea18c4d9042b28693616132cd6222a0aab9382f615f`,
+  loopback fake sha256
+  `f68cc805b14f33f66bab814ff3edced99a7e6e595ad243ecc7fc6552eac7eeba`,
+  executed against worktree HEAD `f3af15335907fc5fe8c2f02705e7df4ad91d424a`
+  with the compaction fake/verifier edits as UNCOMMITTED working-tree
+  changes at run time — executed-script provenance, NOT the post-run
+  commit that adds the fixture. The trigger is synthetic: the fake
+  emits overflow usage (225000 in / 2000 out) crossing the
+  pinned-source usable threshold (245760 − 20000 = 225760) after an
+  intentionally unanswered turn-1 `read` tool call. Observed (fake-only,
+  NOT a Gateway/provider pass):
+  - R1 (main): baseline 9-field / 9-tool contract; the fake issues the
+    `read` function call (filePath `probe.txt`), which is never
+    executed → zero `function_call_output`; synthetic usage
+    `[225000, 2000]`;
+  - R2 (summary request, NEW observed shape): 7 top-level fields
+    (`include`, `input`, `max_output_tokens`, `model`, `reasoning`,
+    `store`, `stream`); the `tools` key is ABSENT (the pinned source
+    suggested an empty list) and `system`/`tool_choice` are absent;
+    `max_output_tokens` is 32000 (the source constant is 4096 — the
+    observed wire value supersedes it); 2 typeless input items
+    `[developer, user]` with the pinned-source buildPrompt marker in
+    the user item (`packages/core/src/session/compaction.ts:161`);
+  - R3 (continuation, NEW observed shape): 9 fields, tools restored
+    (9, flat, all strict), `tool_choice` `auto`; 4 typeless input items
+    `[developer, user, assistant, user]` — index 1 the pinned-source
+    compaction user text (`packages/opencode/src/session/message-v2.ts:241`,
+    22 B), index 2 the BYTE-EXACT fake-issued safe synthetic summary
+    (assistant item, `output_text` part), index 3 the pinned-source
+    continuation instruction
+    (`packages/opencode/src/session/compaction.ts:531`); both order
+    predicates hold; `fc_outputs_total` 0. HONEST DEVIATION from the
+    earlier "full chronological list" prediction: the original prompt
+    user item and the aborted turn-1 assistant output were FULLY
+    REPLACED (`first_user_text_equals_original_prompt` false), so the
+    gate is presence-and-order based, not position-based;
+  - final client text: exact 24-byte static sentinel, exit 0, 5.528 s,
+    session stable across all 3 requests (sha8 `6145d992`);
+  - compaction trace for this run: `post_paths_other_than_responses_seen
+    = []`, `responses_compact_endpoint_observed` false — compaction ran
+    entirely client-side against `POST /v1/responses`; no
+    compact-endpoint participation is claimed.
 - Prior receipts remain as-is: `report-final.json` (provisional
-  pre-correction) and `report-fix1.json` (accepted corrected run).
+  pre-correction), `report-fix1.json` (accepted corrected run), and
+  `report-fix2.json` (eight-probe accepted run).
 - SSE consumption: the client consumed the native `@ai-sdk/openai` 3.x
   event vocabulary without error (envelope keys `type`,
   `sequence_number`, plus per-event fields; reasoning summary part/delta
@@ -163,7 +214,9 @@ the packaged profile DATA is pending primary packaging, and no
   fake peer on the Responses wire — streaming SSE consumption, native
   tool-loop execution with call/result correlation, gated encrypted-reasoning
   continuation replay (full-byte equality + exact call/output linkage),
-  envelope shape, session-hint behavior.
+  gated native client-side compaction (synthetic overflow trigger on the
+  loopback fake; observed summary/continuation request shapes), envelope
+  shape, session-hint behavior.
 - **Is not**: Gateway admission, key policy/quota reservation/finalization,
   or PostgreSQL settlement. The loopback fake is a synthetic peer; no
   gateway request was processed and no ledger row exists. Fake-SDK usage
@@ -171,6 +224,11 @@ the packaged profile DATA is pending primary packaging, and no
 - **Observation-only probes**: the assistant-text-continuation and
   visible-reasoning-state probes document SDK keep/drop behavior only; they
   are not ownership, settlement, or provider guarantees.
+- **Compaction probe boundary**: the 228-b compaction positive is a
+  fake-only client-behavior observation driven by a synthetic usage
+  trigger; it proves neither Gateway/provider compaction support nor any
+  `/v1/responses/compact` (or other endpoint) participation, and the
+  issued summary is a safe synthetic template (no content retained).
 - **Protected gate**: `not_run`. No live LAN or provider run occurred for
   the Responses wire in 228-a (preprotected candidate stage only). No
   `PREPROTECTED_READY` claim is made while the module DATA is unpackaged
@@ -186,6 +244,13 @@ the packaged profile DATA is pending primary packaging, and no
 - Session-hint headers (`x-opencode-session-id`, `x-session-affinity`,
   `x-session-id`; three equal values per request) are client-generated
   hints: stability/distinctness predicates only, rejected as authority.
+- Compaction capture limits: client-side only on the Responses wire. The
+  summary request deviates from the pinned source in two recorded ways
+  (`tools` key absent rather than an empty list; `max_output_tokens`
+  32000 rather than the 4096 source constant), and the continuation
+  fully replaces the pre-compaction history rather than appending to it.
+  No real-provider overflow, no encrypted-summary ownership, and no
+  compact-endpoint behavior is claimed.
 - Retry posture: the strict zero-retry rule is a separate concern from the
   human-approved 100-LAN-launch stock-retry exception used in 227-c; the
   native OpenCode client retry constant was pinned at 5 in source
