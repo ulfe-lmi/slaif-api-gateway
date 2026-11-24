@@ -1,29 +1,47 @@
-"""PostgreSQL side-effect proof for the OpenCode 1.19.3 Responses client module.
+"""PostgreSQL settlement and replay-proof coverage for OpenCode 1.19.3.
 
-Every case below is rejected by the pinned client module (or by module
-resolution) before any database write or provider call. The module is
-streaming-only: ``stream`` must be exactly ``true`` in the captured wire
-shape, so no non-streaming settlement case exists for this profile. The
-streaming tool-loop PostgreSQL cases remain pending the root streaming
-ruling and are deliberately not written here.
+The first group is rejected by the pinned client module (or module
+resolution) before any database write or provider call. The second group
+settles a real streaming tool loop (encrypted reasoning plus flat
+function call) through ``handle_response_create`` against real PostgreSQL
+quota, ledger, reservation, and replay-reference state, with the provider
+mocked only at the gateway adapter boundary (no upstream HTTP wire).
+The remaining cases pin the negative paths with no side effects.
 """
 
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
+from decimal import Decimal
+import json
 from types import SimpleNamespace
+import uuid
 
 import pytest
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from slaif_gateway.api.errors import OpenAICompatibleError
-from slaif_gateway.db.models import QuotaReservation, UsageLedger
+from slaif_gateway.config import Settings
+from slaif_gateway.db.models import CodexReplayReference, QuotaReservation, UsageLedger
+from slaif_gateway.db.repositories.cohorts import CohortsRepository
+from slaif_gateway.db.repositories.keys import GatewayKeysRepository
+from slaif_gateway.db.repositories.owners import OwnersRepository
+from slaif_gateway.db.repositories.pricing import PricingRulesRepository
+from slaif_gateway.db.repositories.routing import ModelRoutesRepository
 from slaif_gateway.modules.clients.opencode_1193_responses import (
     OPENCODE_1193_RESPONSES_CLIENT_MODULE_ID,
     OPENCODE_1193_RESPONSES_CLIENT_MODULE_VERSION,
     OPENCODE_1193_RESPONSES_PROFILE_FIXTURE_SHA256,
 )
+from slaif_gateway.schemas.providers import ProviderStreamChunk, ProviderUsage
+from slaif_gateway.services import responses_gateway as gateway
 from slaif_gateway.services.responses_gateway import handle_response_create
+from slaif_gateway.utils.crypto import hmac_sha256_token
+from tests.integration.test_codex_tool_history_postgres import (
+    _auth_key,
+    _gate_route_resolver,
+)
 
 _PIN = {
     "id": OPENCODE_1193_RESPONSES_CLIENT_MODULE_ID,
@@ -224,3 +242,604 @@ async def test_opencode_stream_false_rejection_has_no_postgres_side_effect(
         )
     assert exc_info.value.code == "opencode_1193_field_shape"
     assert await _counts(async_test_session) == before
+
+
+# --- Streaming tool-loop settlement and replay-proof coverage ------------
+
+CIPHER = "c" * 64
+_HMAC_SECRET = "oap228-opencode-qualification-replay-hmac-secret"
+_OPENCODE_CAPS = (
+    "codex_request_envelope",
+    "codex_client_tools",
+    "codex_streaming_tool_events",
+    "codex_encrypted_reasoning_replay",
+)
+_PUBLIC_MODEL = "synthetic-opencode-model"
+_PROVIDER = "synthetic-opencode"
+_UPSTREAM = "synthetic-upstream"
+
+
+def _digest(token: str) -> str:
+    return hmac_sha256_token(token=token, secret=_HMAC_SECRET)
+
+
+D_V1_RS = _digest("slaif-codex-replay:v1:item:reasoning:rs_228a_1")
+D_V3_CIPHER = _digest(f"slaif-codex-replay:v3:reasoning:{len(CIPHER)}:{CIPHER}")
+D_V1_FC = _digest("slaif-codex-replay:v1:item:function_call:fc_228a_1")
+D_V1_CALL = _digest("slaif-codex-replay:v1:call:function_call:call_228a_op")
+
+
+def _settings() -> Settings:
+    return Settings(
+        APP_ENV="development",
+        TOKEN_HMAC_SECRET=_HMAC_SECRET,
+        ACTIVE_HMAC_KEY_VERSION="1",
+        CODEX_REPLAY_REFERENCE_TTL_SECONDS=86400,
+        ENABLE_REDIS_RATE_LIMITS=False,
+    )
+
+
+def _route_caps(caps: tuple[str, ...]) -> dict:
+    block = {
+        "text": True,
+        "stateless": True,
+        "streaming": True,
+        "tools": True,
+        "function_tools": True,
+    }
+    block.update({c: True for c in caps})
+    return {
+        "responses": block,
+        # Fully gated Codex routes carry strict numeric limits alongside the
+        # capability block; parse_codex_route_limits demands exactly these
+        # fields with default <= max < context.
+        "codex_limits": {
+            "context_window_tokens": 1_050_000,
+            "default_max_output_tokens": 32_768,
+            "max_output_tokens": 128_000,
+        },
+    }
+
+
+def _probe(route_id: uuid.UUID, capabilities: dict) -> SimpleNamespace:
+    return SimpleNamespace(
+        provider=_PROVIDER,
+        provider_kind="openai_compatible",
+        provider_base_url="http://127.0.0.1:18031/v1",
+        provider_api_key_env_var="UPSTREAM_SERVICE_TOKEN",
+        provider_timeout_seconds=10,
+        provider_max_retries=0,
+        route_id=route_id,
+        resolved_model=_UPSTREAM,
+        requested_model=_PUBLIC_MODEL,
+        route_match_type="exact",
+        route_pattern=_PUBLIC_MODEL,
+        priority=1,
+        supports_streaming=True,
+        capabilities=capabilities,
+    )
+
+
+async def _seed_opencode_world(
+    session: AsyncSession, *, caps: tuple[str, ...], route: object = None
+):
+    now = datetime.now(UTC)
+    unique = uuid.uuid4().hex
+    owner = await OwnersRepository(session).create_owner(
+        name="OpenCode",
+        surname="Qualification",
+        email=f"oc228-{unique}@example.org",
+    )
+    cohort = await CohortsRepository(session).create_cohort(name=f"oc228-{unique}")
+    key = await GatewayKeysRepository(session).create_gateway_key_record(
+        public_key_id=f"oc228_{unique}",
+        token_hash=uuid.uuid4().hex,
+        owner_id=owner.id,
+        cohort_id=cohort.id,
+        valid_from=now - timedelta(minutes=1),
+        valid_until=now + timedelta(days=30),
+        cost_limit_eur=Decimal("50.00"),
+        token_limit_total=1_000_000,
+        request_limit_total=10_000,
+        rate_limit_requests_per_minute=60,
+        rate_limit_tokens_per_minute=120_000,
+        max_concurrent_requests=4,
+        allow_all_models=False,
+        allowed_models=[_PUBLIC_MODEL],
+        allow_all_endpoints=False,
+        allowed_endpoints=["/v1/responses"],
+        metadata_json={
+            "responses_policy": {
+                "version": 1,
+                "allowed_capabilities": list(caps),
+                "client_module": dict(_PIN),
+            },
+            "allowed_providers": [_PROVIDER],
+        },
+    )
+    # Pre-existing settled usage. This world seeds NO ledger rows, so tests
+    # assert exact per-key deltas instead of matching seeded rows.
+    key.cost_used_eur = Decimal("7.250000000")
+    key.tokens_used_total = 12_345
+    key.requests_used_total = 9
+    if route is None:
+        route = await ModelRoutesRepository(session).create_model_route(
+            requested_model=_PUBLIC_MODEL,
+            provider=_PROVIDER,
+            upstream_model=_UPSTREAM,
+            endpoint="/v1/responses",
+        )
+        await PricingRulesRepository(session).create_pricing_rule(
+            provider=_PROVIDER,
+            upstream_model=_UPSTREAM,
+            valid_from=now - timedelta(minutes=1),
+            endpoint="/v1/responses",
+            currency="EUR",
+            input_price_per_1m=Decimal("2.00"),
+            cached_input_price_per_1m=Decimal("2.00"),
+            output_price_per_1m=Decimal("8.00"),
+            reasoning_price_per_1m=Decimal("8.00"),
+            pricing_metadata={
+                "codex_accounting": {
+                    "long_context_threshold_tokens": 1_050_000,
+                    "long_context_input_multiplier": "1.0",
+                    "long_context_output_multiplier": "1.0",
+                    "cache_write_input_price_per_1m": "2.00",
+                }
+            },
+        )
+    await session.flush()
+    return owner, cohort, key, route
+
+
+def _turn1_events() -> list[dict]:
+    return [
+        {"type": "response.created", "response": {"id": "resp_228a_1"}},
+        {
+            "type": "response.output_item.added",
+            "output_index": 0,
+            "item": {"type": "reasoning", "id": "rs_228a_1", "encrypted_content": CIPHER},
+        },
+        {
+            "type": "response.reasoning_summary_part.added",
+            "item_id": "rs_228a_1",
+            "output_index": 0,
+            "summary_index": 0,
+            "part": {"type": "summary_text", "text": ""},
+        },
+        {
+            "type": "response.reasoning_summary_text.delta",
+            "item_id": "rs_228a_1",
+            "output_index": 0,
+            "summary_index": 0,
+            "delta": "part",
+        },
+        {
+            "type": "response.reasoning_summary_part.done",
+            "item_id": "rs_228a_1",
+            "output_index": 0,
+            "summary_index": 0,
+            "part": {"type": "summary_text", "text": "part"},
+        },
+        {
+            "type": "response.output_item.done",
+            "output_index": 0,
+            "item": {
+                "type": "reasoning",
+                "id": "rs_228a_1",
+                "summary": [{"type": "summary_text", "text": "part"}],
+                "encrypted_content": CIPHER,
+            },
+        },
+        {
+            "type": "response.output_item.added",
+            "output_index": 1,
+            "item": {
+                "type": "function_call",
+                "id": "fc_228a_1",
+                "status": "in_progress",
+                "name": "read",
+                "call_id": "call_228a_op",
+                "arguments": "",
+            },
+        },
+        {
+            "type": "response.function_call_arguments.delta",
+            "item_id": "fc_228a_1",
+            "output_index": 1,
+            "delta": "{}",
+        },
+        {
+            "type": "response.output_item.done",
+            "output_index": 1,
+            "item": {
+                "type": "function_call",
+                "id": "fc_228a_1",
+                "status": "completed",
+                "name": "read",
+                "call_id": "call_228a_op",
+                "arguments": "{}",
+            },
+        },
+        {
+            "type": "response.completed",
+            "response": {
+                "id": "resp_228a_1",
+                "status": "completed",
+                "usage": {"input_tokens": 5, "output_tokens": 2, "total_tokens": 7},
+            },
+        },
+    ]
+
+
+def _turn2_events() -> list[dict]:
+    return [
+        {"type": "response.created", "response": {"id": "resp_228a_2"}},
+        {"type": "response.output_text.delta", "delta": "Done."},
+        {
+            "type": "response.completed",
+            "response": {
+                "id": "resp_228a_2",
+                "status": "completed",
+                "usage": {"input_tokens": 5, "output_tokens": 2, "total_tokens": 7},
+            },
+        },
+    ]
+
+
+def _turn2_input() -> list[dict]:
+    return [
+        {"role": "developer", "content": "You are a bounded local tool harness."},
+        {
+            "role": "user",
+            "content": [{"type": "input_text", "text": "Read the marker file exactly."}],
+        },
+        # ID-less encrypted reasoning replay (the pinned OpenCode wire shape).
+        {
+            "type": "reasoning",
+            "summary": [{"type": "summary_text", "text": "part"}],
+            "encrypted_content": CIPHER,
+        },
+        # Flat function call/output (no namespace keys).
+        {"type": "function_call", "call_id": "call_228a_op", "name": "read", "arguments": "{}"},
+        {"type": "function_call_output", "call_id": "call_228a_op", "output": "MARKER"},
+    ]
+
+
+class _Adapter:
+    def __init__(self, turns: list[list[dict]]) -> None:
+        self._turns = list(turns)
+        self.calls = 0
+
+    async def stream_response(self, request):
+        self.calls += 1
+        for event in self._turns.pop(0):
+            yield ProviderStreamChunk(
+                provider=request.provider,
+                upstream_model=request.upstream_model,
+                data=json.dumps(event),
+                json_body=event,
+                raw_sse_event="data: " + json.dumps(event) + "\n\n",
+                usage=(
+                    ProviderUsage(prompt_tokens=5, completion_tokens=2, total_tokens=7)
+                    if event["type"] == "response.completed"
+                    else None
+                ),
+            )
+
+
+def _patch_streaming(
+    monkeypatch: pytest.MonkeyPatch,
+    session: AsyncSession,
+    route: object,
+    adapter: _Adapter,
+    caps: tuple[str, ...] = _OPENCODE_CAPS,
+) -> None:
+    async def db(request=None):
+        yield session
+
+    monkeypatch.setattr(gateway, "_get_db_session_after_auth_header_check", db)
+    monkeypatch.setattr(
+        gateway,
+        "_resolve_responses_route",
+        _gate_route_resolver(_probe(route.id, _route_caps(caps))),
+    )
+    monkeypatch.setattr(gateway, "get_provider_adapter", lambda *args: adapter)
+
+
+async def _settle_turn1(
+    session: AsyncSession, auth: object, settings: Settings, key: object
+) -> None:
+    """Issue turn 1 and pin its successful settlement (completed, not failed)."""
+    response = await handle_response_create(
+        payload=_payload(_full_body(stream=True)),
+        authenticated_key=auth,
+        settings=settings,
+    )
+    joined = "".join([s async for s in response.body_iterator])
+    assert "response.completed" in joined
+    assert "response.failed" not in joined
+    await session.refresh(key)
+
+
+async def _ref_rows(session: AsyncSession, key_id: object) -> list:
+    stmt = select(CodexReplayReference).where(CodexReplayReference.gateway_key_id == key_id)
+    return list((await session.execute(stmt)).scalars())
+
+
+async def _ledger_rows(session: AsyncSession, key_id: object) -> list:
+    stmt = (
+        select(UsageLedger)
+        .where(UsageLedger.gateway_key_id == key_id)
+        .order_by(UsageLedger.started_at)
+    )
+    return list((await session.execute(stmt)).scalars())
+
+
+async def _reservation_rows(session: AsyncSession, key_id: object) -> list:
+    stmt = select(QuotaReservation).where(QuotaReservation.gateway_key_id == key_id)
+    return list((await session.execute(stmt)).scalars())
+
+
+@pytest.mark.asyncio
+async def test_opencode_streaming_toolloop_settles_and_idless_replay_continues(
+    async_test_session, monkeypatch
+):
+    session = async_test_session
+    owner, cohort, key, route = await _seed_opencode_world(session, caps=_OPENCODE_CAPS)
+    adapter = _Adapter([_turn1_events(), _turn2_events()])
+    _patch_streaming(monkeypatch, session, route, adapter)
+    auth = _auth_key(key)
+    await _settle_turn1(session, auth, _settings(), key)
+
+    assert key.requests_used_total == 10
+    assert key.tokens_used_total == 12_352
+    assert key.tokens_reserved_total == 0
+    assert key.requests_reserved_total == 0
+
+    refs = await _ref_rows(session, key.id)
+    assert len(refs) == 3
+    assert {r.item_id_hmac for r in refs} == {D_V1_RS, D_V3_CIPHER, D_V1_FC}
+    assert {r.item_kind for r in refs} == {"reasoning", "function_call"}
+    fc = next(r for r in refs if r.item_kind == "function_call")
+    assert fc.call_id_hmac == D_V1_CALL
+    assert fc.tool_namespace == "functions"
+    assert fc.tool_name == "read"
+    assert fc.route_id == route.id
+    assert fc.provider == _PROVIDER
+    assert fc.upstream_model == _UPSTREAM
+    for reasoning in (r for r in refs if r.item_kind == "reasoning"):
+        assert reasoning.call_id_hmac is None
+        assert reasoning.tool_namespace is None
+        assert reasoning.tool_name is None
+
+    ledger = await _ledger_rows(session, key.id)
+    assert len(ledger) == 1
+    assert ledger[0].success is True
+    assert ledger[0].accounting_status == "finalized"
+    assert ledger[0].total_tokens == 7
+    reservations = await _reservation_rows(session, key.id)
+    assert len(reservations) == 1
+    assert reservations[0].status == "finalized"
+
+    body2 = _full_body(stream=True)
+    body2["input"] = _turn2_input()
+    response2 = await handle_response_create(
+        payload=_payload(body2), authenticated_key=auth, settings=_settings()
+    )
+    joined2 = "".join([s async for s in response2.body_iterator])
+    assert "response.completed" in joined2
+    assert "response.failed" not in joined2
+    await session.refresh(key)
+    assert key.requests_used_total == 11
+    assert key.tokens_used_total == 12_359
+    assert key.tokens_reserved_total == 0
+    assert key.requests_reserved_total == 0
+    assert len(await _ref_rows(session, key.id)) == 3
+    ledger2 = await _ledger_rows(session, key.id)
+    assert len(ledger2) == 2
+    assert all(row.success is True and row.accounting_status == "finalized" for row in ledger2)
+    assert adapter.calls == 2
+
+
+@pytest.mark.asyncio
+async def test_opencode_streaming_toolloop_altered_cipher_replay_denied(
+    async_test_session, monkeypatch
+):
+    session = async_test_session
+    owner, cohort, key, route = await _seed_opencode_world(session, caps=_OPENCODE_CAPS)
+    adapter = _Adapter([_turn1_events()])
+    _patch_streaming(monkeypatch, session, route, adapter)
+    auth = _auth_key(key)
+    await _settle_turn1(session, auth, _settings(), key)
+
+    before_requests = key.requests_used_total
+    before_tokens = key.tokens_used_total
+    replay_input = _turn2_input()
+    replay_input[2]["encrypted_content"] = "d" * 64
+    body = _full_body(stream=True)
+    body["input"] = replay_input
+    with pytest.raises(OpenAICompatibleError) as exc_info:
+        await handle_response_create(
+            payload=_payload(body), authenticated_key=auth, settings=_settings()
+        )
+    assert exc_info.value.code == "responses_codex_replay_reference_not_found"
+    await session.refresh(key)
+    assert key.requests_used_total == before_requests
+    assert key.tokens_used_total == before_tokens
+    assert len(await _ledger_rows(session, key.id)) == 1
+    assert adapter.calls == 1
+
+
+@pytest.mark.asyncio
+async def test_opencode_streaming_toolloop_foreign_key_replay_denied(
+    async_test_session, monkeypatch
+):
+    session = async_test_session
+    owner_a, cohort_a, key_a, route = await _seed_opencode_world(session, caps=_OPENCODE_CAPS)
+    # World B reuses the same route row (the resolver is fully patched;
+    # only route.id matters) so the route/pricing unique constraints are
+    # not re-hit.
+    owner_b, cohort_b, key_b, _ = await _seed_opencode_world(
+        session, caps=_OPENCODE_CAPS, route=route
+    )
+    adapter = _Adapter([_turn1_events()])
+    _patch_streaming(monkeypatch, session, route, adapter)
+    auth_a = _auth_key(key_a)
+    await _settle_turn1(session, auth_a, _settings(), key_a)
+
+    body = _full_body(stream=True)
+    body["input"] = _turn2_input()
+    with pytest.raises(OpenAICompatibleError) as exc_info:
+        await handle_response_create(
+            payload=_payload(body),
+            authenticated_key=_auth_key(key_b),
+            settings=_settings(),
+        )
+    assert exc_info.value.code == "responses_codex_replay_reference_not_found"
+
+    assert len(await _ref_rows(session, key_a.id)) == 3
+    await session.refresh(key_a)
+    assert key_a.requests_used_total == 10
+    await session.refresh(key_b)
+    assert key_b.requests_used_total == 9
+    assert key_b.tokens_used_total == 12_345
+    assert len(await _ref_rows(session, key_b.id)) == 0
+    assert adapter.calls == 1
+
+
+@pytest.mark.asyncio
+async def test_opencode_streaming_toolloop_unknown_model_denied_by_real_resolver(
+    async_test_session, monkeypatch
+):
+    session = async_test_session
+    owner, cohort, key, route = await _seed_opencode_world(session, caps=_OPENCODE_CAPS)
+
+    async def db(request=None):
+        yield session
+
+    monkeypatch.setattr(gateway, "_get_db_session_after_auth_header_check", db)
+    adapter = _Adapter([])
+    monkeypatch.setattr(gateway, "get_provider_adapter", lambda *args: adapter)
+
+    body = _full_body(stream=True)
+    body["model"] = "other-model"
+    with pytest.raises(OpenAICompatibleError) as exc_info:
+        await handle_response_create(
+            payload=_payload(body),
+            authenticated_key=_auth_key(key),
+            settings=_settings(),
+        )
+    assert exc_info.value.code == "model_not_allowed_for_key"
+    await session.refresh(key)
+    assert key.requests_used_total == 9
+    assert key.tokens_used_total == 12_345
+    assert len(await _ledger_rows(session, key.id)) == 0
+    assert adapter.calls == 0
+
+
+@pytest.mark.asyncio
+async def test_opencode_streaming_toolloop_id_bearing_reasoning_replay_denied(
+    async_test_session, monkeypatch
+):
+    session = async_test_session
+    owner, cohort, key, route = await _seed_opencode_world(session, caps=_OPENCODE_CAPS)
+    adapter = _Adapter([_turn1_events()])
+    _patch_streaming(monkeypatch, session, route, adapter)
+    auth = _auth_key(key)
+    await _settle_turn1(session, auth, _settings(), key)
+
+    # A present item id in the native OpenCode captured shape is rejected
+    # by the selected module before any database write.
+    replay_input = _turn2_input()
+    replay_input[2] = {
+        "type": "reasoning",
+        "id": "rs_never_1",
+        "summary": [{"type": "summary_text", "text": "part"}],
+        "encrypted_content": CIPHER,
+    }
+    body = _full_body(stream=True)
+    body["input"] = replay_input
+    with pytest.raises(OpenAICompatibleError) as exc_info:
+        await handle_response_create(
+            payload=_payload(body), authenticated_key=auth, settings=_settings()
+        )
+    assert exc_info.value.code == "opencode_1193_input_item"
+    await session.refresh(key)
+    assert key.requests_used_total == 10
+    assert key.tokens_used_total == 12_352
+    assert len(await _ledger_rows(session, key.id)) == 1
+
+
+@pytest.mark.asyncio
+async def test_opencode_streaming_toolloop_failed_stream_settles_estimated_without_refs(
+    async_test_session, monkeypatch
+):
+    session = async_test_session
+    owner, cohort, key, route = await _seed_opencode_world(session, caps=_OPENCODE_CAPS)
+    events = _turn1_events()
+    # The done item must equal the accumulated arguments; mismatching it
+    # forces the strict stream validator to fail the turn.
+    events[8]["item"]["arguments"] = "WRONG"
+    adapter = _Adapter([events])
+    _patch_streaming(monkeypatch, session, route, adapter)
+    auth = _auth_key(key)
+
+    response = await handle_response_create(
+        payload=_payload(_full_body(stream=True)),
+        authenticated_key=auth,
+        settings=_settings(),
+    )
+    joined = "".join([s async for s in response.body_iterator])
+    assert "response.failed" in joined
+    assert "response.completed" not in joined
+    await session.refresh(key)
+    # A failed streaming turn is admitted as one request. The reservation
+    # is finalized at the estimate (513 input + 32_000 requested max
+    # output = 32_513) and settles as an estimated ledger row of the
+    # observed finalization split (513 input + 5 output = 518 tokens,
+    # EUR 0.001066). It persists NO replay reference because the output
+    # was never validated as completed.
+    assert key.requests_used_total == 10
+    assert key.tokens_used_total == 12_345 + 518
+    assert key.tokens_reserved_total == 0
+    assert key.requests_reserved_total == 0
+    ledger = await _ledger_rows(session, key.id)
+    assert len(ledger) == 1
+    assert ledger[0].success is False
+    assert ledger[0].accounting_status == "estimated"
+    assert ledger[0].input_tokens == 513
+    assert ledger[0].output_tokens == 5
+    assert ledger[0].total_tokens == 518
+    assert len(await _ref_rows(session, key.id)) == 0
+    reservations = await _reservation_rows(session, key.id)
+    assert len(reservations) == 1
+    assert reservations[0].status == "finalized"
+    assert reservations[0].reserved_tokens == 32_513
+    assert reservations[0].finalized_at is not None
+
+
+@pytest.mark.asyncio
+async def test_opencode_streaming_toolloop_missing_replay_capability_denied(
+    async_test_session, monkeypatch
+):
+    session = async_test_session
+    # Key keeps the FULL grants so the key-level gate passes; only the ROUTE
+    # metadata drops codex_encrypted_reasoning_replay (the gate under test -
+    # a key-level denial would short-circuit before the route gate runs).
+    owner, cohort, key, route = await _seed_opencode_world(session, caps=_OPENCODE_CAPS)
+    adapter = _Adapter([])
+    _patch_streaming(monkeypatch, session, route, adapter, caps=_OPENCODE_CAPS[:-1])
+
+    with pytest.raises(OpenAICompatibleError) as exc_info:
+        await handle_response_create(
+            payload=_payload(_full_body(stream=True)),
+            authenticated_key=_auth_key(key),
+            settings=_settings(),
+        )
+    assert exc_info.value.code == "responses_route_capability_not_supported"
+    await session.refresh(key)
+    assert key.requests_used_total == 9
+    assert key.tokens_used_total == 12_345
+    assert len(await _ledger_rows(session, key.id)) == 0
+    assert adapter.calls == 0
