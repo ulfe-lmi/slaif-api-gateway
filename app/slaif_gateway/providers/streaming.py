@@ -159,6 +159,11 @@ class ResponsesStreamValidationProfile:
     # Selected native profiles whose pinned SDK wire requires a valid
     # output_index on every response.output_item.added/done event.
     require_output_indices: bool = False
+    # Selected native profile (OpenCode 1.19.3): the captured visible
+    # reasoning lifecycle closes each summary part with
+    # ``response.reasoning_summary_part.done``.  Every other profile keeps
+    # the baseline denial of this Codex dialect closure event.
+    allow_reasoning_summary_part_done: bool = False
 
 
 @dataclass(slots=True)
@@ -479,11 +484,12 @@ class ResponsesStreamEventValidator:
             return self._validate_existing_text_event(payload, event_type)
         if (
             event_type == "response.reasoning_summary_part.done"
-            and self._profile.allow_sparse_visible_reasoning
+            and self._profile.allow_reasoning_summary_part_done
         ):
-            # The summary-part closure event belongs to the selected OpenCode
-            # native profile; every other profile keeps the baseline denial
-            # of this Codex dialect event.
+            # The summary-part closure event is scoped to the selected
+            # OpenCode native profile by its own qualified wire property;
+            # every other profile keeps the baseline denial of this Codex
+            # dialect event.
             valid = self._validate_codex_event(payload, event_type)
             if valid:
                 self._safe_event_counts[event_type] += 1
@@ -1208,12 +1214,12 @@ class ResponsesStreamEventValidator:
         if (
             not strict_codex
             and event_type == "response.reasoning_summary_part.done"
-            and self._profile.allow_sparse_visible_reasoning
+            and self._profile.allow_reasoning_summary_part_done
         ):
-            # Summary-part closure for the OpenCode selected-profile stream:
-            # the delivered part text must equal the accumulated deltas.
-            # The strict 0.149 dialect and every non-selected profile reject
-            # this event type as before.
+            # Summary-part closure for the selected OpenCode native profile
+            # stream: the delivered part text must equal the accumulated
+            # deltas.  The strict 0.149 dialect and every other profile
+            # reject this event type as before.
             if not _required_index(payload, "summary_index"):
                 return False
             part = payload.get("part")

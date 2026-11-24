@@ -123,6 +123,12 @@ class ResponsesClientPolicySpec:
     # profiles: the producer must supply the index or fail safely. Legacy
     # presets stay False and keep the existing optional behavior.
     require_stream_output_indices: bool = False
+    # Selected native profile (OpenCode 1.19.3): the captured visible
+    # reasoning lifecycle closes each summary part with a
+    # ``response.reasoning_summary_part.done`` event.  Legacy presets stay
+    # False and keep the baseline denial of this Codex dialect closure
+    # event on every stream profile they serve.
+    allow_reasoning_summary_part_done: bool = False
     allow_tool_output_images: bool = False
     # Explicit versioned declaration-history mode selected by the profile
     # data (see modules/codex_tool_history.py). ``None`` keeps the legacy

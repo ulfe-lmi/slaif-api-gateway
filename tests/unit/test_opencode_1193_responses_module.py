@@ -841,8 +841,10 @@ def test_policy_spec_inherited_codex_gates():
     assert SPEC.custom_tool_call_item_id_optional is True
     assert SPEC.reasoning_visible_id_optional is True
     assert SPEC.allow_sparse_function_events is False
+    assert SPEC.allow_reasoning_summary_part_done is True
     assert CODEX_0149_POLICY_SPEC.require_stream_output_indices is False
     assert CODEX_0149_POLICY_SPEC.allow_idless_encrypted_reasoning is False
+    assert CODEX_0149_POLICY_SPEC.allow_reasoning_summary_part_done is False
 
 
 # ---------------------------------------------------------------------------

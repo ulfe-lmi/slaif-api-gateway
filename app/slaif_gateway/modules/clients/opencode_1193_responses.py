@@ -450,6 +450,11 @@ OPENCODE_1193_RESPONSES_POLICY_SPEC = dataclasses.replace(
     # every ``response.output_item.added``/``done`` event; optional-index
     # acceptance is not conformance proof for this profile.
     require_stream_output_indices=True,
+    # The captured OpenCode 1.19.3 visible reasoning lifecycle closes each
+    # summary part with response.reasoning_summary_part.done.  The closure
+    # is a wire property of this selected native profile only; legacy
+    # presets keep the baseline denial.
+    allow_reasoning_summary_part_done=True,
     reasoning_efforts=OPENCODE_1193_RESPONSES_PROFILE_DATA.reasoning_efforts,
     client_metadata_keys=frozenset(),
     max_client_metadata_keys=0,

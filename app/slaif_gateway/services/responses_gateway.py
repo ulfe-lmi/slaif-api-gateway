@@ -2018,6 +2018,16 @@ async def handle_response_create(
                             client_module.policy_spec is not None
                             and client_module.policy_spec.require_stream_output_indices
                         ),
+                        # Selected native wire property: the captured
+                        # OpenCode 1.19.3 visible reasoning lifecycle
+                        # closes each summary part with
+                        # response.reasoning_summary_part.done.  Legacy
+                        # presets keep the baseline denial of this Codex
+                        # dialect closure event.
+                        allow_reasoning_summary_part_done=(
+                            client_module.policy_spec is not None
+                            and client_module.policy_spec.allow_reasoning_summary_part_done
+                        ),
                         declared_client_tools=(
                             pair_local_codex_top_level_tools
                             if pair_local_codex_streaming_tools
