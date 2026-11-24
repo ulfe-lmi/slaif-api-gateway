@@ -1959,10 +1959,20 @@ async def handle_response_create(
                             and client_module.policy_spec.allow_sparse_function_events
                             and local_coding_server_context is not None
                         ),
+                        # Legacy Codex pairs keep the local server context
+                        # requirement; the selected OpenCode native profile's
+                        # qualified visible reasoning lifecycle is a
+                        # client-module wire property served on non-local
+                        # routes. The key/route capability gates below
+                        # remain authoritative.
                         allow_sparse_visible_reasoning=(
                             client_module.policy_spec is not None
                             and client_module.policy_spec.allow_sparse_visible_reasoning
-                            and local_coding_server_context is not None
+                            and (
+                                local_coding_server_context is not None
+                                or client_module.module_id
+                                == OPENCODE_1193_RESPONSES_CLIENT_MODULE_ID
+                            )
                         ),
                         custom_client_tools=(
                             client_module.policy_spec.custom_client_tools
@@ -1994,6 +2004,11 @@ async def handle_response_create(
                         allow_idless_encrypted_reasoning=(
                             client_module.policy_spec is not None
                             and client_module.policy_spec.allow_idless_encrypted_reasoning
+                            and codex_encrypted_reasoning_event_requested
+                        ),
+                        allow_empty_visible_reasoning=(
+                            client_module.policy_spec is not None
+                            and client_module.policy_spec.allow_empty_visible_reasoning
                             and codex_encrypted_reasoning_event_requested
                         ),
                         # Client-module wire property: the selected native
