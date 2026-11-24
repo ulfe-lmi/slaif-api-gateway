@@ -641,9 +641,12 @@ class ResponsesStreamEventValidator:
         if event_type == "response.output_item.done" and not isinstance(item_id, str):
             if state.item_type in {"function_call", "custom_tool_call"}:
                 return False
-            if state.item_type == "reasoning" and not (
-                state.encrypted_reasoning
-                and self._profile.allow_idless_encrypted_reasoning
+            if state.item_type == "reasoning" and (
+                self._profile.codex_encrypted_reasoning_replay
+                and not (
+                    state.encrypted_reasoning
+                    and self._profile.allow_idless_encrypted_reasoning
+                )
             ):
                 return False
 
@@ -680,7 +683,15 @@ class ResponsesStreamEventValidator:
                     if final_text != active.delta_text:
                         return False
                 del self._active_items[item_id]
-                self._capture_replay_candidate(item_id=item_id, state=state)
+                self._capture_replay_candidate(
+                    item_id=item_id,
+                    state=state,
+                    encrypted_content=(
+                        item.get("encrypted_content")
+                        if state.item_type == "reasoning"
+                        else None
+                    ),
+                )
                 return True
             if item_id in self._seen_item_ids:
                 return False
@@ -692,7 +703,15 @@ class ResponsesStreamEventValidator:
             self._seen_call_ids.add(state.call_id)
         if event_type == "response.output_item.done":
             if isinstance(item_id, str):
-                self._capture_replay_candidate(item_id=item_id, state=state)
+                self._capture_replay_candidate(
+                    item_id=item_id,
+                    state=state,
+                    encrypted_content=(
+                        item.get("encrypted_content")
+                        if state.item_type == "reasoning"
+                        else None
+                    ),
+                )
             elif (
                 state.item_type == "reasoning"
                 and state.encrypted_reasoning
@@ -814,8 +833,8 @@ class ResponsesStreamEventValidator:
             kind = "reasoning"
         elif state.item_type in {"function_call", "custom_tool_call"}:
             kind = state.item_type
-            # Stream tool candidates are ID-bearing; the cipher field is only
-            # ever populated by the qualified id-less reasoning path.
+            # Cipher is populated by the reasoning path only (id-bearing or
+            # id-less validated done terminals); tool events never carry it.
             assert encrypted_content is None
         else:
             return

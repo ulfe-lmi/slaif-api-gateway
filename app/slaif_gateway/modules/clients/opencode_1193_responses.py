@@ -595,6 +595,50 @@ def _validate_input_item(item: Any) -> None:
                 "opencode_1193_input_item",
             )
         return
+    if keys == {"type", "summary", "encrypted_content"}:
+        # Native-only ID-less captured form (observed OpenCode 1.19.3
+        # turn-N input); the core replay policy owns ciphertext reference
+        # validation. Exact-key check denies present id/status/extras.
+        if item["type"] != "reasoning":
+            raise _error(
+                "The OpenCode 1.19.3 input item has an invalid captured value",
+                "opencode_1193_input_item",
+            )
+        summary = item["summary"]
+        if not isinstance(summary, list) or len(summary) > _MAX_INPUT_PARTS:
+            raise _error(
+                "The OpenCode 1.19.3 input item has an invalid captured value",
+                "opencode_1193_input_item",
+            )
+        total_bytes = 0
+        for part in summary:
+            if not isinstance(part, Mapping) or set(part) != {"type", "text"}:
+                raise _error(
+                    "The OpenCode 1.19.3 input item has an invalid captured value",
+                    "opencode_1193_input_item",
+                )
+            if part["type"] != "summary_text" or not isinstance(part["text"], str):
+                raise _error(
+                    "The OpenCode 1.19.3 input item has an invalid captured value",
+                    "opencode_1193_input_item",
+                )
+            total_bytes += len(part["text"].encode("utf-8"))
+        if total_bytes > _MAX_INPUT_TEXT_BYTES:
+            raise _error(
+                "The OpenCode 1.19.3 input item has an invalid captured value",
+                "opencode_1193_input_item",
+            )
+        encrypted_content = item["encrypted_content"]
+        if (
+            not isinstance(encrypted_content, str)
+            or not encrypted_content
+            or len(encrypted_content.encode("utf-8")) > _MAX_INPUT_TEXT_BYTES
+        ):
+            raise _error(
+                "The OpenCode 1.19.3 input item has an invalid captured value",
+                "opencode_1193_input_item",
+            )
+        return
     raise _error(
         "The OpenCode 1.19.3 input item has an invalid captured value",
         "opencode_1193_input_item",

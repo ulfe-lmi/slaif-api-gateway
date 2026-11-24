@@ -52,6 +52,19 @@ def _idless_reasoning_done(
     }
 
 
+def _visible_idless_reasoning_done(seq: int = 1) -> dict:
+    item: dict = {
+        "type": "reasoning",
+        "summary": [{"type": "summary_text", "text": "visible"}],
+    }
+    return {
+        "type": "response.output_item.done",
+        "output_index": 0,
+        "sequence_number": seq,
+        "item": item,
+    }
+
+
 def test_idless_encrypted_reasoning_done_rejected_when_flag_off() -> None:
     validator = ResponsesStreamEventValidator(
         _profile(allow_idless_encrypted_reasoning=False)
@@ -147,7 +160,8 @@ def test_idless_function_call_done_still_requires_str_id() -> None:
     assert validator.take_replay_reference_candidates() == ()
 
 
-def test_idbearing_reasoning_candidate_stays_cipherless() -> None:
+def test_idbearing_reasoning_candidate_carries_cipher() -> None:
+    """An ID-bearing validated done keeps the ciphertext for the v3 alias."""
     validator = ResponsesStreamEventValidator(_profile())
     payload = _idless_reasoning_done()
     payload["item"] = copy.deepcopy(payload["item"])
@@ -156,7 +170,7 @@ def test_idbearing_reasoning_candidate_stays_cipherless() -> None:
     (candidate,) = validator.take_replay_reference_candidates()
     assert candidate.item_kind == "reasoning"
     assert candidate.item_id == "rs_1"
-    assert candidate.encrypted_content is None
+    assert candidate.encrypted_content == CIPHER
 
 
 def test_distinct_idless_ciphers_produce_distinct_candidates() -> None:
@@ -171,3 +185,19 @@ def test_distinct_idless_ciphers_produce_distinct_candidates() -> None:
     candidates = validator.take_replay_reference_candidates()
     assert [c.encrypted_content for c in candidates] == [CIPHER, CIPHER_B]
     assert all(c.item_id is None for c in candidates)
+
+
+def test_visible_idless_reasoning_done_preserves_legacy_behavior() -> None:
+    # Replay OFF: the visible idless {type, summary} shape was always legal;
+    # it must still validate and capture no candidate.
+    validator = ResponsesStreamEventValidator(
+        _profile(codex_encrypted_reasoning_replay=False)
+    )
+    assert validator.validate(_visible_idless_reasoning_done()) is True
+    assert validator.take_replay_reference_candidates() == ()
+
+    # Replay ON: the strict encrypted-replay shape set does not include the
+    # visible idless form, so it now fails closed.
+    validator = ResponsesStreamEventValidator(_profile())
+    assert validator.validate(_visible_idless_reasoning_done()) is False
+    assert validator.take_replay_reference_candidates() == ()

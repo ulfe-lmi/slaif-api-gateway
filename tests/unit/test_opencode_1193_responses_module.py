@@ -482,6 +482,89 @@ def test_normalize_rejects_input_items():
         _norm_reject(mutate, "opencode_1193_input_item")
 
 
+def _reasoning_item(summary=None, encrypted_content="enc_ciphertext") -> dict:
+    if summary is None:
+        summary = [{"type": "summary_text", "text": "seen"}]
+    return {
+        "type": "reasoning",
+        "summary": summary,
+        "encrypted_content": encrypted_content,
+    }
+
+
+def _reasoning_input(item: dict) -> list:
+    return [
+        {"role": "developer", "content": "You are a bounded local tool harness."},
+        item,
+        {
+            "role": "user",
+            "content": [{"type": "input_text", "text": "Read the marker file exactly."}],
+        },
+    ]
+
+
+def _with_reasoning(mutate_item):
+    def mutate(body):
+        item = _reasoning_item()
+        mutate_item(item)
+        body["input"] = _reasoning_input(item)
+
+    return mutate
+
+
+def test_normalize_accepts_idless_reasoning_input():
+    assert _norm(_turn1() | {"input": _reasoning_input(_reasoning_item())}) is not None
+    assert (
+        _norm(_turn1() | {"input": _reasoning_input(_reasoning_item(summary=[]))})
+        is not None
+    )
+    assert (
+        _norm(
+            _turn1()
+            | {
+                "input": _reasoning_input(
+                    _reasoning_item(summary=[{"type": "summary_text", "text": ""}])
+                )
+            }
+        )
+        is not None
+    )
+    parts = [{"type": "summary_text", "text": "x"} for _ in range(64)]
+    assert (
+        _norm(_turn1() | {"input": _reasoning_input(_reasoning_item(summary=parts))})
+        is not None
+    )
+
+
+def test_normalize_rejects_idless_reasoning_input():
+    cases = [
+        lambda item: item.update({"id": "rs_1"}),
+        lambda item: item.update({"status": "completed"}),
+        lambda item: item.update({"type": "message"}),
+        lambda item: item.update({"summary": "seen"}),
+        lambda item: item.update({"summary": [{"type": "summary_text"}]}),
+        lambda item: item.update(
+            {"summary": [{"type": "summary_text", "text": "x", "extra": 1}]}
+        ),
+        lambda item: item.update({"summary": [{"type": "text", "text": "x"}]}),
+        lambda item: item.update({"summary": [{"type": "summary_text", "text": 7}]}),
+        lambda item: item.update({"summary": [{"type": "summary_text", "text": "x"}] * 65}),
+        lambda item: item.update(
+            {
+                "summary": [
+                    {"type": "summary_text", "text": "x" * 1_048_576},
+                    {"type": "summary_text", "text": "y"},
+                ]
+            }
+        ),
+        lambda item: item.update({"encrypted_content": ""}),
+        lambda item: item.update({"encrypted_content": 7}),
+        lambda item: item.update({"encrypted_content": "x" * 1_048_577}),
+    ]
+    for mutate_item in cases:
+        _norm_reject(_with_reasoning(mutate_item), "opencode_1193_input_item")
+
+
 def _tool_reject(parameters=None, **tool_overrides):
     def mutate(body):
         tool = _tool("read")

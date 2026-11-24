@@ -2505,9 +2505,11 @@ def test_encrypted_reasoning_done_event_is_exact_opaque_and_candidate_only() -> 
     assert len(candidates) == 1
     assert candidates[0].item_kind == "reasoning"
     assert candidates[0].item_id == "rs_1"
-    # ID-bearing candidates stay ID-only lookups; the cipher field exists
-    # only for the qualified id-less path and must remain unset here.
-    assert candidates[0].encrypted_content is None
+    # ID-bearing validated done persists the profile-qualified v3
+    # ciphertext alias alongside the v1 ID reference.  The take call
+    # released the ciphertext to the immediate HMAC step and cleared
+    # validator state, so it must not survive in either representation.
+    assert candidates[0].encrypted_content == PRIVATE_CANARY
     assert not hasattr(candidates[0], "summary")
     assert PRIVATE_CANARY not in repr(validator.__dict__)
     assert PRIVATE_CANARY not in json.dumps(validator.safe_evidence())

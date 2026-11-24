@@ -207,25 +207,120 @@ async def test_idless_reasoning_rejects_duplicate_identical_cipher() -> None:
 
 
 @pytest.mark.asyncio
-async def test_idpresent_reasoning_with_cipher_is_rejected_defensively() -> None:
-    """ID-bound reasoning rows exist; a cipher plus ID must be denied, flag on or off."""
+async def test_idpresent_reasoning_with_valid_cipher_is_accepted() -> None:
+    """ID-bearing issuance persists the v1 row plus a v3 ciphertext alias."""
 
-    service = CodexReplayService(repository=FakeRepository(), settings=_settings())
     key_id = uuid.uuid4()
+    route_id = uuid.uuid4()
+    now = datetime(2026, 11, 23, 9, 0, tzinfo=UTC)
+    v1_digest = hmac_sha256_token(
+        token="slaif-codex-replay:v1:item:reasoning:rs_reasoning_1", secret=_SECRET
+    )
     for flag in (False, True):
+        repository = FakeRepository()
+        service = CodexReplayService(repository=repository, settings=_settings())
+        await service.persist_validated_references(
+            candidates=(
+                Candidate(
+                    item_kind="reasoning",
+                    item_id="rs_reasoning_1",
+                    encrypted_content=_CIPHER,
+                ),
+            ),
+            gateway_key_id=key_id,
+            usage_ledger_id=uuid.uuid4(),
+            source_request_id=f"req_idpresent_{flag}",
+            provider="openai",
+            route_id=route_id,
+            upstream_model="gpt-test",
+            now=now,
+            allow_idless_encrypted_reasoning=flag,
+        )
+        assert len(repository.rows) == 2
+        v1_row = next(row for row in repository.rows if row.item_id_hmac == v1_digest)
+        v3_row = next(
+            row for row in repository.rows if row.item_id_hmac == _expected_v3_digest(_CIPHER)
+        )
+        assert v1_row.id != v3_row.id
+        assert v1_row.hmac_key_version == v3_row.hmac_key_version
+        for row in repository.rows:
+            assert row.item_kind == "reasoning"
+            assert row.call_id_hmac is None
+            assert row.tool_namespace is None
+            assert row.tool_name is None
+            assert _HEX64.fullmatch(row.item_id_hmac) is not None
+            assert _CIPHER not in row.item_id_hmac
+            assert row.expires_at == now + CODEX_REPLAY_REFERENCE_TTL
+
+        # SDK-style idless replay matches the v3 alias row.
+        authorization = await service.verify_owned_replay(
+            candidates=(_idless_reasoning(),),
+            gateway_key_id=key_id,
+            now=now + timedelta(minutes=1),
+            allow_idless_encrypted_reasoning=True,
+        )
+        (reference,) = authorization.references
+        assert reference.item_kind == "reasoning"
+        assert reference.route_id == route_id
+        assert reference.upstream_model == "gpt-test"
+        assert reference.expires_at == v3_row.expires_at
+
+        # ID-bearing replay matches the v1 row with the legacy (no-flag) path.
+        authorization = await service.verify_owned_replay(
+            candidates=(
+                Candidate(item_kind="reasoning", item_id="rs_reasoning_1"),
+            ),
+            gateway_key_id=key_id,
+            now=now + timedelta(minutes=1),
+        )
+        (reference,) = authorization.references
+        assert reference.item_kind == "reasoning"
+        assert reference.route_id == route_id
+        assert reference.expires_at == v1_row.expires_at
+
+
+@pytest.mark.asyncio
+async def test_idpresent_reasoning_with_invalid_cipher_is_rejected() -> None:
+    """Empty, non-string, or oversized ciphertext must fail the immediate gate."""
+
+    key_id = uuid.uuid4()
+    for encrypted_content in ("", 7, "x" * 1_048_577):
+        service = CodexReplayService(repository=FakeRepository(), settings=_settings())
         with pytest.raises(CodexReplayReferenceError) as exc_info:
             await service.verify_owned_replay(
                 candidates=(
                     Candidate(
                         item_kind="reasoning",
                         item_id="rs_reasoning_1",
-                        encrypted_content=_CIPHER,
+                        encrypted_content=encrypted_content,
                     ),
                 ),
                 gateway_key_id=key_id,
-                allow_idless_encrypted_reasoning=flag,
+                allow_idless_encrypted_reasoning=True,
             )
         assert exc_info.value.error_code == "responses_codex_replay_reference_not_found"
+
+        repository = FakeRepository()
+        service = CodexReplayService(repository=repository, settings=_settings())
+        with pytest.raises(CodexReplayReferenceError) as persist_info:
+            await service.persist_validated_references(
+                candidates=(
+                    Candidate(
+                        item_kind="reasoning",
+                        item_id="rs_reasoning_1",
+                        encrypted_content=encrypted_content,
+                    ),
+                ),
+                gateway_key_id=key_id,
+                usage_ledger_id=uuid.uuid4(),
+                source_request_id="req_bad_cipher",
+                provider="openai",
+                route_id=uuid.uuid4(),
+                upstream_model="gpt-test",
+                allow_idless_encrypted_reasoning=True,
+            )
+        assert persist_info.value.error_code == "responses_codex_replay_reference_not_found"
+        assert repository.rows == []
 
 
 @pytest.mark.asyncio
@@ -564,3 +659,54 @@ async def test_v3_digest_is_domain_separated_from_v1() -> None:
     )
     assert v3 != v1_like
     assert _HEX64.fullmatch(v3) is not None
+
+
+@pytest.mark.asyncio
+async def test_duplicate_cipher_across_idforms_is_rejected() -> None:
+    """One ciphertext must not be persisted under both ID forms at once."""
+
+    repository = FakeRepository()
+    service = CodexReplayService(repository=repository, settings=_settings())
+    with pytest.raises(CodexReplayReferenceError) as exc_info:
+        await service.persist_validated_references(
+            candidates=(
+                Candidate(
+                    item_kind="reasoning",
+                    item_id="rs_dup_1",
+                    encrypted_content=_CIPHER,
+                ),
+                _idless_reasoning(),
+            ),
+            gateway_key_id=uuid.uuid4(),
+            usage_ledger_id=uuid.uuid4(),
+            source_request_id="req_dup_form",
+            provider="openai",
+            route_id=uuid.uuid4(),
+            upstream_model="gpt-test",
+            allow_idless_encrypted_reasoning=True,
+        )
+    assert exc_info.value.error_code == "responses_codex_replay_reference_not_found"
+    assert repository.rows == []
+
+
+@pytest.mark.asyncio
+async def test_tool_candidate_with_cipher_is_rejected() -> None:
+    """Encrypted-content only has meaning for reasoning; tools must stay cipherless."""
+
+    service = CodexReplayService(repository=FakeRepository(), settings=_settings())
+    with pytest.raises(CodexReplayReferenceError) as exc_info:
+        await service.verify_owned_replay(
+            candidates=(
+                Candidate(
+                    item_kind="function_call",
+                    item_id="fc_prefixed_1",
+                    call_id="call_1",
+                    tool_namespace="functions",
+                    tool_name="exec",
+                    encrypted_content=_CIPHER,
+                ),
+            ),
+            gateway_key_id=uuid.uuid4(),
+            allow_idless_encrypted_reasoning=True,
+        )
+    assert exc_info.value.error_code == "responses_codex_replay_reference_not_found"
