@@ -486,6 +486,117 @@ def test_normalize_rejects_input_items():
         _norm_reject(mutate, "opencode_1193_input_item")
 
 
+# ---------------------------------------------------------------------------
+# Default auto-title auxiliary request form (no --title)
+# ---------------------------------------------------------------------------
+
+
+def _aux_body(stream: bool = True) -> dict:
+    """Seven-field no-``--title`` auxiliary session-title request form."""
+    return {
+        "model": "qwen38-27b",
+        "stream": stream,
+        "store": False,
+        "include": [INCLUDE],
+        "reasoning": {"effort": "xhigh"},
+        "max_output_tokens": 32000,
+        "input": [
+            {"role": "developer", "content": "You are a bounded local tool harness."},
+            {
+                "role": "user",
+                "content": [{"type": "input_text", "text": "Title this session."}],
+            },
+            {
+                "role": "user",
+                "content": [{"type": "input_text", "text": "with a short title"}],
+            },
+        ],
+    }
+
+
+def _aux_reject(mutate, code):
+    body = _aux_body()
+    mutate(body)
+    with pytest.raises(ModuleSelectionError) as exc:
+        _norm(body)
+    assert exc.value.error_code == code
+
+
+def test_aux_title_accepts_stream_bools():
+    for stream in (True, False):
+        result = _norm(_aux_body(stream=stream))
+        assert result.module_id == MOD_ID
+        assert result.module_version == "1"
+        assert result.endpoint == "/v1/responses"
+        assert result.body == _aux_body(stream=stream)
+        assert result.zero_argument_function_names == frozenset()
+        assert result.stream_profile == MOD_ID
+
+
+def test_aux_title_rejects_field_set():
+    _aux_reject(lambda b: b.update({"tool_choice": "auto"}), "opencode_1193_fields")
+    _aux_reject(lambda b: b.update({"tools": [_tool("read")]}), "opencode_1193_fields")
+    _aux_reject(lambda b: b.pop("include"), "opencode_1193_fields")
+
+
+def test_aux_title_rejects_field_shapes():
+    _aux_reject(lambda b: b.update({"stream": "true"}), "opencode_1193_field_shape")
+    _aux_reject(lambda b: b.update({"store": True}), "opencode_1193_field_shape")
+    _aux_reject(lambda b: b.update({"input": []}), "opencode_1193_field_shape")
+
+
+# ---------------------------------------------------------------------------
+# Replayed assistant output_text history
+# ---------------------------------------------------------------------------
+
+
+def _assistant_body(content) -> dict:
+    return {
+        **_turn1(),
+        "input": [
+            {"role": "developer", "content": "You are a bounded local tool harness."},
+            {"role": "assistant", "content": content},
+            {
+                "role": "user",
+                "content": [{"type": "input_text", "text": "Read the marker file exactly."}],
+            },
+        ],
+    }
+
+
+def test_normalize_accepts_assistant_output_text_history():
+    _norm(_assistant_body([{"type": "output_text", "text": "I read the marker."}]))
+    _norm(
+        _assistant_body(
+            [
+                {"type": "output_text", "text": "part one"},
+                {"type": "output_text", "text": "part two"},
+            ]
+        )
+    )
+
+
+def test_normalize_rejects_assistant_history_shapes():
+    cases = [
+        "x",
+        [],
+        [{"type": "input_text", "text": "x"}],
+        [{"type": "output_text"}],
+        [{"type": "output_text", "text": "x", "extra": 1}],
+        [{"type": "output_text", "text": ""}],
+        [{"type": "output_text", "text": "x" * 1_048_577}],
+        [
+            {"type": "output_text", "text": "x" * 600_000},
+            {"type": "output_text", "text": "y" * 600_000},
+        ],
+        [{"type": "output_text", "text": "x"}] * 65,
+    ]
+    for content in cases:
+        with pytest.raises(ModuleSelectionError) as exc:
+            _norm(_assistant_body(content))
+        assert exc.value.error_code == "opencode_1193_input_item"
+
+
 def _reasoning_item(summary=None, encrypted_content="enc_ciphertext") -> dict:
     if summary is None:
         summary = [{"type": "summary_text", "text": "seen"}]
@@ -538,6 +649,13 @@ def test_normalize_accepts_idless_reasoning_input():
         _norm(_turn1() | {"input": _reasoning_input(_reasoning_item(summary=parts))})
         is not None
     )
+    assert (
+        _norm(
+            _turn1()
+            | {"input": _reasoning_input(_reasoning_item(encrypted_content=""))}
+        )
+        is not None
+    )
 
 
 def test_normalize_rejects_idless_reasoning_input():
@@ -561,7 +679,6 @@ def test_normalize_rejects_idless_reasoning_input():
                 ]
             }
         ),
-        lambda item: item.update({"encrypted_content": ""}),
         lambda item: item.update({"encrypted_content": 7}),
         lambda item: item.update({"encrypted_content": "x" * 1_048_577}),
     ]
@@ -701,6 +818,7 @@ def test_normalize_rejects_authority_shapes():
 
 def test_policy_spec_owned_overrides():
     assert SPEC.allow_idless_encrypted_reasoning is True
+    assert SPEC.allow_empty_visible_reasoning is True
     assert SPEC.require_stream_output_indices is True
     assert SPEC.reasoning_efforts == EFFORTS
     assert SPEC.client_metadata_keys == frozenset()
