@@ -491,6 +491,37 @@ and nothing in it qualifies this Responses module.
 - LAN target fresh nonsecret readiness: `10.8.132.55:18021` TCP
   connect OK; unauthenticated `GET /v1/models` → 401 (target up, no
   credentials used).
+- Safe LAN preflight (no LAN traffic sent): task PG now also holds the
+  accepted LAN target as provider `qwen-student-lan`
+  (`openai_compatible`, base `http://10.8.132.55:18021/v1`,
+  `max_retries=0`, timeout 60 s, key resolved from
+  `LAN228_UPSTREAM_API_KEY` at adapter creation) with route
+  `qwen38-27b` -> `qwen38-27b` on `/v1/responses` (streaming, same four
+  Codex capabilities as the loopback pair, `codex_limits` set to the
+  real LAN model limits 245760/32768/32768) and EUR 1.00/M task
+  pricing. The operator-owned bearer (reviewed `qwen-student-lan`
+  profile, mode 0600, value never printed) was copied only into the
+  0600 task Gateway env file. No LAN task key was created; the
+  short-lived key is created only at dispatch time.
+- Task Gateway restarted once more for the new env var: new PID
+  678046 (long-lived session 70659), 127.0.0.1:18310/v1, app tree
+  byte-identical to the `05dddb3e` guard-fix checkpoint (HEAD
+  `2cb87417` is docs-only); listener, process env var presence,
+  401 unauth probe, and clean worktree revalidated across separate
+  tool calls; PG revalidated (2 providers, 2 routes, 6 task keys,
+  usage ledger/reservations/diagnostics 0). No evidence reset.
+- Loopback case preparation (no traffic): pre-c fake
+  `state.json`/`requests.jsonl` journals (b-era test state plus the
+  22:42 restart-verification direct-fake probe) archived verbatim per
+  case under `archive-228c-prep-20261124T225629Z/`; all six case
+  `scenario.json` files match the launcher case selectors
+  (`assistant_tool` baseline with auto-title, three
+  `reasoning_visible` cipher states absent/null/empty,
+  `reasoning_continuation`, `compaction` with no completed-read or
+  marker predicates); each `expected_marker.bin` is an owned symlink
+  to its own future client run-root marker; all client run-roots
+  verified absent (launcher requirement). Loopback dispatch state:
+  ready, awaiting root-reviewed dispatch.
 - Native loopback run and protected LAN launch: still `not_run`,
   awaiting root dispatch per the 228-c order.
 
