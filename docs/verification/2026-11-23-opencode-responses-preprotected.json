@@ -1,0 +1,82 @@
+{
+  "schema_version": 1,
+  "objective": "228-a",
+  "branch": "oap/228-opencode-responses",
+  "base_main": "5f0f4c34ff13f1d76ae050708a37f387e6988451",
+  "tested_implementation_head_sha": "79e27c844e70a54cdf092d53b6aca8bd5bb5004b",
+  "head_note": "documentation-only commits follow the tested implementation head; final publication head is pending the reviewed secondary loopback-capture cherry-pick",
+  "record": "docs/verification/2026-11-23-opencode-responses-preprotected.md",
+  "status": "PREPROTECTED_READY",
+  "status_note": "preprotected candidate; protected live-qualification gate not_run; known failure: focused OAP governance 1 failed / 9 passed (activated-order format literal; order, oap/active, and test unchanged; pending root ruling); no production certification",
+  "evidence": [
+    {
+      "type": "unit",
+      "label": "unit matrix; mock-upstream coverage only in tests/unit/test_responses_codex_streaming_tools.py",
+      "result": "338 passed in 5.29s",
+      "files": [
+        "tests/unit/test_codex_replay_idless_reasoning.py",
+        "tests/unit/test_responses_codex_streaming_idless_reasoning.py",
+        "tests/unit/test_opencode_1193_responses_module.py",
+        "tests/unit/test_responses_codex_multiturn_replay.py",
+        "tests/unit/test_responses_codex_streaming_tools.py",
+        "tests/unit/test_codex_replay_service.py"
+      ],
+      "command": "PYTHONDONTWRITEBYTECODE=1 TMPDIR=/home/janezp/codex-work/slaif-228-tmp TMP=$TMPDIR TEMP=$TMPDIR .venv/bin/python -m pytest tests/unit/test_codex_replay_idless_reasoning.py tests/unit/test_responses_codex_streaming_idless_reasoning.py tests/unit/test_opencode_1193_responses_module.py tests/unit/test_responses_codex_multiturn_replay.py tests/unit/test_responses_codex_streaming_tools.py tests/unit/test_codex_replay_service.py -q -o addopts= -p no:cacheprovider"
+    },
+    {
+      "type": "real_isolated_postgresql",
+      "label": "real isolated PostgreSQL 16, database slaif228_test on 127.0.0.1:54401, explicit TEST_DATABASE_URL, no side effects beyond the disposable database",
+      "result": "11 passed in 1.38s (1 warning: Alembic path_separator deprecation)",
+      "files": [
+        "tests/integration/test_opencode_1193_responses_postgres.py"
+      ],
+      "command": "TEST_DATABASE_URL=postgresql+asyncpg://postgres@127.0.0.1:54401/slaif228_test PYTHONDONTWRITEBYTECODE=1 TMPDIR=/home/janezp/codex-work/slaif-228-tmp TMP=$TMPDIR TEMP=$TMPDIR .venv/bin/python -m pytest tests/integration/test_opencode_1193_responses_postgres.py -q -o addopts= -p no:cacheprovider"
+    },
+    {
+      "type": "secondary_fake_peer_loopback",
+      "label": "synthetic bearer + 127.0.0.1 loopback only; no raw content/IDs/credentials retained; run root cleaned",
+      "result": "all_pass=true (text exact sentinel 5.828s; tool loop correlated read final 38B exact 5.78s; reasoning replay equals_issued 64B 5.527s)",
+      "commit": "3c61d6c3daa62bccada1f3e7756611ad4e493151",
+      "state": "root capture review in progress; secondary verifier corrections pending in same order (presence-only correlation, 8-hex equality, duplicate output index 0); final reviewed SHA pending; Gateway not broadened for malformed fake SSE"
+    },
+    {
+      "type": "lint",
+      "label": "ruff check app tests at tested implementation head",
+      "result": "clean"
+    },
+    {
+      "type": "governance",
+      "label": "focused OAP governance on new activation",
+      "result": "1 failed, 9 passed in 0.37s",
+      "failed_test": "test_initial_round_declares_new_pr_and_one_objective_one_pr",
+      "root_cause": "activated order line 3 'PR mode: NEW_PR' does not match the validator literal 'PR mode: CREATE_NEW_PR' required for -a initial rounds",
+      "disposition": "activated order, oap/active, and test unchanged (order rule: byte-unchanged order; no test weakening); pending root canonical ruling (227-b precedent)",
+      "command": "PYTHONDONTWRITEBYTECODE=1 TMPDIR=/home/janezp/codex-work/slaif-228-tmp TMP=$TMPDIR TEMP=$TMPDIR .venv/bin/python -m pytest tests/unit/test_oap_governance.py -q -o addopts= -p no:cacheprovider"
+    },
+    {
+      "type": "real_provider",
+      "label": "real provider inference",
+      "result": "not_run"
+    },
+    {
+      "type": "protected_gate",
+      "label": "protected live-qualification gate",
+      "result": "not_run"
+    }
+  ],
+  "not_run": [
+    "real_provider",
+    "protected_gate"
+  ],
+  "findings": [
+    "streaming gap: progress events carrying response_id fail the three-layer strict field check; pending root ruling; no L1/L2/L3 source change",
+    "present-but-null fixture digest -> client_module_fixture_mismatch (fail closed)",
+    "streaming-only: stream=false -> opencode_1193_field_shape",
+    "id-less reasoning v3 denial matrix covered in unit matrix; legacy presets and legacy digest bytes unchanged; no schema change",
+    "retry boundary: gateway zero-retry is gateway policy only; pinned OpenCode session hardcodes RETRY_MAX_RETRIES=5 with no override; zero native HTTP retries never claimed"
+  ],
+  "twenty_seven_reused": {
+    "record": "docs/verification/2026-11-20-hermes-opencode-chat.md",
+    "scope": "227-c bounded LAN Chat qualification only, that execution only, with its documented stock-retry exception; not relabeled as 228 evidence"
+  }
+}
