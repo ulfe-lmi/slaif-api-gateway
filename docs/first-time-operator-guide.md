@@ -609,8 +609,17 @@ These profiles are candidate dossiers: see
 [agentic-clients/hermes-0.22.5-chat-v1.md](agentic-clients/hermes-0.22.5-chat-v1.md)
 and
 [agentic-clients/opencode-1.19.3-chat-v1.md](agentic-clients/opencode-1.19.3-chat-v1.md).
-The protected live gate is `not_run`, and no production live inference
-is recorded for them.
+The protected live gate for these Chat profiles was executed once in the
+bounded, human-authorized 227-c local-area-network qualification, whose
+documented stock-retry exception applied to that execution only; no
+production certification follows, and the qualification is recorded in the
+[2026-11-20 consolidated verification
+record](verification/2026-11-20-hermes-opencode-chat.md).
+The separate pinned OpenCode Responses module
+`opencode-1.19.3-responses-v1` (objective 228-a) is a preprotected
+candidate selected from the key metadata pin
+`responses_policy.client_module`; its protected live-qualification gate is
+`not_run`. See [responses-compatibility.md](responses-compatibility.md).
 
 ## Real-Provider Smoke Test
 
