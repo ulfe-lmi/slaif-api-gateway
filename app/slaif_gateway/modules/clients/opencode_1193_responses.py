@@ -7,12 +7,22 @@ The SDK entry point is ``@ai-sdk/openai`` 3.0.88 with nested 3.0.84 copies;
 the evidence does not identify which copy loaded, so no loaded-copy
 inference is made.
 
-The module encodes the captured flat dialect only: nine top-level request
-fields (``stream`` true, ``store`` false, ``tool_choice`` "auto", ``include``
-limited to ``reasoning.encrypted_content``, ``reasoning`` limited to a five-valued
-``effort``), typeless developer/user messages, id-less
-``function_call``/``function_call_output`` replay, and flat strict function
-tool declarations whose nine names are a bounded vocabulary, not authority.
+The module encodes the captured flat dialect only: two bounded top-level
+request forms. The main streamed form carries the nine top-level fields
+(``stream`` true, ``store`` false, ``tool_choice`` "auto", ``tools``,
+``include`` limited to ``reasoning.encrypted_content``, ``reasoning``
+limited to a five-valued ``effort``). The default auto-title auxiliary
+form carries exactly the seven fields without ``tool_choice``/``tools``
+(``stream`` bool, ``store`` false); the observed f3 capture sent
+``stream`` true although the order wording expected false, both bools are
+accepted, and the discrepancy is documented in the consolidated record.
+Input accepts typeless developer/user messages, replayed typeless
+``assistant`` ``output_text`` history (history only, not authority),
+id-less ``function_call``/``function_call_output`` replay, and id-less
+captured reasoning whose empty ``encrypted_content`` is kept verbatim with
+no zero-byte ciphertext authority (v3 references issue only from nonempty
+validated finalized output); flat strict function tool declarations keep
+nine bounded-vocabulary names, not authority.
 The provider replays function calls, outputs, and encrypted reasoning without
 item IDs or status, so id-less encrypted reasoning relies on the gateway's
 owned ciphertext-derived reference path (the 228-a security decision): a
@@ -111,6 +121,12 @@ _ALLOWED_FIELDS = frozenset(
         "tool_choice",
         "tools",
     }
+)
+# Seven-field default auto-title auxiliary request form (observed OpenCode
+# 1.19.3 no-``--title`` auxiliary session-title request: the first request
+# of the pair, with no ``tool_choice`` and no ``tools``).
+_AUX_TITLE_REQUEST_FIELDS = frozenset(
+    {"include", "input", "max_output_tokens", "model", "reasoning", "store", "stream"}
 )
 _ALLOWED_INCLUDE_VALUES = frozenset({"reasoning.encrypted_content"})
 _ALLOWED_INPUT_ROLES = frozenset({"developer", "user"})
@@ -415,6 +431,11 @@ OPENCODE_1193_RESPONSES_PROFILE_FIXTURE_SHA256 = (
 OPENCODE_1193_RESPONSES_POLICY_SPEC = dataclasses.replace(
     CODEX_0149_POLICY_SPEC,
     allow_idless_encrypted_reasoning=True,
+    # Observed OpenCode 1.19.3 keeps a visible reasoning item with an empty
+    # ``encrypted_content`` verbatim in turn-N input. The zero-byte cipher
+    # carries no ciphertext authority: v3 ciphertext references are issued
+    # only from nonempty validated finalized output.
+    allow_empty_visible_reasoning=True,
     # Native wire is flat (no namespace field): a removed function tool may
     # still replay after its same-key CALL-ID HMAC proof, without ever
     # rejoining the active declaration set.
@@ -528,6 +549,44 @@ def _validate_input_content(content: Any) -> None:
     )
 
 
+def _validate_assistant_output_text_content(content: Any) -> None:
+    """Bound replayed assistant text history (observed OpenCode turn-N).
+
+    Replay history only: the core revalidates ``output_text`` against the
+    active declaration set; this module only bounds the captured shape.
+    The observed form is a list of ``{"type": "output_text", "text"}``
+    parts; a bare string was never observed and stays denied.
+    """
+    if not isinstance(content, list) or not 1 <= len(content) <= _MAX_INPUT_PARTS:
+        raise _error(
+            "The OpenCode 1.19.3 assistant input content has an invalid captured value",
+            "opencode_1193_input_item",
+        )
+    total_bytes = 0
+    for part in content:
+        if (
+            not isinstance(part, Mapping)
+            or set(part) != {"type", "text"}
+            or part["type"] != "output_text"
+        ):
+            raise _error(
+                "The OpenCode 1.19.3 assistant input part has an invalid captured value",
+                "opencode_1193_input_item",
+            )
+        text = part["text"]
+        if not isinstance(text, str) or not text or len(text.encode("utf-8")) > _MAX_INPUT_TEXT_BYTES:
+            raise _error(
+                "The OpenCode 1.19.3 assistant input part has an invalid captured value",
+                "opencode_1193_input_item",
+            )
+        total_bytes += len(text.encode("utf-8"))
+    if total_bytes > _MAX_INPUT_TEXT_BYTES:
+        raise _error(
+            "The OpenCode 1.19.3 assistant input content has an invalid captured value",
+            "opencode_1193_input_item",
+        )
+
+
 def _validate_tool_call_id(call_id: Any) -> None:
     profile_data = OPENCODE_1193_RESPONSES_PROFILE_DATA
     if not isinstance(call_id, str):
@@ -556,12 +615,17 @@ def _validate_input_item(item: Any) -> None:
     keys = set(item)
     if keys == {"role", "content"}:
         role = item["role"]
-        if not isinstance(role, str) or role not in _ALLOWED_INPUT_ROLES:
+        if not isinstance(role, str) or (
+            role not in _ALLOWED_INPUT_ROLES and role != "assistant"
+        ):
             raise _error(
                 "The OpenCode 1.19.3 input item has an invalid captured value",
                 "opencode_1193_input_item",
             )
-        _validate_input_content(item["content"])
+        if role == "assistant":
+            _validate_assistant_output_text_content(item["content"])
+        else:
+            _validate_input_content(item["content"])
         return
     if keys == {"type", "name", "arguments", "call_id"}:
         if item["type"] != "function_call":
@@ -637,9 +701,12 @@ def _validate_input_item(item: Any) -> None:
                 "opencode_1193_input_item",
             )
         encrypted_content = item["encrypted_content"]
+        # Observed SDK behavior keeps ``encrypted_content: ""`` verbatim in
+        # turn-N input; the empty string is accepted as captured shape. It
+        # carries no ciphertext authority: v3 ciphertext references are
+        # issued only from nonempty validated finalized output.
         if (
             not isinstance(encrypted_content, str)
-            or not encrypted_content
             or len(encrypted_content.encode("utf-8")) > _MAX_INPUT_TEXT_BYTES
         ):
             raise _error(
@@ -723,22 +790,37 @@ class Opencode1193ResponsesClientModule:
             raise _error("The OpenCode 1.19.3 client module supports Responses create only")
         if not isinstance(body, Mapping):
             raise _error("The OpenCode 1.19.3 request body is not a mapping")
-        if set(body) != _ALLOWED_FIELDS:
+        keys = set(body)
+        if keys == _ALLOWED_FIELDS:
+            request_form = "main"
+        elif keys == _AUX_TITLE_REQUEST_FIELDS:
+            request_form = "aux"
+        else:
             raise _error(
                 "The OpenCode 1.19.3 request contains unsupported fields",
                 "opencode_1193_fields",
             )
-        if body["stream"] is not True:
-            raise _error(
-                "The OpenCode 1.19.3 stream field has an invalid captured value",
-                "opencode_1193_field_shape",
-            )
+        if request_form == "main":
+            if body["stream"] is not True:
+                raise _error(
+                    "The OpenCode 1.19.3 stream field has an invalid captured value",
+                    "opencode_1193_field_shape",
+                )
+        else:
+            # Observed auxiliary capture has ``stream`` true although the
+            # order wording expected false; both bools are accepted and the
+            # discrepancy is documented in the consolidated record.
+            if not isinstance(body["stream"], bool):
+                raise _error(
+                    "The OpenCode 1.19.3 stream field has an invalid captured value",
+                    "opencode_1193_field_shape",
+                )
         if body["store"] is not False:
             raise _error(
                 "The OpenCode 1.19.3 store field has an invalid captured value",
                 "opencode_1193_field_shape",
             )
-        if body["tool_choice"] != "auto":
+        if request_form == "main" and body["tool_choice"] != "auto":
             raise _error(
                 "The OpenCode 1.19.3 tool_choice field has an invalid captured value",
                 "opencode_1193_field_shape",
@@ -790,18 +872,19 @@ class Opencode1193ResponsesClientModule:
             )
         for item in input_items:
             _validate_input_item(item)
-        tools = body["tools"]
-        if (
-            not isinstance(tools, list)
-            or not 1 <= len(tools) <= OPENCODE_1193_RESPONSES_PROFILE_DATA.max_tool_declarations
-        ):
-            raise _error(
-                "The OpenCode 1.19.3 tools field has an invalid captured value",
-                "opencode_1193_field_shape",
-            )
         seen_names: set[str] = set()
-        for tool in tools:
-            _validate_tool_declaration(tool, seen_names)
+        if request_form == "main":
+            tools = body["tools"]
+            if (
+                not isinstance(tools, list)
+                or not 1 <= len(tools) <= OPENCODE_1193_RESPONSES_PROFILE_DATA.max_tool_declarations
+            ):
+                raise _error(
+                    "The OpenCode 1.19.3 tools field has an invalid captured value",
+                    "opencode_1193_field_shape",
+                )
+            for tool in tools:
+                _validate_tool_declaration(tool, seen_names)
         return CanonicalClientRequest(
             module_id=self.module_id,
             module_version=self.module_version,
