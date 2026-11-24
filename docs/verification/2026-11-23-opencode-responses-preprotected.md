@@ -23,8 +23,11 @@ governance run at the final 228-b code head).
   the final 228-b code head (the a-era 1 failed / 9 passed is preserved
   as immutable history; see below).
 - Strict zero-retry plus six-settled-request admission guarantee:
-  `UNSATISFIED` (source-verified; the relaxed live plan below requires
-  an explicit human risk decision; see Proposed future live plan).
+  `UNSATISFIED` (source-verified; recorded as a limitation, not a
+  requirement). The human-approved bounded LAN plan explicitly allows
+  stock native retries; six is a settled-request quota and failed
+  admissions can release reservations. This is not a pending
+  human-decision gate (see Approved bounded live plan).
 - Final PR-head CI: pending (GitHub, after push; not claimed as pass).
 - No production certification, universal compatibility, or security
   certification claim.
@@ -43,6 +46,14 @@ governance run at the final 228-b code head).
   governance, all below; `ruff check app tests` clean). `c5d007fb` is
   test-only on top of `d896ad91`, so the app code is byte-identical to
   the running task Gateway.
+- 228-c guard-fix code head: `05dddb3e513749c61c31995dd6486fbe10fa14bd`
+  (on top of the 228-b report head `e3a66894`; the app delta is the
+  selected-native closure-property correction only). Tree identities:
+  `HEAD:app` = `4d8d54632126cc04bc9974fa11092b7aa9047a46`;
+  `HEAD:app/slaif_gateway` = `f753105b38ddc43761db908c3073da79eb864ab9`.
+  Profile DATA is unchanged: fixture (canonical document) digest
+  `592c5d1baa7aa3a805320411f3f961521ba72b30cc34cafe01cb755ddf69f0ff`,
+  client module `opencode-1.19.3-responses-v1` version `1`.
 - Tree identities at `55482cc16b4f40530498040c70e0151433b3a9c1`:
   `HEAD:app` = `30610d166c7de6a55510774a76af51125f54e044`;
   `HEAD:app/slaif_gateway` = `1c254ceb09b9ebf155102fc15e8d25c1f985b566`.
@@ -427,9 +438,11 @@ governance run at the final 228-b code head).
    SSE validator, PG settlement and replay references).
 6. Retry boundary as stated above; the strict zero-retry and
    six-settled-request admission guarantee remains `UNSATISFIED`
-   (source-verified; see Known failures and pending gates); the only
-   recorded stock-retry exception remains the human-authorized bounded
-   227-c LAN Chat qualification, applied to that execution only.
+   (source-verified; recorded as a limitation, not a requirement).
+   Stock native retries are explicitly allowed by the human-approved
+   bounded LAN plan (and by the 227-c LAN Chat qualification, that
+   execution only); six is a settled-request quota and failed
+   admissions can release reservations.
 7. 228-b governance: the canonical 228-b `AMEND_EXISTING_PR` order
    passes the focused OAP governance suite 10/10 at the final b code
    head; the a-era 1/10 (order literal `NEW_PR` vs validator
@@ -456,18 +469,46 @@ as "227-reused": Chat-only, that execution only, with its documented
 stock-retry exception. No 227 evidence is relabeled as a 228 execution,
 and nothing in it qualifies this Responses module.
 
-## Proposed future live plan (declared; NOT executed)
+## 228-c checkpoint (in progress; no native run yet)
 
-Status: protected/`not_run`. This preprotected order authorizes no
-inference, no remote setup, and no counter reset; the plan below is a
-declaration only, for a later root/human decision.
+- Guard correction: `response.reasoning_summary_part.done` is now
+  scoped by the new selected-native typed stream property
+  `allow_reasoning_summary_part_done` (enabled only in the OpenCode
+  1.19.3 module policy spec) instead of the legacy
+  `allow_sparse_visible_reasoning` flag; legacy sparse/empty
+  visible-reasoning profiles keep the baseline denial.
+  Legacy-negative and native-positive regressions added; 314-test
+  focused unit run over the 4 directly affected files and
+  `ruff check` on all 6 changed files pass at
+  `05dddb3e513749c61c31995dd6486fbe10fa14bd`.
+- Owned task services restarted onto that exact app tree: Gateway
+  PID 663637 (127.0.0.1:18310/v1) and loopback mock PID 663347
+  (127.0.0.1:18031/v1, existing `loopback_responses_fake.py`,
+  baseline case); process identity/readiness verified across
+  separate tool calls; PG revalidated (6 task keys, 1 route, usage
+  ledger/reservations/diagnostics 0, `requests_used_total` sum 0,
+  alembic `0028_demo_web_control`). No evidence reset.
+- LAN target fresh nonsecret readiness: `10.8.132.55:18021` TCP
+  connect OK; unauthenticated `GET /v1/models` → 401 (target up, no
+  credentials used).
+- Native loopback run and protected LAN launch: still `not_run`,
+  awaiting root dispatch per the 228-c order.
+
+## Approved bounded live plan (declared; NOT yet executed)
+
+Status: protected/`not_run`. The bounded LAN qualification is already
+human-approved ("Approve 100 LAN tests with built-in retries"); there
+is no further human decision gate. Execution remains gated on the
+root-reviewed frozen candidate (green CI) and the concrete
+target/setup, with no counter reset.
 
 - Limits: ≤100 outer launches (actual prior spend: 5 of the 227-c
   bounded LAN Chat qualification, linked below, not duplicated);
   600 s process / 1200 s total; ≤2,000,000 tokens; ≤EUR 2 total at the
   task pricing EUR 1/M input and output.
-- Requests: ≤6 SETTLED/charged requests per key; admitted attempts may
-  exceed 6 under stock native retries.
+- Requests: ≤6 SETTLED/charged requests per key (settled-request
+  quota); admitted attempts may exceed 6 under stock native retries,
+  and failed admissions can release reservations.
 - Retries: stock native retries explicitly allowed; NO zero-retry
   promise (the pinned OpenCode session hardcodes
   `RETRY_MAX_RETRIES=5` with no override parameter).
@@ -476,8 +517,10 @@ declaration only, for a later root/human decision.
 - Actual prior spend (227-reused; linked, failure history preserved):
   5 launches, 41,021 tokens, EUR 0.041021.
 - The strict zero-retry plus six-settled-request admission guarantee
-  remains `UNSATISFIED` under this relaxed plan and requires an
-  explicit human risk decision before execution.
+  remains `UNSATISFIED` under this plan; it is recorded as a
+  limitation, is NOT a requirement of the approved plan, and is NOT a
+  pending human decision (the b-era generic pending-human retry
+  wording is corrected here). Never claimed passed.
 
 ## Known failures and pending gates
 
@@ -489,7 +532,9 @@ declaration only, for a later root/human decision.
 2. Order item 6 (228-b): pinned ACTUAL OpenCode 1.19.3 binary through
    the task-owned Gateway + real PostgreSQL + separate loopback mock
    upstream (no `get_provider_adapter` monkeypatch): setup staged and
-   verified, run `not_run` awaiting root dispatch.
+   verified; restarted and revalidated onto the 228-c guard-fix head
+   `05dddb3e` (see 228-c checkpoint), run `not_run` awaiting root
+   dispatch.
 3. Strict zero-retry plus six-settled-request admission guarantee:
    `UNSATISFIED`. Source proof: pinned OpenCode session
    `packages/opencode/src/session/llm.ts` line 323
@@ -498,8 +543,12 @@ declaration only, for a later root/human decision.
    31 `RETRY_MAX_RETRIES = 5` with a hard cap at lines 189–193 and no
    override parameter. The 227-b PG 500 assertion
    (`requests_used_total == 0`) shows `request_limit_total = 6` does
-   not cap total admissions across failures. Human risk decision
-   pending; never claimed passed.
+   not cap total admissions across failures. The b-era "human risk
+   decision pending" wording is corrected: recorded as a limitation
+   (never claimed passed); the human-approved bounded LAN plan
+   explicitly allows stock native retries, so this strict variant is
+   not a requirement of that plan and not a pending human-decision
+   gate.
 4. Protected live-qualification gate: `not_run`.
 5. Final PR-head CI: pending (GitHub, after push).
 6. Obligation mapping: this record and its manifest are an evidence

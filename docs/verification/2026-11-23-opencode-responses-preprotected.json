@@ -62,7 +62,7 @@
   },
   "record": "docs/verification/2026-11-23-opencode-responses-preprotected.md",
   "status": "NEEDS_CONTINUATION",
-  "status_note": "228-b completion order; honest incomplete: order item 6 (pinned actual OpenCode binary through task-owned Gateway + real PostgreSQL + separate loopback mock upstream, no get_provider_adapter monkeypatch) staged and awaits root dispatch (not_run); protected live-qualification gate not_run; final PR-head CI pending; a-era governance 1/10 resolved at b (10/10) and preserved as immutable history; strict zero-retry + six-settled-request admission guarantee UNSATISFIED (human risk decision pending); no production certification",
+  "status_note": "228-c completion order; honest incomplete: order item 6 (pinned actual OpenCode binary through task-owned Gateway + real PostgreSQL + separate loopback mock upstream, no get_provider_adapter monkeypatch) not_run awaiting root dispatch; 228-c guard-fix checkpoint 05dddb3e committed (closure event scoped to selected-native allow_reasoning_summary_part_done) and owned Gateway/mock restarted + revalidated onto that exact app tree (no evidence reset); protected live-qualification gate not_run; final PR-head CI pending; a-era governance 1/10 resolved at b (10/10) and preserved as immutable history; strict zero-retry + six-settled-request admission guarantee UNSATISFIED (recorded limitation, not an approved-plan requirement; stock retries allowed by the human-approved bounded plan); no production certification",
   "evidence": [
     {
       "type": "unit",
@@ -100,7 +100,9 @@
       "label": "native-Gateway + PostgreSQL + mock-upstream consumer run at handle_response_create at the 228-a final code head (history) (real route-capability gate enforce_responses_route_capabilities, real strict SSE validator, real PG settlement + replay refs; upstream mocked at get_provider_adapter); HTTP ingress/auth by existing e2e (not re-run)",
       "head": "55482cc16b4f40530498040c70e0151433b3a9c1",
       "result": "18 passed in 3.27s (11 pre-existing + 7 new); 4 warnings: 2 benign SQLAlchemy distinct() notices + 2 benign pytest-asyncio deprecation notices",
-      "files": ["tests/integration/test_opencode_1193_responses_postgres.py"],
+      "files": [
+        "tests/integration/test_opencode_1193_responses_postgres.py"
+      ],
       "new_coverage": [
         "positive settlement + immediate idless continuation",
         "altered ciphertext -> responses_codex_replay_reference_not_found",
@@ -133,7 +135,9 @@
       "label": "native-Gateway + PostgreSQL + mock-upstream consumer run at handle_response_create at the final 228-b code head; the 2 new cases leave gateway.get_provider_adapter UNPATCHED (real factory selects the real registered adapter; respx loopback interception); the 18 prior cases keep the get_provider_adapter-mocked scope",
       "head": "c5d007fb272d0103d9f9a396547e237334987409",
       "result": "20 passed in 4.00s (the 18 above + 2 new); no side effects beyond the disposable database",
-      "files": ["tests/integration/test_opencode_1193_responses_postgres.py"],
+      "files": [
+        "tests/integration/test_opencode_1193_responses_postgres.py"
+      ],
       "new_coverage": [
         "openai-native: provider openai, kind openai, factory unpatched",
         "openai-compatible: provider mock228b-compat, kind openai_compatible, factory unpatched",
@@ -188,41 +192,59 @@
       "disposition": "activated order, oap/active, and test unchanged (byte-unchanged order; no test weakening); the canonical 228-b AMEND_EXISTING_PR on the same PR (227-b precedent) is this objective; a-era result preserved as immutable history and resolved 10/10 at the final b code head",
       "command": "PYTHONDONTWRITEBYTECODE=1 TMPDIR=/home/janezp/codex-work/slaif-228-tmp TMP=$TMPDIR TEMP=$TMPDIR .venv/bin/python -m pytest tests/unit/test_oap_governance.py -q -o addopts= -p no:cacheprovider"
     },
-    { "type": "real_provider", "label": "real provider inference", "result": "not_run" },
-    { "type": "protected_gate", "label": "protected live-qualification gate", "result": "not_run" }
+    {
+      "type": "real_provider",
+      "label": "real provider inference",
+      "result": "not_run"
+    },
+    {
+      "type": "protected_gate",
+      "label": "protected live-qualification gate",
+      "result": "not_run"
+    }
   ],
   "strict_guarantee": {
     "zero_retry_and_six_settled_admission": "UNSATISFIED",
     "source_proof": "pinned OpenCode session: packages/opencode/src/session/llm.ts:323 maxRetries=input.retries??0; processor.ts:674 unconditional Effect.retry(SessionRetry.policy); retry.ts:31 RETRY_MAX_RETRIES=5, hard cap at 189-193, no override parameter",
     "admission_proof": "227-b PG 500 assertion (requests_used_total==0) shows request_limit_total=6 does not cap total admissions across failures",
-    "disposition": "relaxed live plan declared, not executed; explicit human risk decision required; never claimed passed"
+    "disposition": "approved bounded live plan not yet executed; stock native retries explicitly allowed by human approval; the strict variant is a recorded limitation, not a plan requirement and not a pending human decision; never claimed passed"
   },
   "live_plan": {
     "state": "declared_not_executed",
-    "limits": "≤100 outer launches (actual prior spend 5); 600s process / 1200s total; ≤2000000 tokens; ≤EUR 2 total at EUR 1/M input and output; ≤6 SETTLED/charged requests per key (admitted attempts may exceed 6 under stock retries)",
+    "limits": "\u2264100 outer launches (actual prior spend 5); 600s process / 1200s total; \u22642000000 tokens; \u2264EUR 2 total at EUR 1/M input and output; \u22646 SETTLED/charged requests per key (settled-request quota; admitted attempts may exceed 6 under stock retries and failed admissions can release reservations)",
     "retry_policy": "stock native retries explicitly allowed; no zero-retry promise (RETRY_MAX_RETRIES=5 hardcoded)",
-    "forbidden": ["counter reset", "production credential mining", "production traffic"],
-    "actual_prior_227_reused": "5 launches, 41021 tokens, EUR 0.041021 (linked in the 227-c record; failure history preserved)"
+    "forbidden": [
+      "counter reset",
+      "production credential mining",
+      "production traffic"
+    ],
+    "actual_prior_227_reused": "5 launches, 41021 tokens, EUR 0.041021 (linked in the 227-c record; failure history preserved)",
+    "approval": "human-approved ('Approve 100 LAN tests with built-in retries'); execution gated on root-reviewed frozen candidate (green CI) + concrete target/setup, not on a human decision"
   },
-  "not_run": ["native_pinned_binary_run (order item 6, awaits root dispatch)", "real_provider", "protected_gate"],
+  "not_run": [
+    "native_pinned_binary_run (order item 6, awaits root dispatch)",
+    "real_provider",
+    "protected_gate"
+  ],
   "missing": [
-    "order item 6: pinned ACTUAL OpenCode 1.19.3 binary through the task-owned Gateway + real PostgreSQL + separate loopback mock upstream (no get_provider_adapter monkeypatch); setup staged and verified, run not_run awaiting root dispatch",
+    "order item 6: pinned ACTUAL OpenCode 1.19.3 binary through the task-owned Gateway + real PostgreSQL + separate loopback mock upstream (no get_provider_adapter monkeypatch); setup staged and verified, restarted + revalidated onto 228-c guard-fix head 05dddb3e, run not_run awaiting root dispatch",
     "protected live-qualification gate not_run",
     "final PR-head CI pending (GitHub, after push)",
     "obligation mapping: record + manifest are an evidence index, not a verified per-obligation node-ID mapping",
-    "live plan declared not executed; strict zero-retry + six-settled-request admission guarantee pending explicit human risk decision"
+    "live plan (human-approved bounded LAN) declared not executed; strict zero-retry + six-settled-request admission guarantee recorded UNSATISFIED as a limitation, not a plan requirement"
   ],
   "findings": [
     "streaming gap resolved per root rulings: L1/L3 implemented (lifecycle independent of non-empty tool count; tool-event flag + exact (functions,name,function) active set gates new tool execution); L2 not implemented (fake _ev response_id is not client-wire authority; shared strict _only_fields not relaxed); pinned-SDK required output/content indexes enforced on the selected profile; legacy profiles and digest bytes unchanged",
     "present-but-null fixture digest -> client_module_fixture_mismatch (fail closed)",
     "streaming-only: stream=false -> opencode_1193_field_shape",
     "id-less reasoning v3: ciphertext alias captured only from a validated id-bearing done after finalized usage (emitted event not rewritten); id-bearing reasoning inputs rejected in the native flat form (opencode_1193_input_item); legacy visible idless behavior unchanged; denial matrix covered in unit + PG runs",
-    "PostgreSQL settlement/replay: 18 tests at final code head, consumer-run scope at handle_response_create (upstream mocked at get_provider_adapter)",
-    "retry boundary: gateway zero-retry is gateway policy only; pinned OpenCode session hardcodes RETRY_MAX_RETRIES=5 with no override; strict zero-retry + six-settled-request admission guarantee UNSATISFIED (human risk decision pending)",
+    "PostgreSQL settlement/replay: 18 tests at the 228-a final code head, 20 at the final 228-b code head (2 new factory/adapter cases), consumer-run scope at handle_response_create",
+    "retry boundary: gateway zero-retry is gateway policy only; pinned OpenCode session hardcodes RETRY_MAX_RETRIES=5 with no override; strict zero-retry + six-settled-request admission guarantee UNSATISFIED (recorded limitation; approved plan allows stock retries; not a pending human decision)",
     "228-b streaming/output semantics (selected native profile only; legacy validators and digest bytes unchanged): provider reasoning added/done must carry the actual provider IDs (id-less done rejected; id-less input eligibility separate); v3 ciphertext alias captured and issued only for the selected profile; visible absent/null/empty encrypted_content output lifecycle passes with zero references (no opaque alias; empty string kept verbatim; omitted summary accepted as [], explicit null denied); response.reasoning_summary_part.done closure accepted only on the selected profile (legacy default denial); orphan done without a preceding added rejected under required output indices (legacy sparse paths preserved); auto-title and compaction summary requests are exactly 7 top-level fields (include, input, max_output_tokens, model, reasoning, store, stream), stream true only, no tools/tool_choice, input a list (3 items observed for auto-title, 2 for compaction); continuations after assistant text or compaction are 4 typeless items [developer, user, assistant, user] with the byte-exact summary in the assistant slot",
     "correction: the 228-b order prose described the auto-title request as non-streaming; the captured receipt (report-fix2, gates.defaulttitle.aux_request_facts.stream=true) outranks that prose; no non-streaming obligation invented; selected profile remains fail-closed on stream=false",
     "228-b governance: canonical 228-b AMEND_EXISTING_PR order passes focused OAP governance 10/10 at the final b code head; a-era 1/10 preserved as immutable history; order, oap/active, and test unchanged in both rounds",
-    "factory-adapter settlement: 2 new PG cases run with gateway.get_provider_adapter unpatched (real factory selects the real registered adapter for openai and openai_compatible kinds; respx loopback interception; wire-level and settlement assertions)"
+    "factory-adapter settlement: 2 new PG cases run with gateway.get_provider_adapter unpatched (real factory selects the real registered adapter for openai and openai_compatible kinds; respx loopback interception; wire-level and settlement assertions)",
+    "228-c guard fix: response.reasoning_summary_part.done scoped by the new selected-native allow_reasoning_summary_part_done typed stream property (OpenCode 1.19.3 module policy spec only) replacing the b-era allow_sparse_visible_reasoning gate; legacy sparse/empty visible-reasoning profiles keep baseline denial; 314-test focused unit run (4 directly affected files) + ruff clean on all 6 changed files at 05dddb3e513749c61c31995dd6486fbe10fa14bd; profile DATA digest 592c5d1b... unchanged; owned Gateway (PID 663637) / mock (PID 663347) restarted onto that tree, identity verified across separate tool calls, PG revalidated (6 keys, 1 route, zero usage); LAN target fresh nonsecret readiness: 10.8.132.55:18021 TCP OK, unauthenticated GET /v1/models 401; native loopback run and protected LAN launch still not_run awaiting root dispatch"
   ],
   "twenty_seven_reused": {
     "record": "docs/verification/2026-11-20-hermes-opencode-chat.md",
