@@ -172,6 +172,15 @@ class ResponsesStreamValidationProfile:
     # ``response.reasoning_summary_part.done``.  Every other profile keeps
     # the baseline denial of this Codex dialect closure event.
     allow_reasoning_summary_part_done: bool = False
+    # Selected native profile (OpenCode 1.19.3): the qualified native
+    # profile validates the standard function-argument closure
+    # (``response.function_call_arguments.done``) when emitted by a
+    # provider.  This client fact routes that closure to the full
+    # arguments/name/lifecycle done validator on every native pair;
+    # position semantics come from ``require_output_indices`` and
+    # missing-position repair stays the separate compat-pair gate.
+    # Legacy profiles keep the baseline sparse-flag-only routing.
+    allow_function_arguments_done: bool = False
 
 
 @dataclass(slots=True)
@@ -695,11 +704,13 @@ class ResponsesStreamEventValidator:
             return self._validate_tool_delta(payload, event_type)
         if (event_type == "response.function_call_arguments.done"
                 and (self._profile.allow_sparse_function_events
-                     or self._profile.repair_missing_output_indices)):
-            # The selected native pair (repair flag) reuses the same full
-            # arguments/name/lifecycle done validator; its index semantics
-            # become required+registered-match inside the validator.  The
-            # legacy sparse flag/behavior is unchanged.
+                     or self._profile.allow_function_arguments_done)):
+            # The selected native client fact (every native pair) reuses
+            # the same full arguments/name/lifecycle done validator as
+            # the legacy sparse flag; on require_output_indices profiles
+            # its index semantics become required+registered-match inside
+            # the validator.  The legacy sparse flag/behavior is
+            # unchanged.
             return self._validate_sparse_function_arguments_done(payload)
         if event_type in {
             "response.reasoning_summary_part.added",
@@ -1110,10 +1121,13 @@ class ResponsesStreamEventValidator:
             return False
         if item_id in self._function_arguments_done:
             return False
-        if self._profile.repair_missing_output_indices:
-            # Selected native pair: the position is REQUIRED and must equal
-            # the index registered by the validated added event; a missing
-            # registration (map absent) fails closed.
+        if self._profile.require_output_indices:
+            # Required-index native profiles (both native pairs): the
+            # position is REQUIRED and must equal the index registered by
+            # the validated added event; a missing registration (map
+            # absent) fails closed.  Any missing-position derivation
+            # (repair flag, compat pair) already replaced the payload
+            # index before this check.
             if (not _required_index(payload, "output_index")
                     or self._function_output_indices.get(item_id)
                     != payload["output_index"]):
@@ -1148,10 +1162,13 @@ class ResponsesStreamEventValidator:
                 or not isinstance(arguments, str)
                 or not _bounded_utf8(arguments, _MAX_STREAM_CUMULATIVE_ITEM_BYTES)):
             return False
-        if self._profile.repair_missing_output_indices:
-            # Selected native pair: the position is REQUIRED and must equal
-            # the index registered by the validated added event; an
-            # unregistered (orphan) item fails closed.
+        if self._profile.require_output_indices:
+            # Required-index native profiles (both native pairs): the
+            # position is REQUIRED and must equal the index registered by
+            # the validated added event; an unregistered (orphan) item
+            # fails closed.  Any missing-position derivation (repair
+            # flag, compat pair) already replaced the payload index
+            # before this check.
             if (not _required_index(payload, "output_index")
                     or self._function_output_indices.get(item_id)
                     != payload["output_index"]):
@@ -1165,7 +1182,7 @@ class ResponsesStreamEventValidator:
             return False
         if "name" in payload and payload["name"] != state.name:
             return False
-        if (not self._profile.repair_missing_output_indices
+        if (not self._profile.require_output_indices
                 and "output_index" in payload
                 and item_id in self._function_output_indices
                 and payload["output_index"] != self._function_output_indices[item_id]):

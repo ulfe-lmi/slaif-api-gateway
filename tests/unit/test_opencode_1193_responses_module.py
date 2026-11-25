@@ -859,6 +859,7 @@ def test_policy_spec_owned_overrides():
     assert SPEC.allow_empty_visible_reasoning is True
     assert SPEC.allow_sparse_visible_reasoning is True
     assert SPEC.require_stream_output_indices is True
+    assert SPEC.allow_function_arguments_done is True
     assert SPEC.reasoning_efforts == EFFORTS
     assert SPEC.client_metadata_keys == frozenset()
     assert SPEC.max_client_metadata_keys == 0
@@ -880,6 +881,7 @@ def test_policy_spec_inherited_codex_gates():
     assert CODEX_0149_POLICY_SPEC.require_stream_output_indices is False
     assert CODEX_0149_POLICY_SPEC.allow_idless_encrypted_reasoning is False
     assert CODEX_0149_POLICY_SPEC.allow_reasoning_summary_part_done is False
+    assert CODEX_0149_POLICY_SPEC.allow_function_arguments_done is False
 
 
 # ---------------------------------------------------------------------------

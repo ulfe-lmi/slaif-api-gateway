@@ -57,6 +57,7 @@ def _profile(**overrides) -> ResponsesStreamValidationProfile:
         "allow_reasoning_summary_part_done": True,
         "require_output_indices": True,
         "repair_missing_output_indices": True,
+        "allow_function_arguments_done": True,
         "declared_client_tools": TAXONOMY,
     }
     base.update(overrides)
@@ -918,11 +919,25 @@ def test_arg_events_repair_flag_off_fail_closed() -> None:
         v.validate(_item_event("added", _function_item("fc_1"), seq=0, output_index=0))
         is True
     )
-    # Legacy strict behavior: a missing index is denied on both arg events
-    # and the done event is not routed for the non-sparse profile.
+    # Legacy strict behavior: with the repair flag off there is no
+    # missing-position derivation, so the required-index check denies both
+    # arg events (the closure is still routed by the client fact).
     assert v.validate(_arg_delta("fc_1", seq=1, delta='{}')) is False
     assert v.validate(_arg_done("fc_1", seq=2, arguments="{}")) is False
     assert v.repaired_output_indices is False
+
+
+def test_arg_done_denied_without_client_fact_even_with_repair_and_correct_index() -> None:
+    # Transport repair (missing-position derivation) must not grant event
+    # permission: without the client closure fact the done event is not
+    # routed to the closure validator, so even a CORRECT supplied index
+    # for a registered call with accumulated deltas is denied.
+    v = _validator(allow_function_arguments_done=False)
+    _added_fc1_no_index(v)
+    assert v.validate(_arg_delta("fc_1", seq=1, delta='{}')) is True
+    assert v.take_repaired_payload() is not None  # repair worked on the delta
+    assert v.validate(_arg_done("fc_1", seq=2, arguments="{}", output_index=0)) is False
+    assert v.take_repaired_payload() is None
 
 
 def test_gateway_reencodes_repaired_argument_frames_into_wire_and_held_tail(monkeypatch) -> None:

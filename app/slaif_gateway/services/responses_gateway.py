@@ -2067,6 +2067,23 @@ async def handle_response_create(
                             client_module.policy_spec is not None
                             and client_module.policy_spec.allow_reasoning_summary_part_done
                         ),
+                        # Client-module wire property gated on the pair's
+                        # streaming-tool request/pair-local admission:
+                        # the qualified native profile validates the
+                        # standard function-argument closure
+                        # (response.function_call_arguments.done) when
+                        # emitted by a provider, on every native pair.
+                        # Position semantics remain
+                        # require_output_indices; missing-position repair
+                        # stays the compat-pair gate above.
+                        allow_function_arguments_done=(
+                            client_module.policy_spec is not None
+                            and client_module.policy_spec.allow_function_arguments_done
+                            and (
+                                codex_streaming_tool_events_requested
+                                or pair_local_codex_streaming_tools
+                            )
+                        ),
                         declared_client_tools=(
                             pair_local_codex_top_level_tools
                             if pair_local_codex_streaming_tools

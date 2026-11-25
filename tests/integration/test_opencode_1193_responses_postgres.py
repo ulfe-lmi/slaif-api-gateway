@@ -916,8 +916,11 @@ _MOCK_ADAPTER_CASES = [
 @pytest.mark.parametrize(
     "case", _MOCK_ADAPTER_CASES, ids=["openai-native", "openai-compatible"]
 )
+@pytest.mark.parametrize(
+    "argument_closure", [False, True], ids=["baseline", "argument-closure"]
+)
 async def test_mock_http_factory_adapter_settles_both_turns(
-    async_test_session, monkeypatch, case
+    async_test_session, monkeypatch, case, argument_closure
 ):
     session = async_test_session
     owner, cohort, key, route = await _seed_opencode_world(
@@ -952,13 +955,18 @@ async def test_mock_http_factory_adapter_settles_both_turns(
     )
 
     auth = _auth_key(key)
+    # baseline: the native wire as captured; argument-closure: same wire
+    # with the closed function-argument frame before the function done.
+    turn1 = (
+        _argument_closed_turn1_events() if argument_closure else _turn1_events()
+    )
     with respx.mock(assert_all_called=False) as router:
         upstream = router.route(method="POST", url=f"{case['base_url']}/responses")
         upstream.mock(
             side_effect=[
                 httpx.Response(
                     200,
-                    content=_sse_body(_turn1_events()),
+                    content=_sse_body(turn1),
                     headers={"content-type": "text/event-stream"},
                 ),
                 httpx.Response(
@@ -1072,9 +1080,73 @@ def _contradictory_terminal_turn1_events() -> list[dict]:
     return events
 
 
+def _argument_closed_turn1_events(*, missing_indices: bool = False) -> list[dict]:
+    """Turn 1 extended with the closed function-argument wire.
+
+    The ``response.function_call_arguments.done`` closure is inserted
+    immediately BEFORE the registered function_call
+    ``response.output_item.done`` (registered index 1, after reasoning
+    at 0), reusing that done item's item_id/name/arguments so the
+    closure can only settle when it equals the accumulated deltas.
+    ``sequence_number`` is renumbered monotonically across the stream.
+    With ``missing_indices`` the ``output_index`` is removed ONLY from
+    the output-item and function-argument delta/done events; the
+    terminal response carries the actual reasoning + function done
+    items in registered order.
+    """
+    events = _turn1_events()
+    done_index = next(
+        i
+        for i, event in enumerate(events)
+        if event["type"] == "response.output_item.done"
+        and event["item"]["type"] == "function_call"
+    )
+    done_item = events[done_index]["item"]
+    events.insert(
+        done_index,
+        {
+            "type": "response.function_call_arguments.done",
+            "item_id": done_item["id"],
+            "output_index": 1,
+            "name": done_item["name"],
+            "arguments": done_item["arguments"],
+        },
+    )
+    indexed_types = {
+        "response.output_item.added",
+        "response.output_item.done",
+        "response.reasoning_summary_part.added",
+        "response.reasoning_summary_part.done",
+        "response.reasoning_summary_text.delta",
+        "response.function_call_arguments.delta",
+        "response.function_call_arguments.done",
+    }
+    for sequence, event in enumerate(events):
+        if event["type"] in indexed_types:
+            event["sequence_number"] = sequence
+    if missing_indices:
+        for event in events:
+            if event["type"] in {
+                "response.output_item.added",
+                "response.output_item.done",
+                "response.function_call_arguments.delta",
+                "response.function_call_arguments.done",
+            }:
+                del event["output_index"]
+    terminal = events[-1]
+    assert terminal["type"] == "response.completed"
+    terminal["response"]["output"] = [
+        event["item"] for event in events if event["type"] == "response.output_item.done"
+    ]
+    return events
+
+
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "argument_closure", [False, True], ids=["item-only", "argument-closure"]
+)
 async def test_mock_http_factory_adapter_settles_missing_index_wire(
-    async_test_session, monkeypatch
+    async_test_session, monkeypatch, argument_closure
 ) -> None:
     session = async_test_session
     case = _MOCK_ADAPTER_CASES[1]  # openai-compatible pair: repair gate active
@@ -1110,7 +1182,11 @@ async def test_mock_http_factory_adapter_settles_missing_index_wire(
     )
 
     auth = _auth_key(key)
-    turn1 = _missing_index_turn1_events()
+    turn1 = (
+        _argument_closed_turn1_events(missing_indices=True)
+        if argument_closure
+        else _missing_index_turn1_events()
+    )
     # Repaired wire truth: compact re-encoding with the derived index
     # appended last.  The unmodified producer frame (default separators,
     # no index) must never be forwarded.
@@ -1146,6 +1222,27 @@ async def test_mock_http_factory_adapter_settles_missing_index_wire(
         assert "response.failed" not in joined1
         assert repaired_frame in joined1
         assert raw_missing_frame not in joined1
+
+        if argument_closure:
+            # The scoped normalization must also derive the registered
+            # index 1 for the closed function-argument wire: compact
+            # repaired frames with the index appended last reach the
+            # client, and the unmodified producer frames (default
+            # separators, no index) are never forwarded.
+            for arg_type in (
+                "response.function_call_arguments.delta",
+                "response.function_call_arguments.done",
+            ):
+                arg_event = next(e for e in turn1 if e["type"] == arg_type)
+                repaired_arg_frame = (
+                    "data: "
+                    + json.dumps(
+                        {**arg_event, "output_index": 1}, separators=(",", ":")
+                    )
+                    + "\n\n"
+                )
+                assert repaired_arg_frame in joined1
+                assert "data: " + json.dumps(arg_event) + "\n\n" not in joined1
 
         body2 = _full_body(stream=True)
         body2["model"] = case["public_model"]

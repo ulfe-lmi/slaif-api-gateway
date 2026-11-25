@@ -129,6 +129,17 @@ class ResponsesClientPolicySpec:
     # False and keep the baseline denial of this Codex dialect closure
     # event on every stream profile they serve.
     allow_reasoning_summary_part_done: bool = False
+    # Selected native profile (OpenCode 1.19.3): the qualified native
+    # profile validates the standard function-argument closure
+    # (``response.function_call_arguments.done``) when emitted by a
+    # provider.  This client fact routes that closure to the full
+    # arguments/name/lifecycle done validator on every native pair;
+    # position semantics come from ``require_stream_output_indices`` and
+    # missing-position repair stays the separate compat-pair gate.  The
+    # done support is source-traced lifecycle consistency, not an
+    # observed capture; legacy presets stay False and keep the baseline
+    # sparse-flag-only routing.
+    allow_function_arguments_done: bool = False
     allow_tool_output_images: bool = False
     # Explicit versioned declaration-history mode selected by the profile
     # data (see modules/codex_tool_history.py). ``None`` keeps the legacy

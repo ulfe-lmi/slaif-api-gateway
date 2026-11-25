@@ -456,6 +456,14 @@ OPENCODE_1193_RESPONSES_POLICY_SPEC = dataclasses.replace(
     # is a wire property of this selected native profile only; legacy
     # presets keep the baseline denial.
     allow_reasoning_summary_part_done=True,
+    # Qualified native profile: validates the standard function-argument
+    # closure (response.function_call_arguments.done) when emitted by a
+    # provider; this client gets the full closure validator on every
+    # native pair (position semantics stay require_stream_output_indices;
+    # missing-position repair stays the compat-pair gate; legacy presets
+    # keep the baseline sparse-flag-only routing).  The done support is
+    # source-traced lifecycle consistency, not an observed capture.
+    allow_function_arguments_done=True,
     reasoning_efforts=OPENCODE_1193_RESPONSES_PROFILE_DATA.reasoning_efforts,
     client_metadata_keys=frozenset(),
     max_client_metadata_keys=0,
