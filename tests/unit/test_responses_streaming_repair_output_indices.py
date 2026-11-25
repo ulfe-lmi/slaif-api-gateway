@@ -727,3 +727,277 @@ def test_gateway_orphan_missing_index_fails_closed(monkeypatch) -> None:
     assert "accounting:finalize" not in timeline
     assert "replay:persist" not in timeline
     assert recorded == []
+
+
+# --- tool-argument delta/done extension (228-c run-2 later rejection) -----
+#
+# The root-executed 9-tool diagnostic rejected
+# response.function_call_arguments.delta (seq 33) with output_index ABSENT
+# while item_id was already registered.  The bounded extension reuses the
+# validated item_id -> index registration for argument delta AND done only;
+# supplied indexes stay checked, unknown/orphan items fail closed, and the
+# legacy sparse optional-index behavior is unchanged.
+
+
+def _arg_delta(
+    item_id: str,
+    *,
+    seq: int | None = None,
+    delta: str,
+    output_index: int | None = None,
+) -> dict:
+    payload: dict = {
+        "type": "response.function_call_arguments.delta",
+        "item_id": item_id,
+        "delta": delta,
+    }
+    if seq is not None:
+        payload["sequence_number"] = seq
+    if output_index is not None:
+        payload["output_index"] = output_index
+    return payload
+
+
+def _arg_done(
+    item_id: str,
+    *,
+    seq: int | None = None,
+    arguments: str,
+    output_index: int | None = None,
+) -> dict:
+    payload: dict = {
+        "type": "response.function_call_arguments.done",
+        "item_id": item_id,
+        "arguments": arguments,
+    }
+    if seq is not None:
+        payload["sequence_number"] = seq
+    if output_index is not None:
+        payload["output_index"] = output_index
+    return payload
+
+
+def _added_fc1_no_index(v: ResponsesStreamEventValidator) -> None:
+    assert v.validate(_item_event("added", _function_item("fc_1"), seq=0)) is True
+
+
+def test_arg_delta_missing_index_derived_from_registered_item() -> None:
+    v = _validator()
+    _added_fc1_no_index(v)
+    delta = _arg_delta("fc_1", seq=1, delta='{"')
+    assert v.validate(delta) is True
+    assert v.repaired_output_indices is True
+    repaired = v.take_repaired_payload()
+    assert repaired is not None
+    assert repaired["output_index"] == 0
+    assert repaired["delta"] == '{"'
+    assert repaired["item_id"] == "fc_1"
+    # The producer payload is never mutated; the take is single-shot.
+    assert "output_index" not in delta
+    assert v.take_repaired_payload() is None
+
+
+def test_arg_done_missing_index_derived_with_full_arguments_match() -> None:
+    v = _validator()
+    _added_fc1_no_index(v)
+    assert v.validate(_arg_delta("fc_1", seq=1, delta='{"path": ')) is True
+    assert v.validate(_arg_delta("fc_1", seq=2, delta='"/x"}')) is True
+    done = _arg_done("fc_1", seq=3, arguments='{"path": "/x"}')
+    assert v.validate(done) is True
+    repaired = v.take_repaired_payload()
+    assert repaired is not None and repaired["output_index"] == 0
+    assert repaired["arguments"] == '{"path": "/x"}'
+
+
+def test_arg_delta_supplied_correct_index_not_repaired() -> None:
+    v = _validator()
+    _added_fc1_no_index(v)
+    assert v.validate(_arg_delta("fc_1", seq=1, delta='{}', output_index=0)) is True
+    # The index was supplied by the producer: no repair, no cached payload.
+    assert v.take_repaired_payload() is None
+
+
+def test_arg_delta_supplied_conflicting_index_rejected() -> None:
+    v = _validator()
+    _added_fc1_no_index(v)
+    assert v.validate(_arg_delta("fc_1", seq=1, delta='{}', output_index=7)) is False
+    assert v.take_repaired_payload() is None
+
+
+def test_arg_delta_supplied_index_unregistered_item_rejected() -> None:
+    v = _validator()
+    _added_fc1_no_index(v)
+    # Even a supplied index cannot authorize an item that was never added.
+    assert v.validate(_arg_delta("fc_ghost", seq=1, delta='{}', output_index=0)) is False
+
+
+def test_arg_done_supplied_conflicting_index_rejected() -> None:
+    v = _validator()
+    _added_fc1_no_index(v)
+    assert v.validate(_arg_delta("fc_1", seq=1, delta='{}')) is True
+    assert v.validate(_arg_done("fc_1", seq=2, arguments="{}", output_index=3)) is False
+
+
+def test_arg_done_missing_index_orphan_item_rejected() -> None:
+    v = _validator()
+    _added_fc1_no_index(v)
+    # Never added: no registration exists to derive from; stays rejected.
+    assert v.validate(_arg_done("fc_ghost", seq=1, arguments="{}")) is False
+
+
+def test_arg_done_changed_final_arguments_rejected() -> None:
+    v = _validator()
+    _added_fc1_no_index(v)
+    assert v.validate(_arg_delta("fc_1", seq=1, delta='{"a": 1}')) is True
+    # The done arguments must equal the exact accumulated delta text.
+    assert v.validate(_arg_done("fc_1", seq=2, arguments='{"a": 2}')) is False
+
+
+def test_arg_delta_after_done_rejected() -> None:
+    v = _validator()
+    _added_fc1_no_index(v)
+    assert v.validate(_arg_delta("fc_1", seq=1, delta='{}')) is True
+    assert v.validate(_arg_done("fc_1", seq=2, arguments="{}")) is True
+    assert v.validate(_arg_delta("fc_1", seq=3, delta="x")) is False
+
+
+def test_duplicate_arg_done_rejected() -> None:
+    v = _validator()
+    _added_fc1_no_index(v)
+    # Stage the exact accumulated text first: the closure must equal the
+    # accumulated delta string, so a done without any delta fails.
+    assert v.validate(_arg_delta("fc_1", seq=1, delta='{}')) is True
+    assert v.validate(_arg_done("fc_1", seq=2, arguments="{}")) is True
+    # The first closure already consumed the accumulated text; a second
+    # done for the same item is a duplicate and fails closed.
+    assert v.validate(_arg_done("fc_1", seq=3, arguments="{}")) is False
+    assert v.take_repaired_payload() is None
+
+
+def test_arg_delta_registered_non_function_item_rejected() -> None:
+    v = _validator()
+    assert v.validate(_item_event("added", _cipher_item("rs_1"), seq=0)) is True
+    # A registered reasoning ID must not authorize a function argument
+    # event even where the index map can resolve a position for it.
+    assert v.validate(_arg_delta("rs_1", seq=1, delta='{}')) is False
+
+
+def test_arg_events_repairs_to_registered_nonzero_index_after_reasoning() -> None:
+    # Fidelity to the actual diagnostic: two items were registered
+    # (reasoning at 0, function at 1).  The repair must reuse the
+    # registered NONZERO function position, never assume 0.
+    v = _validator()
+    assert v.validate(_item_event("added", _cipher_item("rs_1"), seq=0)) is True
+    assert v.validate(_item_event("added", _function_item("fc_1"), seq=1)) is True
+    assert v.take_repaired_payload()["output_index"] == 1
+    assert v.validate(_arg_delta("fc_1", seq=2, delta='{"a": ')) is True
+    repaired = v.take_repaired_payload()
+    assert repaired is not None
+    assert repaired["output_index"] == 1
+    assert repaired["delta"] == '{"a": '
+    assert v.take_repaired_payload() is None
+    # A supplied index of the reasoning slot conflicts with the registered
+    # function position and fails closed without mutating state.
+    assert v.validate(_arg_delta("fc_1", seq=3, delta='1}', output_index=0)) is False
+    assert v.take_repaired_payload() is None
+    assert v.validate(_arg_delta("fc_1", seq=4, delta='1}')) is True
+    # A supplied conflicting done index is rejected without closing the
+    # item; the missing-index done then repairs to the registered 1.
+    assert v.validate(_arg_done("fc_1", seq=5, arguments='{"a": 1}', output_index=0)) is False
+    assert v.take_repaired_payload() is None
+    assert v.validate(_arg_done("fc_1", seq=6, arguments='{"a": 1}')) is True
+    done_repaired = v.take_repaired_payload()
+    assert done_repaired is not None
+    assert done_repaired["output_index"] == 1
+    assert done_repaired["arguments"] == '{"a": 1}'
+
+
+def test_arg_events_repair_flag_off_fail_closed() -> None:
+    v = _validator(repair_missing_output_indices=False)
+    assert (
+        v.validate(_item_event("added", _function_item("fc_1"), seq=0, output_index=0))
+        is True
+    )
+    # Legacy strict behavior: a missing index is denied on both arg events
+    # and the done event is not routed for the non-sparse profile.
+    assert v.validate(_arg_delta("fc_1", seq=1, delta='{}')) is False
+    assert v.validate(_arg_done("fc_1", seq=2, arguments="{}")) is False
+    assert v.repaired_output_indices is False
+
+
+def test_gateway_reencodes_repaired_argument_frames_into_wire_and_held_tail(monkeypatch) -> None:
+    # Faithful lifecycle: the added function starts with EMPTY arguments,
+    # the delta chunks accumulate, the argument done equals the exact
+    # accumulated text, output_item.done closes the same call, and the
+    # terminal preserves the registered order.  Every frame carries an
+    # increasing sequence number; none is omitted.
+    added_item = {
+        "type": "function_call",
+        "id": "fc_1",
+        "name": "read",
+        "call_id": "call_1",
+        "arguments": "",
+    }
+    added = _item_event("added", added_item, seq=0)
+    delta = _arg_delta("fc_1", seq=1, delta='{"path": "/x"}')
+    arg_done = _arg_done("fc_1", seq=2, arguments='{"path": "/x"}')
+    done_item = {
+        "type": "function_call",
+        "id": "fc_1",
+        "name": "read",
+        "call_id": "call_1",
+        "arguments": '{"path": "/x"}',
+        "status": "completed",
+    }
+    item_done = _item_event("done", done_item, seq=3)
+    terminal = _completed(4, output=[done_item])
+    repaired_added = _compact_frame({**added, "output_index": 0})
+    repaired_delta = _compact_frame({**delta, "output_index": 0})
+    repaired_arg_done = _compact_frame({**arg_done, "output_index": 0})
+    repaired_item_done = _compact_frame({**item_done, "output_index": 0})
+    raw_events, timeline, recorded, forwarded = _wire_gateway(
+        monkeypatch,
+        [
+            {"type": "response.created", "response": {"id": "resp_1"}},
+            added,
+            delta,
+            arg_done,
+            item_done,
+            terminal,
+        ],
+        marker_labels={
+            repaired_added: "client:repaired_added",
+            repaired_delta: "client:repaired_arg_delta",
+            repaired_arg_done: "client:repaired_arg_done",
+            repaired_item_done: "client:repaired_item_done",
+        },
+    )
+    assert forwarded == [
+        raw_events[0],
+        repaired_added,
+        repaired_delta,
+        repaired_arg_done,
+        repaired_item_done,
+        raw_events[5],
+    ]
+    # The unmodified missing-index producer frames never reach the client.
+    assert raw_events[1] not in forwarded
+    assert raw_events[2] not in forwarded
+    assert raw_events[3] not in forwarded
+    assert raw_events[4] not in forwarded
+    assert recorded
+    assert recorded[0]["provider_response"].usage is not None
+    # Held-tail proof: EVERY repaired frame (added, argument delta/done,
+    # and the closing output_item.done) is released only after accounting
+    # and replay-reference persistence; completed is last.  A premature
+    # live yield of any repaired frame would break this order.
+    assert timeline[-8:] == [
+        "accounting:record",
+        "accounting:finalize",
+        "replay:persist",
+        "client:repaired_added",
+        "client:repaired_arg_delta",
+        "client:repaired_arg_done",
+        "client:repaired_item_done",
+        "client:completed",
+    ]

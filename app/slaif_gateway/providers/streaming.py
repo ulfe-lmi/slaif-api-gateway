@@ -694,7 +694,12 @@ class ResponsesStreamEventValidator:
         }:
             return self._validate_tool_delta(payload, event_type)
         if (event_type == "response.function_call_arguments.done"
-                and self._profile.allow_sparse_function_events):
+                and (self._profile.allow_sparse_function_events
+                     or self._profile.repair_missing_output_indices)):
+            # The selected native pair (repair flag) reuses the same full
+            # arguments/name/lifecycle done validator; its index semantics
+            # become required+registered-match inside the validator.  The
+            # legacy sparse flag/behavior is unchanged.
             return self._validate_sparse_function_arguments_done(payload)
         if event_type in {
             "response.reasoning_summary_part.added",
@@ -758,15 +763,36 @@ class ResponsesStreamEventValidator:
         ``repair_missing_output_indices``).  A supplied index is never
         overwritten.  A missing ``added`` position is assigned only when
         every previously used index forms the contiguous block ``0..n-1``;
-        a missing ``done`` position reuses the already validated index of
-        the same item ID.  Any ambiguity (unknown/missing/invalid ID,
-        non-contiguous occupancy, duplicate item) returns ``None`` so the
-        original event fails closed at the required-index check.  No IDs or
-        call identities are invented and no validator state is modified.
+        a missing ``done`` or tool-argument ``delta``/``done`` position
+        reuses the already validated index of the same item ID (argument
+        events carry it at the top-level ``item_id``).  Any ambiguity
+        (unknown/missing/invalid ID, non-contiguous occupancy, duplicate
+        item, unregistered argument item) returns ``None`` so the original
+        event fails closed at the required-index check.  No IDs or call
+        identities are invented and no validator state is modified.
         """
         if not isinstance(payload, Mapping):
             return None
         event_type = payload.get("type")
+        if event_type in {
+            "response.function_call_arguments.delta",
+            "response.function_call_arguments.done",
+        }:
+            # Argument events reference the validated registration by
+            # top-level item_id; only that registration's existing index
+            # may be reused.  An unknown/orphan/unregistered ID (or an
+            # ambiguous state) returns None and stays rejected.
+            if "output_index" in payload:
+                return None
+            item_id = payload.get("item_id")
+            if not isinstance(item_id, str) or not item_id:
+                return None
+            index = self._function_output_indices.get(item_id)
+            if index is None:
+                return None
+            repaired = dict(payload)
+            repaired["output_index"] = index
+            return repaired
         if event_type not in {"response.output_item.added", "response.output_item.done"}:
             return None
         if "output_index" in payload:
@@ -1084,11 +1110,21 @@ class ResponsesStreamEventValidator:
             return False
         if item_id in self._function_arguments_done:
             return False
-        if (self._profile.allow_sparse_function_events
-                and "output_index" in payload
-                and item_id in self._function_output_indices
-                and payload["output_index"] != self._function_output_indices[item_id]):
-            return False
+        if self._profile.repair_missing_output_indices:
+            # Selected native pair: the position is REQUIRED and must equal
+            # the index registered by the validated added event; a missing
+            # registration (map absent) fails closed.
+            if (not _required_index(payload, "output_index")
+                    or self._function_output_indices.get(item_id)
+                    != payload["output_index"]):
+                return False
+        elif self._profile.allow_sparse_function_events:
+            # Legacy sparse wire: an optional supplied index must still
+            # equal the registered one when both are present.
+            if ("output_index" in payload
+                    and item_id in self._function_output_indices
+                    and payload["output_index"] != self._function_output_indices[item_id]):
+                return False
         call_id = payload.get("call_id")
         if call_id is not None and (
             not _bounded_identifier(call_id, required=True) or call_id != state.call_id
@@ -1108,10 +1144,19 @@ class ResponsesStreamEventValidator:
         item_id = payload.get("item_id")
         arguments = payload.get("arguments")
         if (not _bounded_identifier(item_id, required=True)
-                or not _optional_index(payload, "output_index")
                 or not _optional_index(payload, "sequence_number")
                 or not isinstance(arguments, str)
                 or not _bounded_utf8(arguments, _MAX_STREAM_CUMULATIVE_ITEM_BYTES)):
+            return False
+        if self._profile.repair_missing_output_indices:
+            # Selected native pair: the position is REQUIRED and must equal
+            # the index registered by the validated added event; an
+            # unregistered (orphan) item fails closed.
+            if (not _required_index(payload, "output_index")
+                    or self._function_output_indices.get(item_id)
+                    != payload["output_index"]):
+                return False
+        elif not _optional_index(payload, "output_index"):
             return False
         state = self._active_items.get(item_id)
         if (state is None or state.item_type != "function_call"
@@ -1120,7 +1165,9 @@ class ResponsesStreamEventValidator:
             return False
         if "name" in payload and payload["name"] != state.name:
             return False
-        if ("output_index" in payload and item_id in self._function_output_indices
+        if (not self._profile.repair_missing_output_indices
+                and "output_index" in payload
+                and item_id in self._function_output_indices
                 and payload["output_index"] != self._function_output_indices[item_id]):
             return False
         self._function_arguments_done.add(item_id)
