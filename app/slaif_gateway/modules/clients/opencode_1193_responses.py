@@ -22,7 +22,8 @@ Input accepts typeless developer/user messages, replayed typeless
 id-less ``function_call``/``function_call_output`` replay, and id-less
 captured reasoning whose empty ``encrypted_content`` is kept verbatim with
 no zero-byte ciphertext authority (v3 references issue only from nonempty
-validated finalized output); flat strict function tool declarations keep
+validated finalized output); flat function tool declarations (the pinned
+SDK emits ``strict: false`` on all nine builtins, preserved verbatim) keep
 nine bounded-vocabulary names, not authority.
 The provider replays function calls, outputs, and encrypted reasoning without
 item IDs or status, so id-less encrypted reasoning relies on the gateway's
@@ -741,7 +742,16 @@ def _validate_tool_declaration(tool: Mapping[str, Any], seen_names: set[str]) ->
             "The OpenCode 1.19.3 tool declaration has an invalid shape",
             "opencode_1193_tool_declaration",
         )
-    if tool["type"] != "function" or tool["strict"] is not True:
+    # The pinned OpenCode 1.19.3 SDK emits ``strict: false`` on every
+    # builtin flat function declaration (captured pinned-binary journal
+    # facts; ``packages/llm/src/protocols/openai-responses.ts:265`` sets
+    # ``strict: false`` and the SDK propagates ``tool.strict``).  Both
+    # boolean values are accepted and preserved verbatim upstream (no
+    # coercion); 0/1, strings, and null fail closed, and omission or
+    # unknown fields are already denied by the exact key-set check above.
+    if tool["type"] != "function" or (
+        tool["strict"] is not True and tool["strict"] is not False
+    ):
         raise _error(
             "The OpenCode 1.19.3 tool declaration has an invalid shape",
             "opencode_1193_tool_declaration",

@@ -379,6 +379,38 @@ def test_normalize_rejects_field_shapes():
         _norm_reject(mutate, "opencode_1193_field_shape")
 
 
+def test_native_strict_false_declarations_accepted_and_preserved():
+    # Pinned OpenCode 1.19.3 emits strict: false on all nine builtin flat
+    # function declarations (captured pinned-binary journal facts).  Both
+    # boolean values are accepted and the value is preserved verbatim in
+    # the forwarded body (no coercion).
+    body = _turn1()
+    for tool in body["tools"]:
+        tool["strict"] = False
+    result = _norm(body)
+    assert len(result.body["tools"]) == 9
+    assert all(tool["strict"] is False for tool in result.body["tools"])
+
+
+def test_normalize_rejects_nonboolean_or_missing_strict():
+    def _set(value):
+        def mutate(b):
+            b["tools"][0] = {**b["tools"][0], "strict": value}
+        return mutate
+
+    for value in (0, 1, "true", "false", None):
+        _norm_reject(_set(value), "opencode_1193_tool_declaration")
+
+    def drop_strict(b):
+        b["tools"][0] = {k: v for k, v in b["tools"][0].items() if k != "strict"}
+
+    def extra_field(b):
+        b["tools"][0] = {**b["tools"][0], "extra": 1}
+
+    _norm_reject(drop_strict, "opencode_1193_tool_declaration")
+    _norm_reject(extra_field, "opencode_1193_tool_declaration")
+
+
 def test_normalize_rejects_input_items():
     cases = [
         lambda b: b.update({"input": ["str"]}),
@@ -707,7 +739,10 @@ def test_normalize_rejects_tool_declarations():
     )
     _norm_reject(_tool_reject(name="cat"), "opencode_1193_tool_declaration")
     _norm_reject(_tool_reject(type="computer"), "opencode_1193_tool_declaration")
-    _norm_reject(_tool_reject(strict=False), "opencode_1193_tool_declaration")
+    # strict: false is the captured pinned-native value and is now
+    # accepted (see test_native_strict_false_declarations_accepted_and
+    # _preserved); non-boolean/missing strict values are covered by
+    # test_normalize_rejects_nonboolean_or_missing_strict.
     _norm_reject(_tool_reject(description="x" * 20001), "opencode_1193_tool_declaration")
     _norm_reject(_tool_reject(parameters="str"), "opencode_1193_tool_declaration")
     _norm_reject(_tool_reject(parameters=_deep_params(8)), "opencode_1193_tool_declaration")
