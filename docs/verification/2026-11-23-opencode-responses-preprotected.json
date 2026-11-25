@@ -28,7 +28,10 @@
     "ea561ac96bfb57a59acf01ea3df0ec3129b844f1",
     "e6687613af90fc4edc34253e2b6a264c916032d7",
     "d896ad91f5de1c34bdfb753fedcc51086717fa0b",
-    "c5d007fb272d0103d9f9a396547e237334987409"
+    "c5d007fb272d0103d9f9a396547e237334987409",
+    "05dddb3e513749c61c31995dd6486fbe10fa14bd",
+    "087895cd478d17a259adb6be1e952ecc2d5f6f21",
+    "aeac5014cf0bf943236506d6d57f2a78426f83fd"
   ],
   "documentation_commits": [
     "bbaa8c4414e491f84a3fa1da894e1b012b1bfd36",
@@ -36,7 +39,10 @@
     "8c21b68cab899ef61ade40b6b917da4de2bdf949",
     "a7583a50f3bc522c457611f31e273bec4865b27c",
     "685fd6503b22df073e0c54e5746ba3f45501cde3",
-    "cd591ee7cd51373e7b353888c38500f0f6002f96"
+    "cd591ee7cd51373e7b353888c38500f0f6002f96",
+    "124bb1345906ba72b9f5bf13109169710422e13c",
+    "2cb87417e39b95345cdb64f67e3ed4c3f5d6a147",
+    "f83138a5467c8c572905273cf79d45651aa11a68"
   ],
   "secondary_cherry_picks": {
     "initial_capture": {
@@ -62,7 +68,7 @@
   },
   "record": "docs/verification/2026-11-23-opencode-responses-preprotected.md",
   "status": "NEEDS_CONTINUATION",
-  "status_note": "228-c completion order; honest incomplete: order item 6 (pinned actual OpenCode binary through task-owned Gateway + real PostgreSQL + separate loopback mock upstream, no get_provider_adapter monkeypatch) not_run awaiting root dispatch; 228-c guard-fix checkpoint 05dddb3e committed (closure event scoped to selected-native allow_reasoning_summary_part_done) and owned Gateway/mock restarted + revalidated onto that exact app tree (no evidence reset); protected live-qualification gate not_run; final PR-head CI pending; a-era governance 1/10 resolved at b (10/10) and preserved as immutable history; strict zero-retry + six-settled-request admission guarantee UNSATISFIED (recorded limitation, not an approved-plan requirement; stock retries allowed by the human-approved bounded plan); no production certification",
+  "status_note": "228-c completion order; honest incomplete: order item 6 (pinned actual OpenCode binary through task-owned Gateway + real PostgreSQL + separate loopback mock upstream, no get_provider_adapter monkeypatch) not_run awaiting root dispatch; 228-c guard-fix checkpoint 05dddb3e committed (closure event scoped to selected-native allow_reasoning_summary_part_done) and owned Gateway/mock restarted + revalidated onto that exact app tree (no evidence reset); protected live-qualification gate not_run; final PR-head CI pending; a-era governance 1/10 resolved at b (10/10) and preserved as immutable history; strict zero-retry + six-settled-request admission guarantee UNSATISFIED (recorded limitation, not an approved-plan requirement; stock retries allowed by the human-approved bounded plan); no production certification 228-c aux-dispatch checkpoint 087895cd committed (244 focused tests + ruff clean; test-only umask follow-up aeac5014) and services restarted onto it; first native loopback baseline dispatched 2026-11-25T01:46Z FAILED on the main request (400 opencode_1193_tool_declaration, pre-upstream; title aux settled: 1 finalized ledger 4/2 + 1 finalized reservation, 0 refs, 0 diagnostics; credential isolation verified; usage/receipt preserved); bounded native-only fix awaits the actual strict-value diagnostic; protected LAN launch and the protected gate remain not_run.",
   "evidence": [
     {
       "type": "unit",
@@ -201,6 +207,29 @@
       "type": "protected_gate",
       "label": "protected live-qualification gate",
       "result": "not_run"
+    },
+    {
+      "type": "focused_unit",
+      "label": "228-c aux-dispatch checkpoint 087895cd: focused unit run over the 3 directly affected streaming/fake files + ruff check on all 4 changed files; test-only umask follow-up aeac5014 (2 passed)",
+      "result": "244 passed in 3.74s; ruff clean; umask fix 2 passed",
+      "command": "PYTHONDONTWRITEBYTECODE=1 TMPDIR=/home/janezp/codex-work/tmp-228 .venv/bin/python -m pytest tests/unit/test_responses_codex_streaming_opencode_lifecycle.py tests/unit/test_responses_codex_streaming_tools.py tests/unit/test_loopback_responses_fake_message_events.py -q -o addopts= -p no:cacheprovider",
+      "executed_fake_sha256": "118ec65e28dbedc686f6154ed7137dd5553a21220d6d5ab2423ea0e7fb51e250"
+    },
+    {
+      "type": "native_loopback_baseline_attempt",
+      "label": "first native loopback assistant_tool baseline (root-dispatched 2026-11-25T01:46Z) FAILED on the main request; title aux settled; usage/receipt preserved; no rerun pending actual strict-value diagnostic",
+      "result": "failed_attempt_preserved",
+      "client": "OpenCode 1.19.3 binary sha256 179ca421d61eefeadfa0c50e084a6e79c1623734732f0f4593f81ccfd3ab7ee9 (unchanged); exit 1; elapsed 6.83 s; error event APIError 400 code opencode_1193_tool_declaration (no param); task_key_canary_leaked=false",
+      "pg_after_attempt": {
+        "usage_ledger": "1 successful finalized row (input 4 / output 2 tokens)",
+        "quota_reservations": "1 finalized",
+        "response_references": 0,
+        "codex_replay_references": 0,
+        "request_diagnostics": 0
+      },
+      "fake_reached": "auto-title aux only (7 top-level fields, no tools, stream=true, store=false); main 9-tool request never forwarded",
+      "credential_isolation": "task key (75 B, sha8 f9c03464) absent from every file under the fake case dir; fake journal Authorization is a redacted placeholder Bearer token_sha256_8 980e55c0 (mock upstream key); task Gateway key never reached the mock",
+      "working_hypothesis": "NOT proven: module _validate_tool_declaration requires strict is True per function tool while pinned OpenCode source packages/llm/src/protocols/openai-responses.ts:265 emits strict: false which the SDK propagates; secondary synthetic-only direct-fake diagnostic will capture the actual 9 strict booleans/field sizes before a bounded native-only fix"
     }
   ],
   "strict_guarantee": {
@@ -211,7 +240,7 @@
   },
   "live_plan": {
     "state": "declared_not_executed",
-    "limits": "\u2264100 outer launches (actual prior spend 5); 600s process / 1200s total; \u22642000000 tokens; \u2264EUR 2 total at EUR 1/M input and output; \u22646 SETTLED/charged requests per key (settled-request quota; admitted attempts may exceed 6 under stock retries and failed admissions can release reservations)",
+    "limits": "≤100 outer launches (actual prior spend 5); 600s process / 1200s total; ≤2000000 tokens; ≤EUR 2 total at EUR 1/M input and output; ≤6 SETTLED/charged requests per key (settled-request quota; admitted attempts may exceed 6 under stock retries and failed admissions can release reservations)",
     "retry_policy": "stock native retries explicitly allowed; no zero-retry promise (RETRY_MAX_RETRIES=5 hardcoded)",
     "forbidden": [
       "counter reset",
@@ -222,12 +251,12 @@
     "approval": "human-approved ('Approve 100 LAN tests with built-in retries'); execution gated on root-reviewed frozen candidate (green CI) + concrete target/setup, not on a human decision"
   },
   "not_run": [
-    "native_pinned_binary_run (order item 6, awaits root dispatch)",
+    "native_pinned_binary_run (order item 6): first loopback baseline attempted 2026-11-25T01:46Z and failed pre-upstream on the main request (aux settled); case incomplete; bounded fix + rerun pending; LAN not started",
     "real_provider",
     "protected_gate"
   ],
   "missing": [
-    "order item 6: pinned ACTUAL OpenCode 1.19.3 binary through the task-owned Gateway + real PostgreSQL + separate loopback mock upstream (no get_provider_adapter monkeypatch); setup staged and verified, restarted + revalidated onto 228-c guard-fix head 05dddb3e, run not_run awaiting root dispatch",
+    "order item 6: pinned ACTUAL OpenCode 1.19.3 binary through the task-owned Gateway + real PostgreSQL + separate loopback mock upstream (no get_provider_adapter monkeypatch); first loopback baseline ATTEMPTED at 087895cd: title aux settled, main request rejected pre-upstream (400 opencode_1193_tool_declaration); working hypothesis strict:false native declaration vs module strict-isTrue (not proven); bounded native-only fix + rerun await the actual strict-value diagnostic; usage/receipt preserved, no reset",
     "protected live-qualification gate not_run",
     "final PR-head CI pending (GitHub, after push)",
     "obligation mapping: record + manifest are an evidence index, not a verified per-obligation node-ID mapping",
@@ -250,5 +279,10 @@
   "twenty_seven_reused": {
     "record": "docs/verification/2026-11-20-hermes-opencode-chat.md",
     "scope": "227-c bounded LAN Chat qualification only, that execution only, with its documented stock-retry exception; not relabeled as 228 evidence"
+  },
+  "tree_ids_228c_auxdispatch_head": {
+    "HEAD:app": "8af923e0ffbc895652101fdf009a96b09379018d",
+    "HEAD:app/slaif_gateway": "c462b6580306f37c412b17961d2833f197a33ad2",
+    "note": "app tree unchanged by the aeac5014 test-only umask commit"
   }
 }

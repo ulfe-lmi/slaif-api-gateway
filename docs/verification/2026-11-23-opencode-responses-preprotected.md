@@ -518,12 +518,70 @@ and nothing in it qualifies this Responses module.
   (`assistant_tool` baseline with auto-title, three
   `reasoning_visible` cipher states absent/null/empty,
   `reasoning_continuation`, `compaction` with no completed-read or
-  marker predicates); each `expected_marker.bin` is an owned symlink
-  to its own future client run-root marker; all client run-roots
-  verified absent (launcher requirement). Loopback dispatch state:
-  ready, awaiting root-reviewed dispatch.
-- Native loopback run and protected LAN launch: still `not_run`,
-  awaiting root dispatch per the 228-c order.
+  marker predicates); all client run-roots verified absent (launcher
+  requirement). Loopback dispatch state: ready, awaiting
+  root-reviewed dispatch.
+- Marker seam correction (root-ordered): the fake-side
+  `run/expected_marker.bin` for the baseline plus the three
+  `reasoning_visible` cases was replaced from dangling symlinks to
+  private 0600 unpredictable 40-byte newline-free regular files
+  (bytes never printed; old links archived under
+  `archive-228c-seam-fix-20261125T011035Z/`); `reasoning_continuation`
+  and `compaction` keep their static sentinels (still dangling,
+  recorded honestly). Client run-roots remained absent.
+- No-tools aux/compaction dispatch + fake assistant-message
+  standardization checkpoint
+  `087895cd478d17a259adb6be1e952ecc2d5f6f21`: the selected OpenCode
+  streamed lifecycle now dispatches from `stream is True` alone
+  (taxonomy absent or empty => empty active set, so every new
+  generated tool call still fails closed); key/route capability gates
+  and the 0.149 dialect unchanged. The loopback fake assistant
+  message added/done now carry the standard shape
+  (`in_progress`/empty content -> `completed`/output_text;
+  producer-only, no gateway relaxation). Test-only umask hygiene
+  follow-up `aeac5014cf0bf943236506d6d57f2a78426f83fd` (app tree
+  unchanged: `HEAD:app` `8af923e0ffbc895652101fdf009a96b09379018d`,
+  `HEAD:app/slaif_gateway` `c462b6580306f37c412b17961d2833f197a33ad2`).
+  Focused 244-test unit run over the 3 affected files and
+  `ruff check` on all 4 changed files pass; executed fake sha256
+  `118ec65e28dbedc686f6154ed7137dd5553a21220d6d5ab2423ea0e7fb51e250`
+  (older receipts historical for that hash).
+- Owned services restarted onto that app tree: Gateway PID 1013775
+  (long-lived session 80060) and loopback mock PID 1004007 (session
+  64614, baseline case, clean dispatch-time journal state);
+  healthz 200, fake models 200, listeners verified across separate
+  tool calls; PG unchanged at restart (ledger/reservations/diagnostics
+  0). No evidence reset.
+- First native loopback baseline dispatch (root-dispatched,
+  2026-11-25T01:46Z; root-verified preconditions: Gateway health 200,
+  task-key models 403, plan exit 0, no key leak, PG 0/0, fake state
+  absent): ATTEMPTED, FAILED on the main request, honestly preserved.
+  The auto-title auxiliary request (7 top-level fields, no tools,
+  stream=true) forwarded and settled: PG 1 successful finalized ledger
+  row (input 4 / output 2 tokens) + 1 finalized reservation; 0
+  `response_references`, 0 `codex_replay_references`, 0 diagnostics.
+  The main 9-tool request was rejected pre-upstream by the task
+  Gateway with HTTP 400 code `opencode_1193_tool_declaration` (no
+  error param; the validation-stage row is not in
+  `request_diagnostics`). Client exit 1, elapsed 6.83 s, binary
+  1.19.3 sha256
+  `179ca421d61eefeadfa0c50e084a6e79c1623734732f0f4593f81ccfd3ab7ee9`
+  (unchanged); receipt and private logs preserved in the run root; PG
+  usage preserved (no reset). Working root-traced hypothesis, NOT yet
+  proven: the module requires `strict: true` per function tool
+  (`_validate_tool_declaration`), while the pinned OpenCode source
+  (`packages/llm/src/protocols/openai-responses.ts:265`) emits
+  `strict: false` which the SDK propagates. One fresh synthetic-only
+  direct-fake diagnostic (secondary) captures the actual 9 strict
+  booleans/field sizes before a bounded native-only fix; no rerun,
+  capture facility, or permission widening until then.
+- Credential isolation after the attempt: the task key (75 B, sha8
+  `f9c03464`) is absent from every file under the fake case directory;
+  the fake journal records the upstream Authorization as a redacted
+  placeholder Bearer (token_sha256_8 `980e55c0`, the mock upstream
+  key), i.e. the task Gateway key never reached the mock.
+- Protected LAN launch: still `not_run`, awaiting root dispatch per
+  the 228-c order.
 
 ## Approved bounded live plan (declared; NOT yet executed)
 
@@ -563,9 +621,12 @@ target/setup, with no counter reset.
 2. Order item 6 (228-b): pinned ACTUAL OpenCode 1.19.3 binary through
    the task-owned Gateway + real PostgreSQL + separate loopback mock
    upstream (no `get_provider_adapter` monkeypatch): setup staged and
-   verified; restarted and revalidated onto the 228-c guard-fix head
-   `05dddb3e` (see 228-c checkpoint), run `not_run` awaiting root
-   dispatch.
+   verified; restarted onto the aux-dispatch head `087895cd`; first
+   loopback baseline dispatched and ATTEMPTED 2026-11-25T01:46Z -
+   title aux settled, main request rejected pre-upstream (400
+   `opencode_1193_tool_declaration`); case incomplete, usage/receipt
+   preserved; bounded native-only fix and rerun await the actual
+   strict-value diagnostic (see 228-c checkpoint).
 3. Strict zero-retry plus six-settled-request admission guarantee:
    `UNSATISFIED`. Source proof: pinned OpenCode session
    `packages/opencode/src/session/llm.ts` line 323
