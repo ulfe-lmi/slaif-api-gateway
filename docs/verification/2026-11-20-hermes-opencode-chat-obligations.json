@@ -18,8 +18,8 @@
     }
   },
   "record": "docs/verification/2026-11-20-hermes-opencode-chat.md",
-  "status": "CLOSED_CLEANUP_VERIFIED_REPORT_PUBLISHED_PENDING_RESPONSE",
-  "status_reason": "227-d closure: 227-c report run-1 provenance conflation corrected (pre-spawn driver typo = not a launch; run1 = first actual native launch, missing runtime dependency); coordinated cleanup executed and verified (pre-deletion full-secret scan 0 unexpected hits; both task keys revoked with usage preserved; gateway/redis/PG stopped gracefully, PG data kept; private auth inputs deleted); docs+manifest updated; report-only SELF publishes the immutable 227-d report; executed qualification basis remains the human-accepted bounded gate (stock native retries authorized, none observed); the strict global zero-retry/six-admission contract is retained and unsatisfied; no source/runtime changes; pending response OK and root gates.",
+  "status": "DELIVERED_NATIVE_CHAT_QUALIFIED",
+  "status_reason": "Both accepted native Chat baselines executed in227-c, cleanup verified227-d, PR395 merged5f0f4c34 on2026-11-23. Fresh228 delivery audit rechecked published main commit checks successful. Evidence reused, no new inference or source change; strict universal zero-retry guarantee remains unsatisfied and is not an executed-plan requirement.",
   "branch": "oap/227-hermes-opencode-chat",
   "base": "0940d8a28f3a413d2a2cc6f4962c0efcafd71e13",
   "activated_order": {
@@ -520,7 +520,7 @@
   "preprotected": {
     "missing": [],
     "derived_from": "required record statuses in obligation_mapping: 19/19 required records are verified or verified_manual_review; g19 (proposed-protected-live-plan) PROPOSED plan artifact = verified_manual_review, with strict-guarantee/human-authority/execution tracked separately in the protected block (not as preprotected gaps)",
-    "note": "All required PREPROTECTED obligations satisfied with honest evidence. Former 227-a gaps closed: (a) governance 10/10 on new active 227-b state; (b) per-obligation verified test-node-ID mapping (19 records / 140 refs collection-checked at primary head 902a6e33); (c) concrete PROPOSED protected plan artifact present and reviewed (verified_manual_review). Protected live execution + human target authority + strict zero-retry guarantee remain a separately visible NOT_RUN/UNSATISFIED gate. External CI final exact-head gate = ROOT gate, a953 checkpoint SUCCESS not claimed for future heads."
+    "note": "Historical preprotected checkpoint obligations satisfied. Protected execution subsequently completed in227-c under the human-approved100-test/stock-retry plan;227-d verified cleanup and PR395 subsequently merged. Earlier per-obligation proposal/not_run statements remain labeled history, not current delivery status."
   },
   "protected": {
     "status": "executed",
@@ -1044,7 +1044,7 @@
         "provenance:tests/fixtures/opencode/1.19.3/chat/provenance.json (structural digest c84570f8dbbefb727ec90b17df2de802257951bda65e78b352df4742392208d3)",
         "provenance:tests/fixtures/hermes/0.22.5/provenance.json (manual review; no dedicated unit node)"
       ],
-      "notes": "OpenCode provenance/structural-fixture presence+privacy+digest-binding is unit-verified. Hermes provenance (provenance.json) and the .md honesty disclosures are manual_review/contract_doc (no dedicated node — marked honestly). Preserved disclosures: historical Python 3.13 secondary full-unit failure on one named OpenRouter audio test (counts/causality unknown, no fix/rerun); setupfail1 receipt cleanup unverified/retained; protected not_run."
+      "notes": "OpenCode provenance/structural-fixture presence+privacy+digest-binding is unit-verified. Hermes provenance (provenance.json) and the .md honesty disclosures are manual_review/contract_doc (no dedicated node \u2014 marked honestly). Preserved disclosures: historical Python 3.13 secondary full-unit failure on one named OpenRouter audio test (counts/causality unknown, no fix/rerun); setupfail1 receipt cleanup unverified/retained; protected not_run."
     },
     {
       "id": "canonical-active-order-and-single-pr-report-integrity",
@@ -1094,5 +1094,13 @@
         "protected_execution": "NOT_RUN (separate authorization/execution gate, not a preprotected gap)"
       }
     }
-  ]
+  ],
+  "delivery_reference": {
+    "PR": 395,
+    "merged_main_commit": "5f0f4c34ff13f1d76ae050708a37f387e6988451",
+    "merge_date_UTC": "2026-11-23T10:31:37Z",
+    "immutable_closure_report": "oap/reports/227-d-chat-delivery-closure.md",
+    "reused_without_rerun": true,
+    "current_OpenCode_Responses_record": "docs/verification/2026-11-23-opencode-responses-preprotected.json"
+  }
 }

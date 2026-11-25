@@ -55,6 +55,7 @@ from slaif_gateway.modules.clients.responses_support import (
     _FILE_DATA_URL_BASE64_SUFFIX,
     _BASE64_CHARS_RE,
 )
+from slaif_gateway.modules.clients.codex_0149 import CODEX_0149_DECLARED_TOOL_NAMESPACE
 from slaif_gateway.modules.contracts import ResponsesClientPolicySpec
 from slaif_gateway.modules.codex_named_context import (
     is_codex_named_context_output,
@@ -170,6 +171,29 @@ def codex_client_tool_taxonomy_id(policy: object) -> str | None:
     return None
 
 
+_EMPTY_VISIBLE_REASONING_PLACEHOLDER_KEYS = frozenset({"type", "summary", "encrypted_content"})
+
+
+def is_empty_visible_reasoning_placeholder(item: object) -> bool:
+    """Exact id-less empty reasoning replay placeholder (228-c LAN3).
+
+    The pinned OpenCode 1.19.3 SDK replays an assistant reasoning part with
+    empty visible text and zero-byte cipher as ``{"type": "reasoning",
+    "summary": [], "encrypted_content": ""}`` -- exactly three keys, no
+    ``id``/``status``/``content``/extra keys.  Only that exact shape carries
+    no visible text and no opaque data; anything else is meaningful history
+    and must be preserved.  Shared by the create-path provider-safe upstream
+    projection and its matching pre-rounding estimate deduction.
+    """
+    return (
+        isinstance(item, Mapping)
+        and set(item) == _EMPTY_VISIBLE_REASONING_PLACEHOLDER_KEYS
+        and item.get("type") == "reasoning"
+        and item.get("summary") == []
+        and item.get("encrypted_content") == ""
+    )
+
+
 class ResponsesRequestPolicyError(RequestPolicyError):
     """Request-policy error for Responses field validation."""
 
@@ -198,6 +222,7 @@ class CodexReplayRequestCandidate:
     call_id: str | None
     tool_namespace: str | None
     tool_name: str | None
+    encrypted_content: str | None = None
 
 
 @dataclass(frozen=True, slots=True, repr=False)
@@ -248,6 +273,7 @@ class ResponsesRequestPolicy:
         adapter_managed_declaration_candidates: frozenset[str] = frozenset(),
         adapter_managed_declaration_shapes: Mapping[str, frozenset[str]] | None = None,
         codex_top_level_tool_taxonomy: frozenset[tuple[str, str, str]] | None = None,
+        selected_profile_flat_function_streaming: bool = False,
         scope: Mapping[str, Any] | None = None,
     ) -> ResponsesPolicyResult:
         self._active_scope = scope
@@ -364,6 +390,14 @@ class ResponsesRequestPolicy:
                         self._codex_spec is not None
                         and self._codex_spec.allow_idless_tool_call_replay
                     ),
+                    allow_idless_encrypted_reasoning=(
+                        self._codex_spec is not None
+                        and self._codex_spec.allow_idless_encrypted_reasoning
+                    ),
+                    historical_flat_tool_identity=(
+                        self._codex_spec is not None
+                        and self._codex_spec.historical_flat_tool_identity
+                    ),
                     top_level_tool_taxonomy=continuation_taxonomy,
                     codex_tool_call_bindings=(
                         self._codex_tool_history_facts.call_bindings
@@ -431,6 +465,7 @@ class ResponsesRequestPolicy:
                 codex_streaming_tool_events_requested
                 or adapter_managed_streaming_allowed
                 or continuation_taxonomy is not None
+                or selected_profile_flat_function_streaming
             )
         ):
             _raise(
@@ -496,6 +531,10 @@ class ResponsesRequestPolicy:
                 else _codex_client_tool_declaration_estimation_bytes(
                     effective_body.get("input")
                 )
+            ),
+            omit_empty_visible_reasoning=(
+                self._codex_spec is not None
+                and self._codex_spec.omit_empty_visible_reasoning
             ),
         )
         input_ceiling = (
@@ -1957,12 +1996,22 @@ class ResponsesRequestPolicy:
             )
         item_id_value = item.get("id")
         if item_id_value is None:
-            _raise(
-                f"{param}.id",
-                "responses_codex_encrypted_reasoning_replay_invalid",
-                "Codex encrypted reasoning replay requires a bounded item ID.",
-            )
-        item_id = self._validate_codex_message_id(item_id_value, param=f"{param}.id")
+            if not self._codex_spec.allow_idless_encrypted_reasoning:
+                _raise(
+                    f"{param}.id",
+                    "responses_codex_encrypted_reasoning_replay_invalid",
+                    "Codex encrypted reasoning replay requires a bounded item ID.",
+                )
+            if set(item) != {"type", "summary", "encrypted_content"}:
+                _raise(
+                    f"{param}.id",
+                    "responses_codex_encrypted_reasoning_replay_invalid",
+                    "Id-less Codex encrypted reasoning requires the exact "
+                    "type, summary and encrypted_content shape.",
+                )
+            item_id = None
+        else:
+            item_id = self._validate_codex_message_id(item_id_value, param=f"{param}.id")
         encrypted_content = item.get("encrypted_content")
         if not isinstance(encrypted_content, str) or not encrypted_content:
             _raise(
@@ -2020,12 +2069,11 @@ class ResponsesRequestPolicy:
                     "Codex reasoning summaries exceed the gateway size limit.",
                 )
             canonical_summary.append({"type": "summary_text", "text": text_value})
-        canonical = {
-            "type": "reasoning",
-            "id": item_id,
-            "summary": canonical_summary,
-            "encrypted_content": encrypted_content,
-        }
+        canonical: dict[str, Any] = {"type": "reasoning"}
+        if item_id is not None:
+            canonical["id"] = item_id
+        canonical["summary"] = canonical_summary
+        canonical["encrypted_content"] = encrypted_content
         if "content" in item:
             canonical["content"] = None
         text_bytes = len(encrypted_content.encode("utf-8")) + summary_bytes
@@ -2445,8 +2493,22 @@ class ResponsesRequestPolicy:
                     and declaration[2] == tool_type
                     and (namespace is None or declaration[0] == namespace)
                 ]
-                if len(matches) != 1 or (
-                    tool_type == "custom" and matches[0] not in self._codex_spec.custom_client_tools
+                # Selected native profile: a flat function call whose tool is
+                # no longer in the current declarations may still pass the
+                # roundtrip shape check. Ownership is proven later by the
+                # existing same-key CALL-ID HMAC; the historical identity
+                # never joins the active declaration set above.
+                historical = (
+                    len(matches) == 0
+                    and self._codex_spec.historical_flat_tool_identity
+                    and namespace is None
+                    and tool_type == "function"
+                    and top_level_tool_taxonomy is not None
+                )
+                if (len(matches) != 1 and not historical) or (
+                    len(matches) == 1
+                    and tool_type == "custom"
+                    and matches[0] not in self._codex_spec.custom_client_tools
                 ):
                     _raise(
                         f"input[{index}].name",
@@ -2460,7 +2522,11 @@ class ResponsesRequestPolicy:
                         "responses_codex_tool_roundtrip_invalid",
                         "Codex tool-call IDs must be unique.",
                     )
-                calls[call_id] = matches[0]
+                calls[call_id] = (
+                    matches[0]
+                    if matches
+                    else (CODEX_0149_DECLARED_TOOL_NAMESPACE, name, tool_type)
+                )
                 pending.add(call_id)
             elif item_type in {"function_call_output", "custom_tool_call_output"}:
                 if (
@@ -4562,8 +4628,26 @@ class ResponsesRequestPolicy:
         tools_schema_bytes: int = 0,
         tool_choice_bytes: int = 0,
         codex_client_tool_declaration_bytes: int = 0,
+        omit_empty_visible_reasoning: bool = False,
     ) -> tuple[int, int, int, tuple[str, ...]]:
         total_bytes = input_material_bytes
+        if omit_empty_visible_reasoning:
+            # Provider-safe projection (228-c LAN3, create only): the
+            # forwarded create body copy omits the exact empty reasoning
+            # placeholders for the selected client, so meter only what
+            # the provider receives.  The input-token-count and compact
+            # builders keep the default False and meter the full history
+            # bytes.  The deduction applies to the original full-history
+            # stats BEFORE the (total_bytes + 2) // 3 rounding;
+            # validation, resources, and HMAC authority still cover the
+            # complete history.
+            input_items = body.get("input")
+            if isinstance(input_items, list):
+                total_bytes -= sum(
+                    len(canonical_json_bytes(item))
+                    for item in input_items
+                    if is_empty_visible_reasoning_placeholder(item)
+                )
         if instructions is not None:
             total_bytes += len(instructions.encode("utf-8"))
         non_message_bytes = tools_schema_bytes + tool_choice_bytes
@@ -4841,6 +4925,7 @@ def _codex_positional_replay_candidates(
     codex_tool_call_bindings: Mapping[str, tuple[str | None, str, str]],
     *,
     allow_idless_tool_call_replay: bool,
+    allow_idless_encrypted_reasoning: bool = False,
 ) -> tuple[CodexReplayRequestCandidate | CodexCompactionReplayCandidate, ...]:
     """New lifecycle mode: emit every actual call from its positional identity.
 
@@ -4891,6 +4976,21 @@ def _codex_positional_replay_candidates(
                         tool_name=None,
                     )
                 )
+            elif item_id is None and allow_idless_encrypted_reasoning:
+                # Id-less encrypted reasoning is referenced by its bounded
+                # ciphertext digest, never by a fabricated protocol ID.
+                encrypted_content = item.get("encrypted_content")
+                if isinstance(encrypted_content, str) and encrypted_content:
+                    candidates.append(
+                        CodexReplayRequestCandidate(
+                            item_kind="reasoning",
+                            item_id=None,
+                            call_id=None,
+                            tool_namespace=None,
+                            tool_name=None,
+                            encrypted_content=encrypted_content,
+                        )
+                    )
             continue
         if item_type not in {"function_call", "custom_tool_call"}:
             continue
@@ -4944,6 +5044,8 @@ def codex_replay_request_candidates(
     *,
     top_level_tool_taxonomy: frozenset[tuple[str, str, str]] | None = None,
     allow_idless_tool_call_replay: bool = False,
+    allow_idless_encrypted_reasoning: bool = False,
+    historical_flat_tool_identity: bool = False,
     codex_tool_call_bindings: Mapping[str, tuple[str | None, str, str]] | None = None,
     require_call_completeness: bool = False,
 ) -> tuple[CodexReplayRequestCandidate | CodexCompactionReplayCandidate, ...]:
@@ -4966,6 +5068,7 @@ def codex_replay_request_candidates(
             input_value,
             codex_tool_call_bindings,
             allow_idless_tool_call_replay=allow_idless_tool_call_replay,
+            allow_idless_encrypted_reasoning=allow_idless_encrypted_reasoning,
         )
     input_declarations = _codex_declarations_from_input_items(
         [dict(item) for item in input_value if isinstance(item, Mapping)]
@@ -5014,6 +5117,21 @@ def codex_replay_request_candidates(
                         tool_name=None,
                     )
                 )
+            elif item_id is None and allow_idless_encrypted_reasoning:
+                # Id-less encrypted reasoning is referenced by its bounded
+                # ciphertext digest, never by a fabricated protocol ID.
+                encrypted_content = item.get("encrypted_content")
+                if isinstance(encrypted_content, str) and encrypted_content:
+                    candidates.append(
+                        CodexReplayRequestCandidate(
+                            item_kind="reasoning",
+                            item_id=None,
+                            call_id=None,
+                            tool_namespace=None,
+                            tool_name=None,
+                            encrypted_content=encrypted_content,
+                        )
+                    )
             continue
         if item_type not in {"function_call", "custom_tool_call"}:
             continue
@@ -5033,14 +5151,28 @@ def codex_replay_request_candidates(
             item_id is None and allow_idless_tool_call_replay
         )
         shape_ok = isinstance(call_id, str) and isinstance(name, str)
-        if shape_ok and len(matches) == 1:
+        # Selected native profile: a flat, namespace-free function call with
+        # no current declaration is emitted with its claimed identity so the
+        # existing same-key CALL-ID HMAC can prove (or deny) ownership.
+        # Explicit namespace, custom kind, or an active-set match never take
+        # this path, and it never alters the active declaration set.
+        historical = (
+            len(matches) == 0
+            and historical_flat_tool_identity
+            and namespace is None
+            and tool_type == "function"
+            and top_level_tool_taxonomy is not None
+        )
+        if shape_ok and (len(matches) == 1 or historical):
             if id_ok:
                 candidates.append(
                     CodexReplayRequestCandidate(
                         item_kind=str(item_type),
                         item_id=item_id,
                         call_id=call_id,
-                        tool_namespace=matches[0][0],
+                        tool_namespace=(
+                            matches[0][0] if matches else CODEX_0149_DECLARED_TOOL_NAMESPACE
+                        ),
                         tool_name=name,
                     )
                 )

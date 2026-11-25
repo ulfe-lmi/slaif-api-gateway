@@ -10,6 +10,41 @@ fitness, security, compliance, provider behavior, or scale.
 For current readers, these are the newest qualification and identity records
 on record. They are dated, commit-specific evidence, not certifications.
 
+- [`2026-11-23 Objective 228 (a + b, 228-c mock half consolidated) OpenCode 1.19.3 Responses module preprotected record`](2026-11-23-opencode-responses-preprotected.md)
+  (record finalized 2026-11-24, 228-c mock-half results consolidated
+  2026-11-25; filename dated 2026-11-23 to match the
+  committed crosslinks; 228-b status `NEEDS_CONTINUATION`) - dedicated
+  static client module `opencode-1.19.3-responses-v1` (engine version `1`)
+  for the pinned native OpenCode 1.19.3 Responses client: profile DATA
+  packaged as validated JSON with a frozen dialect (reasoning efforts
+  `minimal`..`xhigh`, nine bounded local tool names), selection only from
+  the authenticated server-side key metadata pin (absent/`null` default,
+  present malformed pin fails closed), qualified
+  `openai`/`openai-compatible` server pairs only, streaming-only exact
+  9-field request shape, id-less encrypted-reasoning v3 ciphertext
+  references (HMAC-only, captured from a validated id-bearing done after
+  finalized usage), typed message/reasoning lifecycle independent of tool
+  count, pinned-SDK required stream indexes, removed flat function-tool
+  history replayed through the existing same-key HMAC; 228-b additions:
+  provider reasoning IDs required on added/done (id-less done rejected,
+  id-less input eligibility separate), selected-profile-only v3 alias
+  issuance, visible absent/null/empty reasoning output lifecycle (zero
+  references), selected-profile-only `part.done` closure and orphan-done
+  rejection, 7-field stream-`true` aux/compaction summary requests and
+  4-typeless continuations; evidence: 338/442/467 unit sets (never
+  summed), 18 + 20 real isolated PostgreSQL runs (the 20 includes
+  real-factory adapter settlement over respx loopback with
+  `get_provider_adapter` unpatched), secondary fake-only loopback capture
+  checkpoints (NOT a Gateway/provider pass), ruff clean, governance 10/10
+  at b (a's 1/10 preserved as immutable history); the 228-c mock half is
+  complete: six pinned OpenCode 1.19.3 loopback cases (assistant tool
+  loop, encrypted reasoning continuation, visible reasoning
+  absent/null/empty, compaction) passed through the task-owned Gateway +
+  real PostgreSQL + separate loopback mock upstream; the bounded LAN half
+  remains `not_run`, awaiting the root CI/setup review of the frozen
+  candidate (not a new human decision); protected gate `not_run`; strict
+  zero-retry/six-settled guarantee `UNSATISFIED` (source-proved); no
+  production certification.
 - [`2026-11-10 Objective 216-a GUI reviewed accounting recovery verification`](gui-cli-parity.md)
   (recorded 2026-11-10, same living record file) - admin GUI G14 of
   `docs/MISSING_GUI_FUNCTIONALITY.md` reusing the SAME shared

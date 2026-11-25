@@ -1,0 +1,310 @@
+{
+  "variant": "visible_reasoning_states_replay_behavior",
+  "config_variant": "denied-web-baseline",
+  "endpoint": "POST /v1/responses",
+  "observation_only": true,
+  "not_encrypted_ownership": true,
+  "authority_note": "these probes document how the SDK keeps/drops VISIBLE (non-encrypted) reasoning states and the resulting final tool/text outcome; they are NOT encrypted-ownership passes, the full-cipher gate stays required on the encrypted case, and visible states grant no opaque authority",
+  "request_turn_1": {
+    "input_item_count": 2,
+    "input_items": [
+      {
+        "index": 0,
+        "type_key_state": "absent",
+        "role": "developer",
+        "content_form": "string",
+        "id_state": "absent",
+        "status_state": "absent",
+        "note": "agent instruction prompt; content not retained"
+      },
+      {
+        "index": 1,
+        "type_key_state": "absent",
+        "role": "user",
+        "content_form": "array",
+        "content_part_types": [
+          "input_text"
+        ],
+        "id_state": "absent",
+        "status_state": "absent",
+        "note": "typeless message items (no 'type' key) carry role + content on the Responses wire"
+      }
+    ],
+    "tools_count": 9,
+    "contract_facts": {
+      "max_output_tokens": {
+        "state": "present",
+        "type": "integer",
+        "observed": 32000,
+        "note": "configured limit.output 32768 emits 32000 (same runtime cap as the Chat capture)"
+      },
+      "store": {
+        "state": "present",
+        "type": "boolean",
+        "observed": false
+      },
+      "stream": {
+        "state": "present",
+        "type": "boolean",
+        "observed": true
+      },
+      "tool_choice": {
+        "state": "present",
+        "type": "string",
+        "observed": "auto"
+      },
+      "include": {
+        "state": "present",
+        "type": "array",
+        "observed": [
+          "reasoning.encrypted_content"
+        ]
+      },
+      "reasoning": {
+        "state": "present",
+        "type": "object",
+        "observed": {
+          "effort": "xhigh"
+        },
+        "note": "PROVEN DIFFERENCE: nested reasoning object with effort xhigh, not a top-level reasoning_effort string as in the Chat wire"
+      },
+      "model": {
+        "state": "present",
+        "type": "string",
+        "observed": "agent-responses-fake-model",
+        "note": "synthetic task-configured model id bound to the loopback fake provider"
+      }
+    }
+  },
+  "response_turn_1_note": "each scenario: the fake issues a reasoning output item with summary deltas plus a function_call, then the client sends the turn-2 continuation and a correlated tool result drives the final marker text",
+  "scenarios": {
+    "absent": {
+      "reasoning_item_issued_state": "absent",
+      "issued_note": "the fake issues NO reasoning item (encrypted_content absent from the issued output)",
+      "sdk_replay_behavior": {
+        "input_item_count": 4,
+        "input_item_types": [
+          null,
+          null,
+          "function_call",
+          "function_call_output"
+        ],
+        "appended_items": [
+          {
+            "index": 3,
+            "type": "function_call",
+            "keys_sorted": [
+              "arguments",
+              "call_id",
+              "name",
+              "type"
+            ],
+            "arguments_form": "json string",
+            "call_id_state": "present",
+            "id_state": "absent",
+            "status_state": "absent"
+          },
+          {
+            "index": 4,
+            "type": "function_call_output",
+            "keys_sorted": [
+              "call_id",
+              "output",
+              "type"
+            ],
+            "output_form": "string",
+            "call_id_state": "present",
+            "id_state": "absent",
+            "status_state": "absent"
+          }
+        ],
+        "reasoning_replayed_state": "null",
+        "replayed_matches_issued": false,
+        "issued_call_id_correlated": true,
+        "note": "SDK DROPPED the missing reasoning state: turn-2 input has 4 items with no reasoning item; matches_issued is false because there is nothing issued to replay"
+      },
+      "session": {
+        "stable_across_two_requests": true,
+        "session_value_sha256_8": "b0f486a3"
+      },
+      "client_behavior": {
+        "exit_code": 0,
+        "elapsed_s": 5.831
+      },
+      "verification_gate": {
+        "correlation": "issued call_id matched the single function_call_output (correlated_outputs=1, fc_outputs_total=1)",
+        "exact_result_roundtrip": "final client text equals the 38-byte unpredictable marker exactly (no whitespace normalization)",
+        "final_text_source": "correlated_tool_result",
+        "final_text_length": 38,
+        "marker_length": 38,
+        "result": "verified"
+      }
+    },
+    "null": {
+      "reasoning_item_issued_state": "null",
+      "issued_note": "the fake issues a reasoning item whose encrypted_content is JSON null (visible, not encrypted)",
+      "sdk_replay_behavior": {
+        "input_item_count": 4,
+        "input_item_types": [
+          null,
+          null,
+          "function_call",
+          "function_call_output"
+        ],
+        "appended_items": [
+          {
+            "index": 3,
+            "type": "function_call",
+            "keys_sorted": [
+              "arguments",
+              "call_id",
+              "name",
+              "type"
+            ],
+            "arguments_form": "json string",
+            "call_id_state": "present",
+            "id_state": "absent",
+            "status_state": "absent"
+          },
+          {
+            "index": 4,
+            "type": "function_call_output",
+            "keys_sorted": [
+              "call_id",
+              "output",
+              "type"
+            ],
+            "output_form": "string",
+            "call_id_state": "present",
+            "id_state": "absent",
+            "status_state": "absent"
+          }
+        ],
+        "reasoning_replayed_state": "null",
+        "replayed_matches_issued": false,
+        "issued_call_id_correlated": true,
+        "note": "SDK DROPPED the null reasoning state: turn-2 input has the same 4-item shape with no reasoning item"
+      },
+      "session": {
+        "stable_across_two_requests": true,
+        "session_value_sha256_8": "425f751c"
+      },
+      "client_behavior": {
+        "exit_code": 0,
+        "elapsed_s": 5.48
+      },
+      "verification_gate": {
+        "correlation": "issued call_id matched the single function_call_output (correlated_outputs=1, fc_outputs_total=1)",
+        "exact_result_roundtrip": "final client text equals the 38-byte unpredictable marker exactly (no whitespace normalization)",
+        "final_text_source": "correlated_tool_result",
+        "final_text_length": 38,
+        "marker_length": 38,
+        "result": "verified"
+      }
+    },
+    "empty": {
+      "reasoning_item_issued_state": "empty_string",
+      "issued_note": "the fake issues a reasoning item with encrypted_content set to the empty string (visible, not encrypted)",
+      "sdk_replay_behavior": {
+        "input_item_count": 5,
+        "input_item_types": [
+          null,
+          null,
+          "reasoning",
+          "function_call",
+          "function_call_output"
+        ],
+        "appended_items": [
+          {
+            "index": 2,
+            "type": "reasoning",
+            "keys_sorted": [
+              "encrypted_content",
+              "summary",
+              "type"
+            ],
+            "id_state": "absent",
+            "status_state": "absent",
+            "encrypted_content_state": "empty_string",
+            "summary_present": true,
+            "derived_sha256_8_of_empty_string": "e3b0c442",
+            "derived_byte_length_of_empty_string": 0,
+            "derived_note": "e3b0c442 / 0 bytes are DERIVED from the observed empty-string state (sha256 of the empty string), not observed item fields",
+            "replayed_state": "empty_string",
+            "replayed_matches_issued": true,
+            "note": "SDK KEPT the empty-string reasoning item verbatim in the continuation input; id/status absent"
+          },
+          {
+            "index": 3,
+            "type": "function_call",
+            "keys_sorted": [
+              "arguments",
+              "call_id",
+              "name",
+              "type"
+            ],
+            "arguments_form": "json string",
+            "call_id_state": "present",
+            "id_state": "absent",
+            "status_state": "absent"
+          },
+          {
+            "index": 4,
+            "type": "function_call_output",
+            "keys_sorted": [
+              "call_id",
+              "output",
+              "type"
+            ],
+            "output_form": "string",
+            "call_id_state": "present",
+            "id_state": "absent",
+            "status_state": "absent"
+          }
+        ],
+        "issued_call_id_correlated": true,
+        "note": "SDK KEPT the empty-string reasoning state (5-item turn-2 input); matches_issued true against the issued empty string"
+      },
+      "session": {
+        "stable_across_two_requests": true,
+        "session_value_sha256_8": "3c472fa9"
+      },
+      "client_behavior": {
+        "exit_code": 0,
+        "elapsed_s": 5.528
+      },
+      "verification_gate": {
+        "correlation": "issued call_id matched the single function_call_output (correlated_outputs=1, fc_outputs_total=1)",
+        "exact_result_roundtrip": "final client text equals the 38-byte unpredictable marker exactly (no whitespace normalization)",
+        "final_text_source": "correlated_tool_result",
+        "final_text_length": 38,
+        "marker_length": 38,
+        "result": "verified"
+      }
+    }
+  },
+  "shared_marker_gate": {
+    "correlation": "issued call_id matched the single function_call_output (correlated_outputs=1, fc_outputs_total=1)",
+    "exact_result_roundtrip": "final client text equals the 38-byte unpredictable marker exactly (no whitespace normalization)",
+    "final_text_source": "correlated_tool_result",
+    "final_text_length": 38,
+    "marker_length": 38,
+    "result": "verified"
+  },
+  "shared_read_tool_wrap": {
+    "declared_name": "read",
+    "native_output_wrap": {
+      "content_is_raw_file_bytes": false,
+      "marker_present": true,
+      "marker_occurrences_in_output": 1,
+      "content_byte_length": 192,
+      "marker_byte_length": 38,
+      "content_equals_marker": false,
+      "note": "the native read tool wraps file content in an envelope (192 B observed for the 38 B marker); the wrapped output is not raw file bytes and is not byte-equal to the marker"
+    }
+  },
+  "privacy": {
+    "raw_content_retained": false,
+    "provider_call_performed": false
+  }
+}

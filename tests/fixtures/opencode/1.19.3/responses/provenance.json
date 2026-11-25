@@ -1,0 +1,64 @@
+{
+  "profile": {
+    "client_module_id": "opencode-1.19.3-responses-v1",
+    "client_module_version": "1",
+    "client_name": "OpenCode",
+    "client_version": "1.19.3",
+    "distribution": "opencode-linux-x64-baseline (glibc single-file executable)",
+    "distribution_version": "1.19.3",
+    "release": "https://github.com/anomalyco/opencode/releases/tag/v1.19.3",
+    "archive_sha256": "531cff2441129c30f0edd5878af494108ad07f5feb46d7ee29a2a5b830a5765d",
+    "executable_sha256": "179ca421d61eefeadfa0c50e084a6e79c1623734732f0f4593f81ccfd3ab7ee9",
+    "responses_provider_package": "@ai-sdk/openai (bundled in pinned executable; package entry 3.0.88, nested copy 3.0.84; no runtime npm install observed)",
+    "ai_sdk_version": "6.0.168",
+    "observed_user_agent": "opencode/1.19.3 ai-sdk/provider-utils/4.0.40 runtime/bun/1.3.14",
+    "observed_runtime": "bun 1.3.14",
+    "provider_utils_note": "the pinned executable bundles @ai-sdk/provider-utils copies; the UA reflects the copy that handled the request (Chat capture observed 4.0.23, this Responses capture 4.0.40). No attribution of a specific bundled copy to @ai-sdk/openai is claimed.",
+    "wire_api": "responses",
+    "version_command_observed": "1.19.3",
+    "source_tag": "v1.19.3",
+    "source_commit": "e3c4eb242585dcd77be1a867391b7c25fd47ce52",
+    "source_commit_note": "direct commit of the official v1.19.3 release tag (type: commit), gh api repos/anomalyco/opencode/git/ref/tags/v1.19.3; same pinned commit as the Chat capture",
+    "packaged_profile_digest": null,
+    "packaged_profile_digest_state": "pending primary packaging; no schema_version 1 profile JSON exists yet for this module (fixtures, dossier, and verifier feed primary packaging)",
+    "vocabulary_decision": "v1 ships the 9-tool denied-web-baseline reviewed capture vocabulary; webfetch (configuration-dependent, observed only under the permissive task variant in the Chat capture) is outside v1 and requires a reviewed DATA revision with a new digest"
+  },
+  "capture_environment": {
+    "captured_utc_date": "2026-11-24",
+    "mode": "pinned executable against task-owned 127.0.0.1 loopback fake (Responses wire); isolated task-owned HOME/XDG dirs; task-owned config with synthetic bearer bound to a custom provider entry with explicit npm=@ai-sdk/openai; --pure; bounded 240s timeouts",
+    "user_saved_profiles_touched": false,
+    "user_credentials_read": false,
+    "production_provider_key_used": false,
+    "external_plugins": "disabled via --pure",
+    "config_variants": [
+      {
+        "label": "denied-web-baseline",
+        "permission": {
+          "webfetch": "deny"
+        },
+        "observed_tool_count": 9,
+        "note": "same 9-tool baseline as the Chat capture; verifier report label 'denyweb'"
+      }
+    ],
+    "configuration_difference_note": "single config variant captured for the Responses wire; the custom provider entry must name npm=@ai-sdk/openai explicitly (the built-in 'openai' provider entry selects the OpenAI/Responses default path and would not bind this capture's model selector).",
+    "executed_artifacts": {
+      "verifier_sha256": "21058f39d10e43fac0d3dea18c4d9042b28693616132cd6222a0aab9382f615f",
+      "fake_sha256": "f68cc805b14f33f66bab814ff3edced99a7e6e595ad243ecc7fc6552eac7eeba",
+      "worktree_head_sha_at_run_time": "f3af15335907fc5fe8c2f02705e7df4ad91d424a",
+      "head_note": "HEAD at the moment the compaction capture was executed; the fake/verifier scripts were uncommitted 228-b working-tree edits at run time, so this is executed-script provenance, NOT the post-run commit that updates these fixtures",
+      "verifier_report_path": "/home/janezp/codex-work/slaif-228-task/runs/228b-compaction-20261124T095812Z-report.json",
+      "report_result": "EXIT=0 all_pass=true, 9/9 gates pass (superset run re-executing all 8 prior probes plus compaction), finished 2026-11-24T09:59:04Z, run_root_cleaned, all privacy flags false, sessions distinct",
+      "probe_count": 9
+    }
+  },
+  "privacy": {
+    "raw_content_retained": false,
+    "provider_call_performed": false,
+    "raw_ids_retained": false,
+    "credentials_retained": false,
+    "home_workspace_paths_retained": false
+  },
+  "structural_fixture_digest_rule": "sha256 over, for each structural_*.json in tests/fixtures/opencode/1.19.3/responses sorted by filename: filename + NUL + file bytes (provenance.json excluded)",
+  "structural_fixture_sha256": "1f128c25de8e8014e61855d6b2716a867e5f5364fbc6c01022a573d9e77f12e9",
+  "structural_fixture_sha256_note": "recomputed in 228-c after correcting the false strict-value annotation in structural_text_stream.json (present_true_on_all_9 -> present_value_not_recorded, presence only; the capture verifier never recorded the value); no recapture; prior digest 00127fa1b5ea43ac0a936ddf5d179d084eaf70512dc9d59a6e6f2a11253cbd53 covered the pre-correction bytes"
+}

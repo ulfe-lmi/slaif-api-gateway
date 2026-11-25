@@ -586,11 +586,14 @@ pin digest and the deployed DATA digest mismatch, requests for that key
 fail closed. A previous revision must itself be reviewed and
 qualified; the gateway makes no automatic compatibility promise.
 
-Clearing the pin is a *deliberate* disable, not a rollback: after
-`null`, the key returns to `openai-default` Chat validation, and a
-client tuned to a profile's widened envelope (for example Hermes
-`xhigh` reasoning effort) may fail default validation until the pin is
-restored:
+Clearing the pin is a deliberate state change, not a rollback, and
+not a key disablement: after `null`, the key returns to
+`openai-default` Chat validation, and a client tuned to a profile's
+widened envelope (for example Hermes `xhigh` reasoning effort) may
+fail default validation until the pin is restored. Clearing the pin
+does NOT suspend or revoke the key; to actually disable a key use
+`keys suspend <key-id> --reason "..."` or `keys revoke <key-id>
+--reason "..."`. To clear the Chat pin:
 
 ```bash
 cat > ./clear-chat-pin.json <<'JSON'
@@ -609,8 +612,153 @@ These profiles are candidate dossiers: see
 [agentic-clients/hermes-0.22.5-chat-v1.md](agentic-clients/hermes-0.22.5-chat-v1.md)
 and
 [agentic-clients/opencode-1.19.3-chat-v1.md](agentic-clients/opencode-1.19.3-chat-v1.md).
-The protected live gate is `not_run`, and no production live inference
-is recorded for them.
+The protected live gate for these Chat profiles was executed once in the
+bounded, human-authorized 227-c local-area-network qualification, whose
+documented stock-retry exception applied to that execution only; no
+production certification follows, and the qualification is recorded in the
+[2026-11-20 consolidated verification
+record](verification/2026-11-20-hermes-opencode-chat.md).
+The separate pinned OpenCode Responses module (objective 228-a, final
+228-c candidate) is a protected-qualified candidate selected from the key
+metadata pin `responses_policy.client_module`: exact
+`{id, version, fixture_sha256}` object (`id`
+`opencode-1.19.3-responses-v1`, `version` `"1"`, `fixture_sha256`
+`592c5d1baa7aa3a805320411f3f961521ba72b30cc34cafe01cb755ddf69f0ff`),
+bound with the same `slaif-gateway keys policy update --policy-file`
+workflow as the Chat pin above, together with the four required
+`/v1/responses` capabilities (`codex_request_envelope`,
+`codex_client_tools`, `codex_streaming_tool_events`,
+`codex_encrypted_reasoning_replay`). The `responses_policy` field is
+a COMPLETE replacement block (no partial member merge): run `keys
+policy export <key-id>` first, and if the key already has a
+`responses_policy` block, copy its whole members into the new file
+and edit them, preserving every member you want to keep; omitting
+`responses_policy` from the file preserves the stored block, and
+`null` clears it (no Codex authority). Minimal schema-version-1
+block:
+
+```json
+{
+  "schema_version": 1,
+  "responses_policy": {
+    "version": 1,
+    "allowed_capabilities": [
+      "codex_request_envelope",
+      "codex_client_tools",
+      "codex_streaming_tool_events",
+      "codex_encrypted_reasoning_replay"
+    ],
+    "allowed_local_tool_types": ["function", "custom"],
+    "client_module": {
+      "id": "opencode-1.19.3-responses-v1",
+      "version": "1",
+      "fixture_sha256": "592c5d1baa7aa3a805320411f3f961521ba72b30cc34cafe01cb755ddf69f0ff"
+    }
+  }
+}
+```
+
+Its mock half is complete: six
+pinned OpenCode 1.19.3 loopback cases passed through the actual task
+Gateway and real PostgreSQL against a separate loopback upstream fake,
+as recorded in the [2026-11-23 consolidated verification
+record](verification/2026-11-23-opencode-responses-preprotected.md).
+The LAN half is COMPLETE: the root-dispatched final bounded LAN attempt
+(LAN4) PASSED on 2026-11-25 at the final candidate `28d3fbd9` (app tree
+`aacd71af…`, all CI green): one actual client tool loop, 32.197 s /
+exit 0, one completed read with matching call-ID and result marker,
+final 32 B byte-exact, three HTTP 200 FINALIZED requests (14,872 tokens
+/ EUR 0.014872 at the task pricing EUR 1/M, not a provider invoice),
+and all auth canaries clean; exactly one native HMAC read reference was
+proven from FINALIZED usage. The protected live-qualification gate is
+therefore RUN and passed. Explicit limits: the mock half is six
+loopback fake-upstream cases (mock-secret auth, mock route
+`slaif-228b-mock` / model `opencode228b`; mock usage is not settlement
+evidence), and the live half is bounded — one tool-loop client run per
+dispatch, key caps 6 -> 12 -> 14 settled requests on the same
+short-lived key, token/cost/time ceilings, and ≤100 outer launches.
+Historical LAN attempts (first run failed at the task Gateway
+validator; run 2 TERMINAL FAILED at a later stream event; LAN3 failed
+at the upstream provider) are labeled historical in the verification
+record. The settled-request raises (`request_limit_total` 6 -> 12, then
+12 -> 14, same key) were executed through the audited operator CLI as
+temporary setup subcaps under the existing human-approved 100-LAN-test
+delegation: the earlier separate request for a raise was withdrawn as
+unnecessary, and no new human answer is claimed. The final key snapshot
+before audit stands at 14 total / 13 used / 88,621 tokens / EUR
+0.088621 (token/cost/time ceilings unchanged); the short-lived task key
+was then REVOKED through the operator CLI after the full snapshot —
+revocation of the issued key, not a profile-pin clearing (clearing the
+pin only reverts the key to default validation and is not a key
+disablement). The 227-c Chat
+qualification above is executed historical
+evidence whose stock-retry exception applied to that execution only; the
+standing approved 228 bounded LAN plan allows stock native retries as a
+plan term. The gateway's strict zero-retry rule is gateway policy, not a
+native-client bound: the pinned OpenCode native session hardcodes
+`RETRY_MAX_RETRIES=5` with no override above the SDK default, so no
+zero-native-retry guarantee is claimed for this module. One additional
+operator environment value is required in `.env` (applied with
+`./scripts/docker-refresh.sh --env-only` plus a service recreate/restart);
+the shared default of `4096` is NOT widened:
+
+```bash
+RESPONSES_MAX_FUNCTION_TOOL_DESCRIPTION_BYTES=8192
+```
+
+The pinned 1.19.3 baseline tool declarations serialize to at most 5210
+bytes, so `8192` covers them; the `CHAT_MAX_TOOL_DESCRIPTION_BYTES=8192`
+and `HARD_MAX_OUTPUT_TOKENS=32768` values above remain separate
+Chat-profile settings. Initial enablement is a code upgrade + pin only:
+there is NO database migration and NO automatic key migration — existing
+keys keep their stored policy, and only keys pinned to the tuple above
+(with the four capabilities and the `8192` value set and the service
+restarted) get the module. Rollback is a full revision restore, not a
+re-pin: restore the previous image (or previous reviewed profile DATA)
+and re-pin the affected key to the matching previous identity.
+Clearing the pin is neither a compatibility rollback nor a key
+disablement: it reverts the key to default validation (a client tuned
+to the profile envelope may fail default validation until the pin is
+restored); to actually disable a key use `keys suspend <key-id>
+--reason "..."` or `keys revoke <key-id> --reason "..."`. Key
+material and usage are preserved either way. A code-only fix that
+keeps the module `id`/`version`/`fixture_sha256` unchanged needs no
+re-pin; re-pin only on initial enablement or a DATA identity change.
+See the [Responses
+section of the upgrade
+runbook](upgrade-runbook.md#opencode-1193-responses-client-profile-upgrade-and-rollback-228)
+for the exact steps.
+
+Verified OpenCode client recipe — a qualified configuration for this
+module, not a universal OpenCode setup (secret placeholder only —
+supply the gateway key via environment; the qualification used a
+custom provider entry with an explicit `npm` and the settings shown;
+no claim is made about the built-in `openai` entry):
+
+```json
+{
+  "$schema": "https://opencode.ai/config.json",
+  "provider": { "slaif-responses": {
+    "npm": "@ai-sdk/openai",
+    "options": { "baseURL": "https://gateway.example.invalid/v1",
+                 "apiKey": "{env:OPENAI_API_KEY}", "setCacheKey": false },
+    "models": { "qwen38-27b": { "tool_call": true,
+        "limit": { "context": 245760, "input": 245760, "output": 32768 },
+        "options": { "reasoningEffort": "xhigh", "store": false } } } } },
+  "permission": { "webfetch": "deny" }
+}
+```
+
+The `gateway.example.invalid` host is a placeholder: replace it with
+your deployment's gateway base URL, and replace the model id, the
+`context`/`input`/`output` limit values, and the provider name with
+your deployment's accepted values as appropriate. The `{env:VAR}`
+interpolation syntax is verified in the pinned OpenCode source
+(`packages/opencode/src/config/variable.ts`). The `tool_call` flag
+and the `reasoningEffort: "xhigh"` / `store: false` /
+`permission.webfetch: "deny"` values are the qualified native settings
+for this module. See
+[responses-compatibility.md](responses-compatibility.md).
 
 ## Real-Provider Smoke Test
 

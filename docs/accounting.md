@@ -422,6 +422,26 @@ estimated output the pending reservation is released and a failed ledger row
 is created (zero charged). The profile pin changes none of these
 boundaries.
 
+### OpenCode Responses profile estimate and settlement coverage
+
+A request served under the pinned OpenCode Responses module
+`opencode-1.19.3-responses-v1` uses the same admission-time estimation and
+PostgreSQL settlement boundaries as ordinary Responses. Input token
+estimation and cost pre-reservation cover all material retained in the
+forwarded normalized body: input items (sent without a type field), the
+flat strict tool declarations and their serialized schemas, reasoning
+fields, and any other retained serialized fields. The profile adds no new
+billing category, pricing row, or ledger column, and provider final
+usage/cost remains authoritative when available. A failed provider
+response or a denied request releases the pending reservation and creates
+a failed usage ledger row. A stream that ends before final usage is
+finalized as estimated interrupted accounting under the existing rules
+when it has positive estimated output; with no estimated output the
+pending reservation is released and a failed ledger row is created (zero
+charged). The id-less encrypted-reasoning reference is accounting-neutral:
+it persists only after successful finalized output and meters no tokens,
+cost, or storage. The profile pin changes none of these boundaries.
+
 ## External-tool accounting holds
 
 The bounded OpenAI Responses web-search runtime uses the existing PostgreSQL

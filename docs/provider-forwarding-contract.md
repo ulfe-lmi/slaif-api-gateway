@@ -937,11 +937,123 @@ A data-only vocabulary upgrade is new profile document bytes with a new
 canonical digest requiring a re-pinned operator key and process restart;
 there is no per-tool source upgrade, automatic upgrade, or silent
 key-rotation path. Both profiles are preprotected candidates: the protected
-live-qualification gate is `not_run`, nothing in the profile DATA grants live
-qualification, and this section creates no schema, key-rotation, deployment,
-or live-qualification claim. Selection architecture is in the "Chat client
+live-qualification gate was executed once by the bounded, human-authorized
+227-c local-area-network Chat qualification (recorded in the
+`2026-11-20-hermes-opencode-chat` verification record; that execution only,
+with its documented stock-retry exception — no rerun and no release claim
+is made here), nothing in the profile DATA grants live qualification, and
+this section creates no schema, key-rotation, deployment, or
+live-qualification claim. Selection architecture is in the "Chat client
 profile selection" section of
 [module-architecture.md](module-architecture.md).
+
+### OpenCode 1.19.3 Responses client profile forwarding (preprotected)
+
+The pinned native OpenCode Responses module
+`opencode-1.19.3-responses-v1` (engine version `1`, packaged profile DATA
+fixture digest
+`592c5d1baa7aa3a805320411f3f961521ba72b30cc34cafe01cb755ddf69f0ff`) is
+selected ONLY from the authenticated server-side key metadata tuple
+`metadata_json.responses_policy.client_module`, which must be exactly
+`{id, version, fixture_sha256}`. An absent or `null` pin keeps the default
+Responses module unchanged. A present pin that is malformed, unknown,
+stale, or digest-mismatched fails closed before normalization, admission,
+or upstream activity with `400 invalid_request_error`
+(`client_module_metadata_invalid`, `unsupported_client_module`, or
+`client_module_fixture_mismatch`; a present-but-`null` digest is a fixture
+mismatch). Headers, model names, and request metadata never select a
+module, and the selected module never bypasses endpoint, route, provider,
+capability, pricing, or quota gates.
+
+The resolved key/route pair must be one of the two reviewed server pairs,
+`openai` and `openai-compatible`, enforced at input-token counting and
+again at create; any other server module — including the signed Local
+Coding `local-coding-v1` Responses-only transport and every unqualified
+transport — is denied `400 incompatible_client_server_pair` before
+forwarding. Pairing is compatibility data, not an authority grant.
+
+The profile normalizes to the exact captured first-turn shape and is
+streaming-only: the top-level field set is exactly `{include, input,
+max_output_tokens, model, reasoning, store, stream, tool_choice, tools}`,
+with `stream` `true` (denied `opencode_1193_field_shape` otherwise),
+`store` `false`, `tool_choice` `"auto"`, `include` limited to
+`reasoning.encrypted_content`, `developer`/`user` input roles sent without
+a type field, and the flat strict nine-name tool declaration list (each
+declaration carrying a preserved `strict` boolean). The 9-field set is
+the main first-turn shape only; the qualified auto-title auxiliary and
+compaction summary requests use the 7-field streamed tool-less variant,
+and continuation turns replay assistant text and reasoning as typeless
+input items (six-case evidence in
+[responses-compatibility.md](responses-compatibility.md)). The
+normalized body is forwarded unchanged under the ordinary client-trust
+model; no per-request relaxation or body rewriting exists, and unknown
+fields or types remain denied.
+
+Encrypted-reasoning replay uses the owned ciphertext-derived v3 reference
+path (domain-separated digest, HMAC-only reference, immediate-memory-only
+ciphertext, persisted only after successful finalized output) alongside
+the existing function-call digest path. The binding differs by kind:
+function-call references are portable same-key references (same key, item
+kind, call, and tool name; not route-bound), while reasoning v3
+references are bound to the same key and route/provider/model. Missing,
+altered, foreign, stale, oversized, duplicated, or mismatched references
+are denied before forwarding. Present invalid item IDs keep their
+existing denials, and the
+legacy Codex and default presets, including the legacy digest bytes, are
+unchanged.
+
+Function-argument streaming (argument deltas and the argument closure
+event) is validated on both native server pairs, with supplied
+`output_index` values required to match the index registered for the
+item's `item_id`; missing-position derivation is limited to the
+`openai-compatible` pair (off by default) and grants no event permission
+elsewhere, and the closure event relies on this module's
+`allow_function_arguments_done` fact (`false` in all other specs).
+Legacy sparse paths are unchanged. See the streaming section of
+[responses-compatibility.md](responses-compatibility.md) for the honest
+no-observed-closure wording.
+
+For this profile's **create** requests only, the forwarded body copy
+projects (omits) ONLY the exact id-less empty visible-reasoning
+placeholder (`{"type":"reasoning","summary":[],
+"encrypted_content":""}`) that the pinned OpenCode 1.19.3 SDK replays
+verbatim and that the qualified openai-compatible backend rejects; the
+same placeholder's canonical bytes are deducted from the create input
+estimate before rounding. The validated original remains the authority
+for resource accounting, ownership, and HMAC/replay over the complete
+history, and forwarding still waits for quota admission. The
+input-token-count and compact builders keep the full history bytes and
+their existing denials unchanged.
+
+The selected module reuses the existing admission pipeline, including
+policy revalidation after a real wait; a stale pre-wait profile is never
+forwarded. The strict gateway zero-retry forwarding rule is gateway
+policy only: the pinned OpenCode session hardcodes a bounded native retry
+policy above the SDK default of zero retries, so zero native HTTP retries
+are never claimed for this profile; the 227-c human-authorized bounded LAN
+qualification (Chat profiles) is executed historical evidence whose
+documented stock-retry exception applied to that execution only. The
+standing, separately approved bounded 228 LAN plan for this Responses
+module (human-approved; execution gated on the root CI/setup review of the
+frozen candidate, not a new human decision) explicitly allows stock native
+retries as a plan term.
+
+A data-only profile upgrade is new document bytes with a new digest, a
+re-pinned operator key, and a process restart; there is no database
+migration or engine upgrade. The module's preprotected obligations are
+complete: the mock half passed (six pinned OpenCode 1.19.3 loopback cases
+through the actual task Gateway and real PostgreSQL; mock usage is not
+settlement evidence), and the LAN half and the protected
+live-qualification gate are RUN — LAN4 PASSED on 2026-11-25 at the final
+candidate `28d3fbd9` (app tree `aacd71af…`; 32.197 s / exit 0, final 32 B
+byte-exact, one completed read with matching call-ID and result marker,
+three HTTP 200 FINALIZED requests / 14,872 tokens at the task pricing,
+all auth canaries clean; bounded live limits recorded in the
+consolidated verification record), and this section creates no
+live-qualification, deployment, or certification claim. Selection and
+dialect are documented in
+[responses-compatibility.md](responses-compatibility.md), and the replay
+boundary in [security-model.md](security-model.md).
 
 ## Header Contract
 

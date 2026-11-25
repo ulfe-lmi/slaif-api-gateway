@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import time
 import uuid
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from decimal import Decimal
 from types import SimpleNamespace
@@ -70,6 +71,9 @@ from slaif_gateway.modules.clients.codex_0162 import (
     codex_0162_lower_initial_additional_tools,
     codex_0162_lower_positional_tool_history,
 )
+from slaif_gateway.modules.clients.opencode_1193_responses import (
+    OPENCODE_1193_RESPONSES_CLIENT_MODULE_ID,
+)
 from slaif_gateway.modules.contracts import DEFAULT_CLIENT_MODULE_ID, ModuleSelectionError
 from slaif_gateway.modules.servers.local_coding_vllm.contract import (
     VLLM_SERVER_MODULE_ID,
@@ -82,6 +86,7 @@ from slaif_gateway.modules.servers.local_coding.contract import (
 from slaif_gateway.modules.servers.upstream_llm.profiles import MODULE_ID as UPSTREAM_LLM_MODULE_ID
 from slaif_gateway.modules.servers.local_coding.identity import derive_request_identity
 from slaif_gateway.modules.servers.registry import (
+    OPENAI_COMPATIBLE_SERVER_MODULE_ID,
     ensure_client_module_has_server_pair,
     ensure_client_server_pair,
     resolve_server_module,
@@ -96,6 +101,7 @@ from slaif_gateway.providers.streaming import (
     CodexReplayStreamCandidate,
     ResponsesStreamEventValidator,
     ResponsesStreamValidationProfile,
+    format_sse_data,
     format_responses_error_event,
     is_output_limited_response,
 )
@@ -203,6 +209,7 @@ from slaif_gateway.services.responses_request_policy import (
     ResponsesRequestPolicy,
     apply_codex_positional_prepared_estimate,
     apply_codex_route_limits,
+    is_empty_visible_reasoning_placeholder,
     codex_client_tool_declarations,
     codex_client_tool_taxonomy_id,
     codex_replay_request_candidates,
@@ -336,6 +343,35 @@ class _ExternalToolPricingFacts:
     fx: FxConversionResult
 
 
+def _project_empty_visible_reasoning(
+    effective_body: Mapping[str, object],
+) -> Mapping[str, object]:
+    """Provider-safe projection (228-c LAN3) of the create body copy.
+
+    Some openai-compatible servers reject the canonical id-less empty
+    reasoning replay placeholder with 400 (they require a non-canonical
+    nonempty ``content`` array on reasoning input items).  The validated
+    original is retained for resource accounting, ownership, and replay
+    authority over the complete history; this drops ONLY the exact empty
+    placeholder from the forwarded copy, and forwarding still waits for
+    quota admission.  No mutation, no other key dropped; meaningful
+    items are preserved as-is.
+    """
+    input_items = effective_body.get("input")
+    if not isinstance(input_items, list):
+        return effective_body
+    kept = [
+        item
+        for item in input_items
+        if not is_empty_visible_reasoning_placeholder(item)
+    ]
+    if len(kept) == len(input_items):
+        return effective_body
+    projected = dict(effective_body)
+    projected["input"] = kept
+    return projected
+
+
 def _build_safe_responses_upstream_body(
     *,
     policy_result: ResponsesPolicyResult,
@@ -343,6 +379,7 @@ def _build_safe_responses_upstream_body(
     omit_prompt_cache_key: bool = False,
     lower_codex_0162_initial_declaration: bool = False,
     lower_codex_0162_positional_history: bool = False,
+    omit_empty_visible_reasoning: bool = False,
 ) -> dict[str, object]:
     try:
         effective_body = policy_result.effective_body
@@ -366,6 +403,8 @@ def _build_safe_responses_upstream_body(
             # HMAC signing, never afterward, and forwarding still waits for
             # quota admission.
             effective_body = codex_0162_lower_initial_additional_tools(effective_body)
+        if omit_empty_visible_reasoning:
+            effective_body = _project_empty_visible_reasoning(effective_body)
         normalized_request = normalize_responses_upstream_request(
             effective_body,
             requested_model=policy_result.effective_body["model"],
@@ -474,8 +513,23 @@ def _derive_pair_local_codex_top_level_profile(
     effective_body: Mapping[str, object],
     declared_tool_taxonomy: frozenset[tuple[str, str, str]] | None = None,
 ) -> tuple[frozenset[tuple[str, str, str]], bool]:
-    """Derive 0.149 top-level tool facts only after Local route resolution."""
+    """Derive pair-local top-level tool facts after route resolution.
 
+    The OpenCode 1.19.3 profile dispatches its streamed lifecycle from
+    ``stream is True`` alone, including seven-field no-tools auxiliary and
+    compaction requests where the taxonomy is absent or empty; the active
+    set then stays empty, so every newly generated tool call still fails
+    closed. Its key and route capability gates run in the caller. The
+    0.149 dialect remains local-server-context gated.
+    """
+    if client_module_id == OPENCODE_1193_RESPONSES_CLIENT_MODULE_ID:
+        if effective_body.get("stream") is not True:
+            return frozenset(), False
+        return (
+            declared_tool_taxonomy
+            if declared_tool_taxonomy is not None
+            else frozenset()
+        ), True
     if client_module_id != CODEX_0149_CLIENT_MODULE_ID or local_coding_server_context is None:
         return frozenset(), False
     declarations = (
@@ -1257,7 +1311,10 @@ async def handle_response_create(
     body = normalized_client_request.body
     _ensure_client_module_pair_exists(client_module.module_id)
     codex_0149_full_tool_taxonomy: frozenset[tuple[str, str, str]] | None = None
-    if client_module.module_id == CODEX_0149_CLIENT_MODULE_ID:
+    if client_module.module_id in {
+        CODEX_0149_CLIENT_MODULE_ID,
+        OPENCODE_1193_RESPONSES_CLIENT_MODULE_ID,
+    }:
         try:
             taxonomy = codex_0149_declared_tool_taxonomy(body)
             if taxonomy:
@@ -1308,7 +1365,11 @@ async def handle_response_create(
     codex_0149_continuation_taxonomy = (
         codex_0149_full_tool_taxonomy
         if (
-            client_module.module_id == CODEX_0149_CLIENT_MODULE_ID
+            client_module.module_id
+            in {
+                CODEX_0149_CLIENT_MODULE_ID,
+                OPENCODE_1193_RESPONSES_CLIENT_MODULE_ID,
+            }
             and allow_codex_request_envelope
             and allow_codex_client_tools
             and allow_codex_streaming_tool_events
@@ -1334,6 +1395,16 @@ async def handle_response_create(
         allow_codex_encrypted_reasoning_replay
         and client_module.encrypted_reasoning_output_requested(body)
     )
+    # The pinned OpenCode SDK supplies strict flat function declarations with
+    # required indexes, so streaming them is qualified by the validated
+    # top-level taxonomy rather than the 0.149 local-server context. The
+    # key/route capability gates below remain authoritative.
+    selected_profile_flat_function_streaming = (
+        client_module.module_id == OPENCODE_1193_RESPONSES_CLIENT_MODULE_ID
+        and body.get("stream") is True
+        and responses_function_tools_requested(body)
+        and codex_0149_full_tool_taxonomy is not None
+    )
     policy = ResponsesRequestPolicy(
         settings=settings,
         client_spec=client_module.policy_spec,
@@ -1358,6 +1429,7 @@ async def handle_response_create(
                 normalized_client_request.adapter_managed_declaration_shapes
             ),
             codex_top_level_tool_taxonomy=codex_0149_continuation_taxonomy,
+            selected_profile_flat_function_streaming=selected_profile_flat_function_streaming,
             scope=request.scope if request is not None else None,
         )
     except RequestPolicyError as exc:
@@ -1375,13 +1447,31 @@ async def handle_response_create(
         and client_module.policy_spec.allow_idless_tool_call_replay
         and (
             client_module.module_id == CODEX_0149_CLIENT_MODULE_ID
+            or client_module.module_id == OPENCODE_1193_RESPONSES_CLIENT_MODULE_ID
             or positional_facts is not None
         )
+    )
+    # Id-less encrypted reasoning is qualified by the selected client spec
+    # alone.  Its ownership proof is an immediate ciphertext-digest lookup,
+    # never the deferred CALL-ID path, so it must not join the tool-history
+    # deferral below.
+    allow_idless_encrypted_reasoning = bool(
+        client_module.policy_spec is not None
+        and client_module.policy_spec.allow_idless_encrypted_reasoning
+    )
+    # Selected native profile: flat historical function identity is proven by
+    # the existing same-key CALL-ID HMAC after local validation; it never
+    # joins the active tool authority.
+    historical_flat_tool_identity = bool(
+        client_module.policy_spec is not None
+        and client_module.policy_spec.historical_flat_tool_identity
     )
     try:
         replay_candidates = codex_replay_request_candidates(
             policy_result.effective_body,
             allow_idless_tool_call_replay=allow_idless_tool_call_replay,
+            allow_idless_encrypted_reasoning=allow_idless_encrypted_reasoning,
+            historical_flat_tool_identity=historical_flat_tool_identity,
             top_level_tool_taxonomy=codex_0149_continuation_taxonomy,
             codex_tool_call_bindings=(
                 positional_facts.call_bindings if positional_facts is not None else None
@@ -1397,7 +1487,13 @@ async def handle_response_create(
             error_type="invalid_request_error",
             code="responses_codex_replay_reference_invalid",
         )
-    defer_idless_replay = any(candidate.item_id is None for candidate in replay_candidates)
+    # Only id-less tool calls need the deferred CALL-ID ownership proof;
+    # id-less encrypted reasoning verifies immediately by cipher digest.
+    defer_idless_replay = any(
+        candidate.item_id is None
+        and candidate.item_kind in {"function_call", "custom_tool_call"}
+        for candidate in replay_candidates
+    )
     replay_authorization = (
         CodexReplayAuthorization(references=())
         if defer_idless_replay
@@ -1407,6 +1503,7 @@ async def handle_response_create(
             settings=settings,
             request=request,
             allow_idless_tool_call_replay=allow_idless_tool_call_replay,
+            allow_idless_encrypted_reasoning=allow_idless_encrypted_reasoning,
         )
     )
     request_id = _request_id_from_request(request)
@@ -1447,7 +1544,9 @@ async def handle_response_create(
         settings=settings,
     )
     if defer_idless_replay:
-        if local_coding_server_context is None:
+        if local_coding_server_context is None and (
+            client_module.module_id != OPENCODE_1193_RESPONSES_CLIENT_MODULE_ID
+        ):
             raise OpenAICompatibleError(
                 "The selected client and server modules are not compatible.",
                 status_code=400,
@@ -1460,6 +1559,7 @@ async def handle_response_create(
             settings=settings,
             request=request,
             allow_idless_tool_call_replay=True,
+            allow_idless_encrypted_reasoning=allow_idless_encrypted_reasoning,
         )
     pair_local_codex_top_level_tools, pair_local_codex_streaming_tools = (
         _derive_pair_local_codex_top_level_profile(
@@ -1552,6 +1652,10 @@ async def handle_response_create(
                     client_module_id=client_module.module_id,
                     local_coding_server_context=local_coding_server_context,
                 ),
+                omit_empty_visible_reasoning=(
+                    client_module.policy_spec is not None
+                    and client_module.policy_spec.omit_empty_visible_reasoning
+                ),
             )
             policy_result = apply_codex_positional_prepared_estimate(
                 policy_result,
@@ -1632,6 +1736,10 @@ async def handle_response_create(
         lower_codex_0162_initial_declaration=_codex_0162_local_pair_lowers_declaration(
             client_module_id=client_module.module_id,
             local_coding_server_context=local_coding_server_context,
+        ),
+        omit_empty_visible_reasoning=(
+            client_module.policy_spec is not None
+            and client_module.policy_spec.omit_empty_visible_reasoning
         ),
     )
     external_pricing_lookup = None
@@ -1725,6 +1833,10 @@ async def handle_response_create(
                     lower_codex_0162_initial_declaration=_codex_0162_local_pair_lowers_declaration(
                         client_module_id=client_module.module_id,
                         local_coding_server_context=local_coding_server_context,
+                    ),
+                    omit_empty_visible_reasoning=(
+                        client_module.policy_spec is not None
+                        and client_module.policy_spec.omit_empty_visible_reasoning
                     ),
                 )
                 current_policy_result = apply_codex_positional_prepared_estimate(
@@ -1823,7 +1935,34 @@ async def handle_response_create(
                 client_module_id=client_module.module_id,
                 local_coding_server_context=local_coding_server_context,
             ),
+            omit_empty_visible_reasoning=(
+                client_module.policy_spec is not None
+                and client_module.policy_spec.omit_empty_visible_reasoning
+            ),
         )
+    # Qualified native wire repair gate (228-c transport defect): only the
+    # selected OpenCode 1.19.3 Responses client paired with the registered
+    # openai-compatible server may have an ABSENT output_index assigned
+    # from unambiguous stream state.  Every older/default profile and the
+    # official openai pair retain strict denial; an unresolvable route
+    # descriptor never enables the repair.
+    native_repair_positions = False
+    if (
+        client_module.module_id == OPENCODE_1193_RESPONSES_CLIENT_MODULE_ID
+        and client_module.policy_spec is not None
+        and client_module.policy_spec.require_stream_output_indices
+    ):
+        try:
+            native_repair_positions = (
+                resolve_server_module(
+                    route.provider,
+                    getattr(route, "provider_kind", None),
+                    getattr(route, "capabilities", None),
+                ).module_id
+                == OPENAI_COMPATIBLE_SERVER_MODULE_ID
+            )
+        except ProviderConfigurationError:
+            native_repair_positions = False
     try:
         quota = await _reserve_responses_quota(
             authenticated_key=authenticated_key,
@@ -1901,10 +2040,20 @@ async def handle_response_create(
                             and client_module.policy_spec.allow_sparse_function_events
                             and local_coding_server_context is not None
                         ),
+                        # Legacy Codex pairs keep the local server context
+                        # requirement; the selected OpenCode native profile's
+                        # qualified visible reasoning lifecycle is a
+                        # client-module wire property served on non-local
+                        # routes. The key/route capability gates below
+                        # remain authoritative.
                         allow_sparse_visible_reasoning=(
                             client_module.policy_spec is not None
                             and client_module.policy_spec.allow_sparse_visible_reasoning
-                            and local_coding_server_context is not None
+                            and (
+                                local_coding_server_context is not None
+                                or client_module.module_id
+                                == OPENCODE_1193_RESPONSES_CLIENT_MODULE_ID
+                            )
                         ),
                         custom_client_tools=(
                             client_module.policy_spec.custom_client_tools
@@ -1932,6 +2081,57 @@ async def handle_response_create(
                         ),
                         codex_encrypted_reasoning_replay=(
                             codex_encrypted_reasoning_event_requested
+                        ),
+                        allow_idless_encrypted_reasoning=(
+                            client_module.policy_spec is not None
+                            and client_module.policy_spec.allow_idless_encrypted_reasoning
+                            and codex_encrypted_reasoning_event_requested
+                        ),
+                        allow_empty_visible_reasoning=(
+                            client_module.policy_spec is not None
+                            and client_module.policy_spec.allow_empty_visible_reasoning
+                            and codex_encrypted_reasoning_event_requested
+                        ),
+                        # Client-module wire property: the selected native
+                        # profile's pinned SDK supplies required indexes, so
+                        # this is not gated on the local server context.
+                        require_output_indices=(
+                            client_module.policy_spec is not None
+                            and client_module.policy_spec.require_stream_output_indices
+                        ),
+                        # Same pair, same wire: an absent output_index may
+                        # be assigned from unambiguous stream state ONLY
+                        # for the selected OpenCode 1.19.3 client paired
+                        # with the registered openai-compatible server
+                        # (see native_repair_positions).  Supplied indexes
+                        # and all other profiles keep strict behavior.
+                        repair_missing_output_indices=native_repair_positions,
+                        # Selected native wire property: the captured
+                        # OpenCode 1.19.3 visible reasoning lifecycle
+                        # closes each summary part with
+                        # response.reasoning_summary_part.done.  Legacy
+                        # presets keep the baseline denial of this Codex
+                        # dialect closure event.
+                        allow_reasoning_summary_part_done=(
+                            client_module.policy_spec is not None
+                            and client_module.policy_spec.allow_reasoning_summary_part_done
+                        ),
+                        # Client-module wire property gated on the pair's
+                        # streaming-tool request/pair-local admission:
+                        # the qualified native profile validates the
+                        # standard function-argument closure
+                        # (response.function_call_arguments.done) when
+                        # emitted by a provider, on every native pair.
+                        # Position semantics remain
+                        # require_output_indices; missing-position repair
+                        # stays the compat-pair gate above.
+                        allow_function_arguments_done=(
+                            client_module.policy_spec is not None
+                            and client_module.policy_spec.allow_function_arguments_done
+                            and (
+                                codex_streaming_tool_events_requested
+                                or pair_local_codex_streaming_tools
+                            )
                         ),
                         declared_client_tools=(
                             pair_local_codex_top_level_tools
@@ -2694,6 +2894,7 @@ async def _verify_owned_codex_replay_references(
     settings: Settings,
     request: Request | None,
     allow_idless_tool_call_replay: bool = False,
+    allow_idless_encrypted_reasoning: bool = False,
 ) -> CodexReplayAuthorization:
     if not candidates:
         return CodexReplayAuthorization(references=())
@@ -2712,6 +2913,7 @@ async def _verify_owned_codex_replay_references(
                 candidates=candidates,
                 gateway_key_id=authenticated_key.gateway_key_id,
                 allow_idless_tool_call_replay=allow_idless_tool_call_replay,
+                allow_idless_encrypted_reasoning=allow_idless_encrypted_reasoning,
             )
         except CodexReplayReferenceError as exc:
             raise _openai_error_from_codex_replay_error(exc) from exc
@@ -2839,6 +3041,7 @@ async def _persist_codex_replay_references(
     route: RouteResolutionResult,
     settings: Settings,
     request: Request | None,
+    allow_idless_encrypted_reasoning: bool = False,
 ) -> int:
     if not candidates:
         return 0
@@ -2864,6 +3067,7 @@ async def _persist_codex_replay_references(
                 provider=route.provider,
                 route_id=route.route_id,
                 upstream_model=route.resolved_model,
+                allow_idless_encrypted_reasoning=allow_idless_encrypted_reasoning,
             )
             await session.commit()
             return count
@@ -3359,6 +3563,20 @@ def _streaming_responses_response(
                         request_id=request_id,
                     )
                     return
+                repaired_payload = stream_event_validator.take_repaired_payload()
+                if repaired_payload is not None:
+                    # The validated copy is the wire truth: re-encode the
+                    # exact normalized JSON into the outgoing SSE bytes so
+                    # the client and any held replay tail never see the
+                    # broken producer event.  All other chunk fields
+                    # (usage, request id, terminal flags) are preserved.
+                    repaired_data = json.dumps(repaired_payload, separators=(",", ":"))
+                    chunk = replace(
+                        chunk,
+                        data=repaired_data,
+                        raw_sse_event=format_sse_data(repaired_data),
+                        json_body=repaired_payload,
+                    )
                 payload = chunk.json_body
                 if isinstance(payload, Mapping):
                     sequence = payload.get("sequence_number")
@@ -3540,6 +3758,7 @@ def _streaming_responses_response(
                             route=route,
                             settings=settings,
                             request=request,
+                            allow_idless_encrypted_reasoning=profile.allow_idless_encrypted_reasoning,
                         )
                     except CodexReplayReferenceError as exc:
                         provider_status = "incomplete"

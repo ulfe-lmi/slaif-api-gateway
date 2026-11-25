@@ -20,6 +20,10 @@ from slaif_gateway.modules.clients.codex_0162 import (
     Codex0162ResponsesClientModule,
 )
 from slaif_gateway.modules.clients.openai_default import OpenAIDefaultClientModule
+from slaif_gateway.modules.clients.opencode_1193_responses import (
+    OPENCODE_1193_RESPONSES_CLIENT_MODULE,
+    OPENCODE_1193_RESPONSES_CLIENT_MODULE_ID,
+)
 from slaif_gateway.modules.contracts import (
     DEFAULT_CLIENT_MODULE_ID,
     CanonicalClientRequest,
@@ -29,6 +33,9 @@ from slaif_gateway.modules.contracts import (
 DEFAULT_CLIENT_MODULE = OpenAIDefaultClientModule()
 CODEX_0147_CLIENT_MODULE = Codex0147ResponsesClientModule()
 CODEX_0149_CLIENT_MODULE = Codex0149ResponsesClientModule()
+# 228-a: static reviewed OpenCode 1.19.3 Responses client module instance
+# (no bootstrap binding; the profile DATA is frozen in the repository).
+OPENCODE_1193_RESPONSES_CLIENT_MODULE_INSTANCE = OPENCODE_1193_RESPONSES_CLIENT_MODULE
 # The 0.162 registry entry is the concrete module bound to the loaded data
 # profile.  It is rebuilt exactly once at process bootstrap when an operator
 # profile file is configured; the historical v1/v2 tuples are not live
@@ -38,6 +45,7 @@ _CLIENT_MODULE_REGISTRY_ENTRIES: dict[str, ClientModule] = {
     DEFAULT_CLIENT_MODULE_ID: DEFAULT_CLIENT_MODULE,
     CODEX_0147_CLIENT_MODULE_ID: CODEX_0147_CLIENT_MODULE,
     CODEX_0149_CLIENT_MODULE_ID: CODEX_0149_CLIENT_MODULE,
+    OPENCODE_1193_RESPONSES_CLIENT_MODULE_ID: OPENCODE_1193_RESPONSES_CLIENT_MODULE_INSTANCE,
     CODEX_0162_CLIENT_MODULE_ID: CODEX_0162_CLIENT_MODULE_INSTANCE,
 }
 CLIENT_MODULE_REGISTRY: Mapping[str, ClientModule] = MappingProxyType(

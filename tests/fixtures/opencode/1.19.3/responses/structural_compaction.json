@@ -1,0 +1,248 @@
+{
+  "variant": "native_client_side_compaction",
+  "config_variant": "denied-web-baseline",
+  "endpoint": "POST /v1/responses",
+  "fake_only_synthetic_trigger": true,
+  "not_gateway_provider_pass": true,
+  "authority_note": "client-side compaction of the pinned OpenCode 1.19.3 Responses client, triggered on the task-owned loopback fake by a synthetic overflow usage value; no real provider overflow, no Gateway/provider behavior is proven, and no /v1/responses/compact (or any other) endpoint participation is claimed; the trace note is empty-trace evidence of non-observation, not a compaction-form pass",
+  "compaction_trace": {
+    "post_paths_other_than_responses_seen": [],
+    "responses_compact_endpoint_observed": false,
+    "note": "only POST /v1/responses forms were sent by the client during the compaction sequence; the OpenAI Responses compact endpoint was not observed and its involvement must not be inferred"
+  },
+  "request_turn_1": {
+    "input_item_count": 2,
+    "input_items": [
+      {
+        "index": 0,
+        "type_key_state": "absent",
+        "role": "developer",
+        "content_form": "string",
+        "id_state": "absent",
+        "status_state": "absent",
+        "note": "agent instruction prompt; content not retained"
+      },
+      {
+        "index": 1,
+        "type_key_state": "absent",
+        "role": "user",
+        "content_form": "array",
+        "content_part_types": [
+          "input_text"
+        ],
+        "id_state": "absent",
+        "status_state": "absent",
+        "note": "original prompt user item; content not retained"
+      }
+    ],
+    "tools_count": 9,
+    "tool_names_baseline_9": [
+      "bash",
+      "edit",
+      "glob",
+      "grep",
+      "read",
+      "skill",
+      "task",
+      "todowrite",
+      "write"
+    ],
+    "tool_declaration_form": "flat",
+    "tool_declaration_strict_present_count": 9,
+    "contract_facts": {
+      "max_output_tokens": {
+        "state": "present",
+        "type": "integer",
+        "observed": 32000
+      },
+      "store": {
+        "state": "present",
+        "type": "boolean",
+        "observed": false
+      },
+      "stream": {
+        "state": "present",
+        "type": "boolean",
+        "observed": true
+      },
+      "tool_choice": {
+        "state": "present",
+        "type": "string",
+        "observed": "auto"
+      },
+      "include": {
+        "state": "present",
+        "type": "array",
+        "observed": [
+          "reasoning.encrypted_content"
+        ]
+      },
+      "reasoning": {
+        "state": "present",
+        "type": "object",
+        "observed": {
+          "effort": "xhigh"
+        }
+      },
+      "model": {
+        "state": "present",
+        "type": "string",
+        "observed": "agent-responses-fake-model",
+        "note": "synthetic task-configured model id bound to the loopback fake provider"
+      }
+    },
+    "issued_function_call": {
+      "name": "read",
+      "call_id": "issued by fake",
+      "arguments_form": "json string (filePath probe.txt)",
+      "tool_executed": false,
+      "function_call_outputs_issued": 0,
+      "note": "the turn-1 assistant tool call was never answered; the client-side compaction path replaced the aborted turn instead of continuing it"
+    },
+    "usage_emitted_by_fake": {
+      "input_tokens": 225000,
+      "output_tokens": 2000,
+      "usage_is_synthetic_trigger": true,
+      "note": "synthetic overflow trigger crossing the pinned-source usable threshold (context 245760 minus reserved 20000 = 225760); emitted only by the loopback fake, not by any provider"
+    }
+  },
+  "compaction_summary_request": {
+    "request_index": 1,
+    "top_level_fields": [
+      "include",
+      "input",
+      "max_output_tokens",
+      "model",
+      "reasoning",
+      "store",
+      "stream"
+    ],
+    "top_level_field_count": 7,
+    "tools_form": "absent",
+    "system_form": "absent",
+    "tool_choice_present": false,
+    "stream": true,
+    "store": false,
+    "include_present": true,
+    "reasoning_present": true,
+    "max_output_tokens": 32000,
+    "input_form": "list",
+    "input_item_count": 2,
+    "input_item_types": [
+      null,
+      null
+    ],
+    "input_item_roles": [
+      "developer",
+      "user"
+    ],
+    "input_item_note": "user item carries the pinned-source buildPrompt marker (packages/core/src/session/compaction.ts:161); marker_present true, content not retained",
+    "observed_deviations_from_source_prediction": {
+      "tools": "pinned source suggested an empty tools list; the actual request OMITS the tools key entirely",
+      "max_output_tokens": "pinned source SUMMARY_OUTPUT_TOKENS constant is 4096 (packages/core/src/session/compaction.ts:15); the actual wire value is 32000, the same configured output cap as the main requests"
+    }
+  },
+  "continuation_request": {
+    "request_index": 2,
+    "top_level_field_count": 9,
+    "tools_count": 9,
+    "tool_names_baseline_9": [
+      "bash",
+      "edit",
+      "glob",
+      "grep",
+      "read",
+      "skill",
+      "task",
+      "todowrite",
+      "write"
+    ],
+    "tool_declaration_form": "flat",
+    "tool_declaration_strict_present_count": 9,
+    "tool_choice": "auto",
+    "stream": true,
+    "store": false,
+    "input_item_count": 4,
+    "input_item_types": [
+      null,
+      null,
+      null,
+      null
+    ],
+    "input_item_roles": [
+      "developer",
+      "user",
+      "assistant",
+      "user"
+    ],
+    "item_positions": [
+      {
+        "index": 0,
+        "role": "developer",
+        "note": "same agent instruction item as turn 1; content not retained"
+      },
+      {
+        "index": 1,
+        "role": "user",
+        "note": "compaction part user text from pinned source packages/opencode/src/session/message-v2.ts:241 ('What did we do so far?', 22 bytes); text is source-derived client behavior, not user content"
+      },
+      {
+        "index": 2,
+        "role": "assistant",
+        "content_form": "array",
+        "content_part_types": [
+          "output_text"
+        ],
+        "note": "BYTE-EXACT replay of the fake-issued safe synthetic summary template; no other content"
+      },
+      {
+        "index": 3,
+        "role": "user",
+        "note": "pinned-source continuation instruction string (packages/opencode/src/session/compaction.ts:531), matched by exact reverse-scan; content not retained"
+      }
+    ],
+    "compaction_user_item_index": 1,
+    "summary_item_index_byte_exact": 2,
+    "continue_user_item_index": 3,
+    "order_compaction_user_before_summary": true,
+    "order_summary_before_continue": true,
+    "fc_outputs_total": 0,
+    "first_user_text_equals_original_prompt": false,
+    "observed_deviation_from_source_prediction": "the continuation input does NOT append to the pre-compaction history: the original prompt user item and the aborted turn-1 assistant output were fully replaced by the 2-user compaction sequence (developer, compaction-user, summary-assistant, continue-user); the gate is therefore presence-and-order based, not position-based"
+  },
+  "source_refs": [
+    "packages/core/src/session/compaction.ts:15 (SUMMARY_OUTPUT_TOKENS 4096; superseded in practice by observed 32000)",
+    "packages/core/src/session/compaction.ts:161 (buildPrompt marker in the summary request)",
+    "packages/opencode/src/session/compaction.ts:531 (continuation instruction string)",
+    "packages/opencode/src/session/message-v2.ts:241 (compaction part user text)",
+    "packages/opencode/src/session/message-v2.ts:536-590 (filterCompacted history rewrite)",
+    "usable overflow threshold = context 245760 - reserved 20000 = 225760 (pinned source budget math)"
+  ],
+  "verification_gate": {
+    "compaction_request_seen": true,
+    "summary_byte_exact_replay": true,
+    "final_text_exact": true,
+    "final_text_source": "static_sentinel",
+    "sentinel_length": 24,
+    "result": "verified"
+  },
+  "session": {
+    "request_count": 3,
+    "stable_across_requests": true,
+    "session_value_sha256_8": "6145d992",
+    "session_header_names_present": [
+      "x-opencode-session-id",
+      "x-session-affinity",
+      "x-session-id"
+    ],
+    "headers_equal_within_each_request": true
+  },
+  "client_behavior": {
+    "exit_code": 0,
+    "elapsed_s": 5.528
+  },
+  "privacy": {
+    "raw_content_retained": false,
+    "provider_call_performed": false
+  }
+}

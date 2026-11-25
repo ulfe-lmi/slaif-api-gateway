@@ -1,0 +1,187 @@
+{
+  "variant": "encrypted_reasoning_replay_with_tool_call",
+  "config_variant": "denied-web-baseline",
+  "endpoint": "POST /v1/responses",
+  "request_turn_1": {
+    "input_item_count": 2,
+    "input_items": [
+      {
+        "index": 0,
+        "type_key_state": "absent",
+        "role": "developer",
+        "content_form": "string",
+        "id_state": "absent",
+        "status_state": "absent",
+        "note": "agent instruction prompt; content not retained"
+      },
+      {
+        "index": 1,
+        "type_key_state": "absent",
+        "role": "user",
+        "content_form": "array",
+        "content_part_types": [
+          "input_text"
+        ],
+        "id_state": "absent",
+        "status_state": "absent",
+        "note": "typeless message items (no 'type' key) carry role + content on the Responses wire"
+      }
+    ],
+    "tools_count": 9,
+    "contract_facts": {
+      "max_output_tokens": {
+        "state": "present",
+        "type": "integer",
+        "observed": 32000,
+        "note": "configured limit.output 32768 emits 32000 (same runtime cap as the Chat capture)"
+      },
+      "store": {
+        "state": "present",
+        "type": "boolean",
+        "observed": false
+      },
+      "stream": {
+        "state": "present",
+        "type": "boolean",
+        "observed": true
+      },
+      "tool_choice": {
+        "state": "present",
+        "type": "string",
+        "observed": "auto"
+      },
+      "include": {
+        "state": "present",
+        "type": "array",
+        "observed": [
+          "reasoning.encrypted_content"
+        ]
+      },
+      "reasoning": {
+        "state": "present",
+        "type": "object",
+        "observed": {
+          "effort": "xhigh"
+        },
+        "note": "PROVEN DIFFERENCE: nested reasoning object with effort xhigh, not a top-level reasoning_effort string as in the Chat wire"
+      },
+      "model": {
+        "state": "present",
+        "type": "string",
+        "observed": "agent-responses-fake-model",
+        "note": "synthetic task-configured model id bound to the loopback fake provider"
+      }
+    }
+  },
+  "response_turn_1": {
+    "content_type_class": "sse",
+    "event_sequence_observed": [
+      "response.created",
+      "response.output_item.added",
+      "response.reasoning_summary_part.added",
+      "response.reasoning_summary_text.delta",
+      "response.reasoning_summary_part.done",
+      "response.output_item.done",
+      "response.output_item.added",
+      "response.output_item.done",
+      "response.completed"
+    ],
+    "reasoning_item_issued_fields": {
+      "type": "reasoning",
+      "keys_sorted": [
+        "encrypted_content",
+        "summary",
+        "type"
+      ],
+      "id_state": "absent",
+      "status_state": "absent",
+      "encrypted_content": "synthetic 64-char base64 string issued by the loopback fake",
+      "encrypted_byte_length": 64,
+      "encrypted_sha256_8": "d1c28cd0"
+    },
+    "function_call_item_issued_fields": {
+      "type": "function_call",
+      "keys_sorted": [
+        "arguments",
+        "call_id",
+        "name",
+        "type"
+      ],
+      "name": "read",
+      "arguments_form": "json string",
+      "id_state": "absent",
+      "status_state": "absent",
+      "done_item_status": "completed"
+    },
+    "note": "reasoning item emitted with summary deltas and encrypted_content (include=reasoning.encrypted_content), followed by a function_call output item; both consumed by the client without error"
+  },
+  "request_turn_2_continuation": {
+    "input_item_count": 5,
+    "input_item_types": [
+      null,
+      null,
+      "reasoning",
+      "function_call",
+      "function_call_output"
+    ],
+    "appended_items": [
+      {
+        "index": 2,
+        "type": "reasoning",
+        "keys_sorted": [
+          "encrypted_content",
+          "summary",
+          "type"
+        ],
+        "id_state": "absent",
+        "status_state": "absent",
+        "encrypted_content_replayed": "verbatim",
+        "encrypted_byte_length": 64,
+        "encrypted_sha256_8": "d1c28cd0",
+        "full_byte_equals_issued": true,
+        "note": "ID-less verbatim replay: full-byte equality of the replayed encrypted_content with the issued value is verified, and the exact issued call_id/tool_name call/output linkage holds (presence or a short hash alone never passes; SDK tolerance is not correct producer proof); the replayed item carries no id/status"
+      },
+      {
+        "index": 3,
+        "type": "function_call",
+        "keys_sorted": [
+          "arguments",
+          "call_id",
+          "name",
+          "type"
+        ],
+        "name": "read",
+        "call_id_state": "present",
+        "id_state": "absent",
+        "status_state": "absent"
+      },
+      {
+        "index": 4,
+        "type": "function_call_output",
+        "keys_sorted": [
+          "call_id",
+          "output",
+          "type"
+        ],
+        "output_form": "string",
+        "call_id_state": "present",
+        "id_state": "absent",
+        "status_state": "absent"
+      }
+    ],
+    "issued_call_id_correlated": true
+  },
+  "session": {
+    "stable_across_two_requests": true,
+    "session_value_sha256_8": "080846e0"
+  },
+  "client_behavior": {
+    "exit_code": 0,
+    "elapsed_s": 5.581,
+    "final_text_exact": true
+  },
+  "privacy": {
+    "raw_content_retained": false,
+    "provider_call_performed": false
+  }
+}

@@ -932,3 +932,83 @@ def test_replay_lifetime_configuration_rejects_out_of_range(ttl_seconds):
 
     with pytest.raises(ValidationError):
         Settings(APP_ENV="development", CODEX_REPLAY_REFERENCE_TTL_SECONDS=ttl_seconds)
+
+
+@pytest.mark.asyncio
+async def test_removed_tool_identity_proven_by_unchanged_call_hmac() -> None:
+    repository = FakeRepository()
+    service = CodexReplayService(repository=repository, settings=_settings())
+    key_id = uuid.uuid4()
+    route_id = uuid.uuid4()
+    now = datetime(2026, 8, 18, 10, 0, tzinfo=UTC)
+    stored = Candidate(
+        item_kind="function_call",
+        item_id="fc_removed_1",
+        call_id="call_removed",
+        tool_namespace="functions",
+        tool_name="removed_tool",
+    )
+    await service.persist_validated_references(
+        candidates=(stored,),
+        gateway_key_id=key_id,
+        usage_ledger_id=uuid.uuid4(),
+        source_request_id="req_removed",
+        provider="local-coding",
+        route_id=route_id,
+        upstream_model="qwen-test",
+        now=now,
+    )
+
+    authorization = await service.verify_owned_replay(
+        candidates=(
+            Candidate(
+                item_kind="function_call",
+                item_id=None,
+                call_id="call_removed",
+                tool_namespace="functions",
+                tool_name="removed_tool",
+            ),
+        ),
+        gateway_key_id=key_id,
+        now=now + timedelta(minutes=1),
+        allow_idless_tool_call_replay=True,
+    )
+    assert len(authorization.references) == 1
+    service.verify_route_compatibility(
+        authorization,
+        provider="local-coding",
+        route_id=route_id,
+        upstream_model="qwen-test",
+    )
+
+    with pytest.raises(CodexReplayReferenceError):  # unowned call id
+        await service.verify_owned_replay(
+            candidates=(
+                Candidate(
+                    item_kind="function_call",
+                    item_id=None,
+                    call_id="call_unowned",
+                    tool_namespace="functions",
+                    tool_name="removed_tool",
+                ),
+            ),
+            gateway_key_id=key_id,
+            now=now + timedelta(minutes=1),
+            allow_idless_tool_call_replay=True,
+        )
+
+    with pytest.raises(CodexReplayReferenceError):  # changed name vs owned row
+        await service.verify_owned_replay(
+            candidates=(
+                Candidate(
+                    item_kind="function_call",
+                    item_id=None,
+                    call_id="call_removed",
+                    tool_namespace="functions",
+                    tool_name="changed_name",
+                ),
+            ),
+            gateway_key_id=key_id,
+            now=now + timedelta(minutes=1),
+            allow_idless_tool_call_replay=True,
+        )

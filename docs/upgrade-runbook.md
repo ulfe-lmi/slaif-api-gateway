@@ -480,12 +480,94 @@ cannot resolve until the matching previous DATA is deployed again.
    reviewed and qualified; the gateway makes no automatic
    compatibility promise.
 
-**Deliberate disable** is distinct from rollback: clearing the pin
+**Pin clearing is not key disablement**: clearing the pin
 (`"chat_client_module": null` in a `schema_version` 1 policy file)
-returns the key to `openai-default` Chat validation. It is not a
-rollback, and a client tuned to a profile's widened envelope (for
-example Hermes `xhigh` reasoning effort) may fail the default
-validator until the pin is restored.
+returns the key to `openai-default` Chat validation. It does NOT
+suspend or revoke the key, and it is not a rollback; a client tuned
+to a profile's widened envelope (for example Hermes `xhigh`
+reasoning effort) may fail default validation until the pin is
+restored. To actually disable a key, suspend it (`keys suspend
+<key-uuid> --reason "..."`) or revoke it (`keys revoke <key-uuid>
+--reason "..."`).
+
+## OpenCode 1.19.3 Responses client profile upgrade and rollback (228)
+
+The pinned OpenCode Responses profile
+(`opencode-1.19.3-responses-v1`) follows the same packaged-DATA /
+no-migration-command model as the 227-a Chat profiles: each process
+loads exactly ONE identity per module id from its packaged DATA, and a
+key pin resolves only when its `fixture_sha256` matches the deployed
+revision; any pin/deployment digest mismatch fails that key's requests
+closed before admission. There is NO database migration and NO
+automatic key migration: an upgrade changes the deployed revision and
+re-pins keys only.
+
+Exact identity — the `responses_policy.client_module` pin object
+(exact keys `id`, `version`, `fixture_sha256`; `version` is the
+string `"1"`):
+
+| Module id | Version | Fixture SHA-256 |
+| --- | --- | --- |
+| `opencode-1.19.3-responses-v1` | `"1"` | `592c5d1baa7aa3a805320411f3f961521ba72b30cc34cafe01cb755ddf69f0ff` |
+
+**Upgrade (new code revision bakes the module DATA):**
+
+1. Deploy the new image to API, worker, and scheduler (one revision;
+   never mixed). This module requires an initial code upgrade — the
+   profile DATA is baked into the image.
+2. Pin each affected key to the exact identity above, with the four
+   required capabilities, through a `schema_version` 1 policy file
+   (`keys policy update --policy-file` with `--reason`). The
+   `responses_policy` field is a COMPLETE replacement block (no
+   partial member merge): first run `keys policy export <key-uuid>`
+   and, if the key already has a `responses_policy` block, copy that
+   whole block into the file and edit it, preserving every member
+   you want to keep. Omitting `responses_policy` from the file
+   preserves the stored block; `null` clears it (no Codex
+   authority). Minimal schema-version-1 block for this module:
+
+   ```json
+   {
+     "schema_version": 1,
+     "responses_policy": {
+       "version": 1,
+       "allowed_capabilities": [
+         "codex_request_envelope",
+         "codex_client_tools",
+         "codex_streaming_tool_events",
+         "codex_encrypted_reasoning_replay"
+       ],
+       "allowed_local_tool_types": ["function", "custom"],
+       "client_module": {
+         "id": "opencode-1.19.3-responses-v1",
+         "version": "1",
+         "fixture_sha256": "592c5d1baa7aa3a805320411f3f961521ba72b30cc34cafe01cb755ddf69f0ff"
+       }
+     }
+   }
+   ```
+3. Set `RESPONSES_MAX_FUNCTION_TOOL_DESCRIPTION_BYTES=8192` in `.env`
+   (shared default `4096` unchanged), then recreate/restart.
+4. Verify with `keys policy export <key-id>`.
+
+**Rollback (restore the previous revision):**
+
+Rollback is a full revision restore, not just a re-pin: restore the
+PREVIOUS image (or the previous reviewed profile DATA at the packaged
+paths) to API, worker, and scheduler, recreate/restart, and only then
+re-pin each key to the matching previous identity with the matching
+CLI. Clearing the pin is neither a compatibility rollback nor a key
+disablement: it reverts the key to default validation (a client tuned
+to the profile envelope may fail default validation until the pin is
+restored). To actually disable a key, use `keys suspend <key-uuid>
+--reason "..."` or `keys revoke <key-uuid> --reason "..."`. Key
+material and usage are preserved in all paths; the previous revision
+must itself be reviewed and qualified — the gateway makes no
+automatic compatibility promise. A code-only fix that keeps the
+module `id`/`version`/`fixture_sha256` unchanged needs NO re-pin: the
+stored pin keeps resolving against the same DATA identity. Re-pin
+only on initial enablement or a DATA identity change (a new
+`{id, version, fixture_sha256}`).
 
 ## Qwen executable compatibility update (packaged profile 8)
 

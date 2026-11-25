@@ -99,6 +99,11 @@ class ResponsesClientPolicySpec:
     function_call_item_id_optional: bool = False
     custom_tool_call_item_id_optional: bool = False
     allow_idless_tool_call_replay: bool = False
+    # Selected native profile: flat historical tool identity (namespace-free
+    # function calls) may be proven by the existing same-key CALL-ID HMAC even
+    # when the tool is no longer declared in the current request. It never
+    # joins the active tool authority. Legacy presets stay False.
+    historical_flat_tool_identity: bool = False
     reasoning_visible_id_optional: bool = False
     reasoning_visible_content_fields: frozenset[str] = frozenset()
     reasoning_visible_content_types: frozenset[str] = frozenset()
@@ -111,7 +116,39 @@ class ResponsesClientPolicySpec:
     custom_client_tools: frozenset[tuple[str, str, str]] = frozenset({("functions", "exec", "custom")})
     allow_sparse_visible_reasoning: bool = False
     allow_empty_visible_reasoning: bool = False
+    # Provider-safe upstream projection (create request only, 228-c LAN3):
+    # the selected client's exact empty id-less reasoning replay
+    # placeholder may be omitted from the forwarded create body copy AND
+    # from that create request's pre-rounding input estimate; the
+    # input-token-count and compact builders keep the full history bytes.
+    # This is separate from ACCEPTANCE of empty visible reasoning
+    # (allow_empty_visible_reasoning), which frozen Codex presets may set
+    # via DATA; frozen presets keep this False.
+    omit_empty_visible_reasoning: bool = False
     allow_sparse_function_events: bool = False
+    # Selected native profiles whose pinned SDK wire requires a valid
+    # ``output_index`` on every ``response.output_item.added``/``done``
+    # event. Optional-index acceptance is not conformance proof for those
+    # profiles: the producer must supply the index or fail safely. Legacy
+    # presets stay False and keep the existing optional behavior.
+    require_stream_output_indices: bool = False
+    # Selected native profile (OpenCode 1.19.3): the captured visible
+    # reasoning lifecycle closes each summary part with a
+    # ``response.reasoning_summary_part.done`` event.  Legacy presets stay
+    # False and keep the baseline denial of this Codex dialect closure
+    # event on every stream profile they serve.
+    allow_reasoning_summary_part_done: bool = False
+    # Selected native profile (OpenCode 1.19.3): the qualified native
+    # profile validates the standard function-argument closure
+    # (``response.function_call_arguments.done``) when emitted by a
+    # provider.  This client fact routes that closure to the full
+    # arguments/name/lifecycle done validator on every native pair;
+    # position semantics come from ``require_stream_output_indices`` and
+    # missing-position repair stays the separate compat-pair gate.  The
+    # done support is source-traced lifecycle consistency, not an
+    # observed capture; legacy presets stay False and keep the baseline
+    # sparse-flag-only routing.
+    allow_function_arguments_done: bool = False
     allow_tool_output_images: bool = False
     # Explicit versioned declaration-history mode selected by the profile
     # data (see modules/codex_tool_history.py). ``None`` keeps the legacy

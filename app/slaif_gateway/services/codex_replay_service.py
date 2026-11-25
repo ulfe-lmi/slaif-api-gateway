@@ -35,6 +35,7 @@ class CodexReplayCandidate(Protocol):
     call_id: str | None
     tool_namespace: str | None
     tool_name: str | None
+    encrypted_content: str | None
 
 
 class _CodexReplayRepository(Protocol):
@@ -121,12 +122,14 @@ class CodexReplayService:
         gateway_key_id: uuid.UUID,
         now: datetime | None = None,
         allow_idless_tool_call_replay: bool = False,
+        allow_idless_encrypted_reasoning: bool = False,
     ) -> CodexReplayAuthorization:
         """Prove same-key active ownership before route or quota side effects."""
 
         checked = _validated_candidates(
             candidates,
             allow_idless_tool_call_replay=allow_idless_tool_call_replay,
+            allow_idless_encrypted_reasoning=allow_idless_encrypted_reasoning,
         )
         if not checked:
             return CodexReplayAuthorization(references=())
@@ -156,7 +159,7 @@ class CodexReplayService:
         call_digest_candidates: list[tuple[str, str]] = []
         for candidate in checked:
             for secret in secrets.values():
-                if candidate.item_id is not None:
+                if candidate.item_id is not None or candidate.item_kind == "reasoning":
                     item_digest_candidates.append(
                         (candidate.item_kind, _item_digest(candidate, secret=secret))
                     )
@@ -181,7 +184,10 @@ class CodexReplayService:
         authorized: list[AuthorizedCodexReplayReference] = []
         for candidate in checked:
             matches: list[tuple[CodexReplayReference, str]] = []
-            if candidate.item_id is None:
+            if (
+                candidate.item_id is None
+                and candidate.item_kind in _PORTABLE_TOOL_HISTORY_KINDS
+            ):
                 for version, secret in secrets.items():
                     expected_digest = _call_digest(candidate, secret=secret)
                     assert expected_digest is not None
@@ -276,10 +282,14 @@ class CodexReplayService:
         route_id: uuid.UUID,
         upstream_model: str,
         now: datetime | None = None,
+        allow_idless_encrypted_reasoning: bool = False,
     ) -> int:
         """HMAC and upsert validated completion candidates after accounting."""
 
-        checked = _validated_candidates(candidates)
+        checked = _validated_candidates(
+            candidates,
+            allow_idless_encrypted_reasoning=allow_idless_encrypted_reasoning,
+        )
         if not checked:
             return 0
         if not source_request_id.strip() or not provider.strip() or not upstream_model.strip():
@@ -312,9 +322,12 @@ class CodexReplayService:
         expires_at = created_at + timedelta(
             seconds=self._settings.CODEX_REPLAY_REFERENCE_TTL_SECONDS
         )
-        records = [
-            CodexReplayReferenceInsert(
-                id=uuid.uuid4(),
+        candidate_records: list[
+            tuple[CodexReplayCandidate, list[CodexReplayReferenceInsert]]
+        ] = []
+        records: list[CodexReplayReferenceInsert] = []
+        for candidate in checked:
+            shared = dict(
                 gateway_key_id=gateway_key_id,
                 usage_ledger_id=usage_ledger_id,
                 source_request_id=source_request_id,
@@ -322,7 +335,6 @@ class CodexReplayService:
                 route_id=route_id,
                 upstream_model=upstream_model,
                 item_kind=candidate.item_kind,
-                item_id_hmac=_item_digest(candidate, secret=secret),
                 call_id_hmac=_call_digest(candidate, secret=secret),
                 hmac_key_version=version,
                 tool_namespace=candidate.tool_namespace,
@@ -330,8 +342,32 @@ class CodexReplayService:
                 created_at=created_at,
                 expires_at=expires_at,
             )
-            for candidate in checked
-        ]
+            inserts = [
+                CodexReplayReferenceInsert(
+                    id=uuid.uuid4(),
+                    item_id_hmac=_item_digest(candidate, secret=secret),
+                    **shared,
+                )
+            ]
+            # The profile-qualified v3 ciphertext alias is issued only for
+            # the selected native profile; legacy encrypted-replay profiles
+            # keep their single ID reference.
+            if (
+                allow_idless_encrypted_reasoning
+                and candidate.item_kind == "reasoning"
+                and candidate.item_id is not None
+                and (v3_digest := _reasoning_v3_digest(candidate, secret=secret))
+                is not None
+            ):
+                inserts.append(
+                    CodexReplayReferenceInsert(
+                        id=uuid.uuid4(),
+                        item_id_hmac=v3_digest,
+                        **shared,
+                    )
+                )
+            candidate_records.append((candidate, inserts))
+            records.extend(inserts)
         try:
             await self._repository.upsert_many(records)
             rows = await self._repository.list_active_by_item_digests(
@@ -342,16 +378,17 @@ class CodexReplayService:
         except Exception:
             raise _persistence_error() from None
         rows_by_digest = {(row.item_kind, row.item_id_hmac): row for row in rows}
-        for candidate, record in zip(checked, records, strict=True):
-            row = rows_by_digest.get((record.item_kind, record.item_id_hmac))
-            if row is None or row.hmac_key_version != version:
-                raise _persistence_error()
-            _validate_persisted_row(
-                row,
-                candidate,
-                record=record,
-                secret=secret,
-            )
+        for candidate, inserts in candidate_records:
+            for record in inserts:
+                row = rows_by_digest.get((record.item_kind, record.item_id_hmac))
+                if row is None or row.hmac_key_version != version:
+                    raise _persistence_error()
+                _validate_persisted_row(
+                    row,
+                    candidate,
+                    record=record,
+                    secret=secret,
+                )
         return len(records)
 
 
@@ -359,15 +396,20 @@ def _validated_candidates(
     candidates: Sequence[CodexReplayCandidate],
     *,
     allow_idless_tool_call_replay: bool = False,
+    allow_idless_encrypted_reasoning: bool = False,
 ) -> tuple[CodexReplayCandidate, ...]:
     checked = tuple(candidates)
     seen_items: set[tuple[str, str]] = set()
     seen_calls: set[tuple[str, str]] = set()
+    seen_reasoning_ciphers: set[str] = set()
     for candidate in checked:
         if candidate.item_kind not in CODEX_REPLAY_ITEM_KINDS:
             raise _ownership_error()
         if candidate.item_id is None:
-            if (
+            if candidate.item_kind == "reasoning":
+                if not allow_idless_encrypted_reasoning:
+                    raise _ownership_error()
+            elif (
                 not allow_idless_tool_call_replay
                 or candidate.item_kind not in {"function_call", "custom_tool_call"}
             ):
@@ -387,14 +429,19 @@ def _validated_candidates(
                 raise _ownership_error()
             encrypted_content = getattr(candidate, "encrypted_content", None)
             if candidate.item_kind == "compaction":
-                if (
-                    not isinstance(encrypted_content, str)
-                    or not encrypted_content
-                    or len(encrypted_content.encode("utf-8")) > 1_048_576
-                ):
+                if not _bounded_reasoning_cipher(encrypted_content):
                     raise _ownership_error()
+            elif candidate.item_id is None:
+                if not _bounded_reasoning_cipher(encrypted_content):
+                    raise _ownership_error()
+                if encrypted_content in seen_reasoning_ciphers:
+                    raise _ownership_error()
+                seen_reasoning_ciphers.add(encrypted_content)
             elif encrypted_content is not None:
-                raise _ownership_error()
+                if not _bounded_reasoning_cipher(encrypted_content):
+                    raise _ownership_error()
+                # Bound through the separate v3 alias digest, never the v1 ID.
+                seen_reasoning_ciphers.add(encrypted_content)
             continue
         if getattr(candidate, "encrypted_content", None) is not None:
             raise _ownership_error()
@@ -413,8 +460,36 @@ def _validated_candidates(
     return checked
 
 
+def _bounded_reasoning_cipher(value: object) -> bool:
+    return (
+        isinstance(value, str)
+        and bool(value)
+        and len(value.encode("utf-8")) <= 1_048_576
+    )
+
+
 def _bounded_safe_tool_name(value: str) -> bool:
     return bool(value.strip()) and len(value) <= 256
+
+
+def _reasoning_v3_cipher(candidate: CodexReplayCandidate) -> str | None:
+    if candidate.item_kind != "reasoning":
+        return None
+    encrypted_content = getattr(candidate, "encrypted_content", None)
+    if not isinstance(encrypted_content, str) or not encrypted_content:
+        return None
+    return encrypted_content
+
+
+def _reasoning_v3_digest(candidate: CodexReplayCandidate, *, secret: str) -> str | None:
+    cipher = _reasoning_v3_cipher(candidate)
+    if cipher is None:
+        return None
+    token = (
+        "slaif-codex-replay:v3:reasoning:"
+        f"{len(cipher.encode('utf-8'))}:{cipher}"
+    )
+    return hmac_sha256_token(token=token, secret=secret)
 
 
 def _item_digest(candidate: CodexReplayCandidate, *, secret: str) -> str:
@@ -427,6 +502,10 @@ def _item_digest(candidate: CodexReplayCandidate, *, secret: str) -> str:
             f"{len(encrypted_content.encode('utf-8'))}:{encrypted_content}"
         )
         return hmac_sha256_token(token=token, secret=secret)
+    if candidate.item_kind == "reasoning" and candidate.item_id is None:
+        digest = _reasoning_v3_digest(candidate, secret=secret)
+        assert digest is not None
+        return digest
     return hmac_sha256_token(
         token=f"slaif-codex-replay:v1:item:{candidate.item_kind}:{candidate.item_id}",
         secret=secret,

@@ -13,11 +13,29 @@ vocabulary, reasoning-effort envelope, and bounds. Quota, accounting,
 Redis, and the provider-forwarding foundations are **unchanged** relative
 to the base.
 
-This is a PREPROTECTED candidate, not a final live-qualification claim.
-The protected live gate is **``not_run``** (see the adjacent
-obligation-manifest JSON). No real private client body, credential, or
-upstream inference was used; captured cases are task-local native
-loopback against a task-owned fake and are reused, not rerun.
+## Current delivered result
+
+Both bounded Chat profiles completed native local-read/result/final-answer
+qualification in227-c. Objective227-d preserved the failed attempts and
+verified cleanup. PR395 merged on2026-11-23 at
+`5f0f4c34ff13f1d76ae050708a37f387e6988451`; the commit's published checks
+were independently rechecked as successful during228 delivery review.
+
+Hermes0.22.5 uses module `hermes-0.22.5-chat-v1` version string `2`;
+OpenCode1.19.3 uses `opencode-1.19.3-chat-v1` version string `1`.
+The authoritative seven provider requests were HTTP200 FINALIZED:
+Hermes11475 tokens/EUR0.011475 and OpenCode29546/EUR0.029546,
+aggregate41021/EUR0.041021 at configured test pricing, not a provider invoice.
+Both task keys were revoked with usage preserved and owned services stopped.
+
+This accepted evidence is reused in228; it was not rerun. It qualifies the
+recorded Chat baselines, not Hermes Responses, arbitrary plugins/images,
+newer versions or production certification. OpenCode Responses has its
+separate [228 verification record](2026-11-23-opencode-responses-preprotected.md).
+The immutable [227-d report](../../oap/reports/227-d-chat-delivery-closure.md)
+and the later live/cleanup sections below preserve exact provenance and
+limitations. Historical preprotected/proposed statuses below refer to their
+original checkpoints and do not supersede this delivered result.
 
 ## Changed versus base ``0940d8a2``
 
