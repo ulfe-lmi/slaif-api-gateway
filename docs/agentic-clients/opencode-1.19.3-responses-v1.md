@@ -1,15 +1,19 @@
-# OpenCode 1.19.3 native Responses capture — `opencode-1.19.3-responses-v1` (preprotected candidate)
+# OpenCode 1.19.3 native Responses capture — `opencode-1.19.3-responses-v1` (protected-qualified; no production claim)
 
 Objective 228-a, secondary-owned OpenCode Responses binding. This dossier
 records the native-client loopback capture from that preprotected candidate
 stage. That loopback evidence is NOT a live qualification, Gateway/
-PostgreSQL settlement, or production claim. The protected gate is `not_run`,
-the packaged profile DATA was subsequently packaged by primary
-(section 2); the protected gate remains `not_run`, and the current
-objective status is recorded in the consolidated verification record
-(228-b: `NEEDS_CONTINUATION`; 228-c completed the mock half — six
-pinned-binary loopback cases through the task-owned Gateway and real
-PostgreSQL — while the protected LAN half and gate remain `not_run`).
+PostgreSQL settlement, or production claim. The packaged profile DATA was
+subsequently packaged by primary (section 2). The protected gate is now
+RUN — LAN4 PASSED on 2026-11-25 (final candidate `28d3fbd9`, app tree
+`aacd71af…`; one root-dispatched actual client tool loop, 32.197 s / exit 0,
+final 32 B byte-exact, one completed read with matching call-ID and result
+marker, three HTTP 200 FINALIZED requests / 14,872 tokens at the task
+pricing, all auth canaries clean), and the current objective status is
+recorded in the consolidated verification record (228-c completed the mock
+half — six pinned-binary loopback cases through the task-owned Gateway and
+real PostgreSQL — and the protected LAN half is COMPLETE at LAN4; earlier
+LAN attempts are labeled historical there). No production claim follows.
 
 ## 1. Pinned client identity
 
@@ -59,6 +63,22 @@ PostgreSQL — while the protected LAN half and gate remain `not_run`).
   until a reviewed DATA revision with a new digest. Tool names are
   client-local function declarations and grant no hosted, routing, or
   execution authority.
+- Gateway-side deployment requirement established in 228-c: the task
+  Gateway must run with
+  `RESPONSES_MAX_FUNCTION_TOOL_DESCRIPTION_BYTES=8192` set explicitly and
+  restarted — the shared default (4096) is below the pinned native tool
+  declarations (largest serialized declaration 5210 B). Code-only setting;
+  no database migration and no automatic key migration.
+- Gateway-side create-only projection established in 228-c: the pinned
+  SDK replays an id-less empty visible-reasoning placeholder verbatim
+  in turn-N input, and the qualified openai-compatible backend rejects
+  that exact canonical item. For this profile's create requests only,
+  the gateway omits ONLY `{"type":"reasoning","summary":[],
+  "encrypted_content":""}` from the forwarded body copy (and deducts
+  its canonical bytes from the create input estimate before rounding);
+  input-token-count and compact keep the full history bytes and their
+  existing denials unchanged, and full-history validation, resource
+  accounting, ownership, and HMAC/replay authority are unchanged.
 
 ## 3. Capture and verification method
 
@@ -71,7 +91,10 @@ PostgreSQL — while the protected LAN half and gate remain `not_run`).
   No provider, no user profile, no real key, no network beyond loopback.
 - Structural capture facts (sanitized):
   `tests/fixtures/opencode/1.19.3/responses/` (structural digest
-  `00127fa1b5ea43ac0a936ddf5d179d084eaf70512dc9d59a6e6f2a11253cbd53`
+  `1f128c25de8e8014e61855d6b2716a867e5f5364fbc6c01022a573d9e77f12e9`,
+  recomputed after the fixture strict-value annotation correction; the
+  pre-correction digest `00127fa1b5ea43ac0a936ddf5d179d084eaf70512dc9d59a6e6f2a11253cbd53`
+  is history-only.
   over the eight `structural_*.json` files); public provenance in
   `provenance.json`. Raw content, raw IDs, and credentials are not
   retained; session values appear only as sha256-8.
@@ -243,14 +266,19 @@ PostgreSQL — while the protected LAN half and gate remain `not_run`).
   trigger; it proves neither Gateway/provider compaction support nor any
   `/v1/responses/compact` (or other endpoint) participation, and the
   issued summary is a safe synthetic template (no content retained).
-- **Protected gate**: `not_run`. No live LAN or provider run occurred for
-  the Responses wire in 228-a (preprotected candidate stage only). The
-  consolidated verification record carries the current objective status
-  (228-b: `NEEDS_CONTINUATION`; 228-c: the mock half is complete — six
-  pinned-binary loopback cases passed through the task-owned Gateway,
-  real PostgreSQL, and a separate loopback mock upstream — while the
-  bounded LAN half and this protected gate remain `not_run`, awaiting
-  the root CI/setup review of the frozen candidate).
+- **Protected gate**: RUN — LAN4 PASSED (2026-11-25, final candidate
+  `28d3fbd9`, app tree `aacd71af…`; one root-dispatched actual client tool
+  loop, 32.197 s / exit 0, final 32 B byte-exact, one completed read with
+  matching call-ID and result marker, three HTTP 200 FINALIZED requests /
+  14,872 tokens at the task pricing, all auth canaries clean). No live LAN
+  or provider run occurred for the Responses wire in 228-a itself
+  (preprotected candidate stage only); the live qualification was executed
+  later under 228-c. The consolidated verification record carries the
+  current objective status (228-c: the mock half is complete — six
+  pinned-binary loopback cases passed through the task-owned Gateway, real
+  PostgreSQL, and a separate loopback mock upstream — and the bounded LAN
+  half is COMPLETE at LAN4; historical LAN failures are labeled there). No
+  production claim follows.
 
 ## 5. Known limits and follow-ups
 

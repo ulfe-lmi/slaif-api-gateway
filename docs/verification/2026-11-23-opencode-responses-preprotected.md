@@ -1,15 +1,93 @@
-# 228-a/228-b OpenCode 1.19.3 Responses Module — Preprotected Verification Record
+# OpenCode 1.19.3 Responses — qualification and delivery record
 
-Record finalized 2026-11-24, refreshed 2026-11-25 (228-c final
-candidate `b6e85b79` evidence, LAN1 failure + wire repair, run 2
-terminal FAIL at a later stream event; the 228-a/228-b content is
-preserved as labeled history).
-This filename is dated 2026-11-23 to match the crosslinks already
-committed in `docs/responses-compatibility.md`.
-All evidence was produced at the tested implementation heads named
-below (labeled per head; the later code commits are re-covered by the
-467-test focused regression, the 20-test PG run, and the 10-pass
-governance run at the final 228-b code head).
+Updated 2026-11-25. The filename remains unchanged for existing links.
+
+## Current result
+
+The bounded native Responses workflow **passed** on code
+`28d3fbd98dbf49fa593f16afb7e0f09c63c00019`, app tree
+`aacd71af485c8ce5aede42e256f5b687a94f4196`. Documentation/report commits
+that follow must preserve that application tree. PR401 delivery is pending;
+this record does not claim merge, main verification, release or production deployment.
+
+| Evidence | Verified result |
+|---|---|
+| Native client | OpenCode 1.19.3; pinned binary `179ca421d61eefeadfa0c50e084a6e79c1623734732f0f4593f81ccfd3ab7ee9` |
+| Native workflow | One completed local `read`, correlated result containing the fresh marker, exact raw 32-byte final answer; exit 0; 32.197 seconds |
+| Runtime | Plain, hook-free task Gateway PID1421855; explicit revision, one worker, capture off; runtime unchanged during successful client execution |
+| Client settings | Pure nine-tool, web-denied baseline; default auto-title; xhigh; configured context245760 and captured output32000; no context-capacity stress claim |
+| Accounting | Three HTTP200 FINALIZED requests: 14530 reported input +342 reported output =14872 tokens; EUR0.014872 at configured test pricing, not a provider invoice |
+| Ownership | Root matched the actual native read call to exactly one same-key/function/name/provider/model HMAC reference issued from finalized usage; raw IDs and digests not published |
+| Privacy | Root recomputed marker equality; zero errors/parse errors; temporary client credential configuration removed; gateway/provider authentication-secret canaries clear across five logs/receipt files |
+| Current-source local checks | 27 projection tests +214 request-policy tests; 21 keyword-selected count tests overlap nine existing policy cases; three payload bypass tests; 256 unique unit cases in that union, plus six isolated real-factory/respx PostgreSQL cases |
+| Reused components | 618 accepted unchanged component cases, distinguished from current-source executions; 880 required nodes collected once for this candidate; see the accompanying JSON for binding and hashes |
+| Candidate CI | Three workflow identities, nine jobs and CodeQL aggregate all green on exact28d; final report-head and actual-main checks remain delivery gates |
+| Cleanup | All eight synthetic keys revoked with usage retained; all50 reservations terminal; owned Gateway/fake/PostgreSQL stopped; known temporary credential copies removed;15499 owned raw client files disposed,13 sanitized receipts and private PG evidence retained |
+
+The selected profile retains its identity:
+`opencode-1.19.3-responses-v1`, version string `1`, DATA digest
+`592c5d1baa7aa3a805320411f3f961521ba72b30cc34cafe01cb755ddf69f0ff`.
+No database schema change or migration of existing key pins is required for
+these runtime corrections. Initial enablement still requires the deliberate
+new profile pin and existing capability grants. See the
+[operator guide](../first-time-operator-guide.md) and
+[upgrade runbook](../upgrade-runbook.md) for configuration and rollback.
+
+The fixes preserve required output indexes by deriving omitted positions
+only from validated stream registrations on the selected compatible pair.
+Strict argument closure is a separate native client fact. Provider-safe
+**create-only** projection omits only the exact identifier-free, data-free
+reasoning placeholder. The same predicate removes its56 serialized bytes
+before estimate rounding; original validation, resource counts and replay
+ownership still use the complete incoming history. Meaningful reasoning,
+nonempty ciphertext, ordinary history, tool identities, arguments and
+results remain unchanged. Count reasoning denial and compact forwarding
+remain unchanged.
+
+Actual live qualification covers the accepted compatible LAN chain and
+baseline read/result/final workflow. The official OpenAI path is HTTP-mocked;
+nonempty encrypted reasoning and near-limit/client-side compaction have
+separate synthetic evidence. Internal upstream hops/backend revision,
+plugins, images, other client versions, production readiness and certification
+are not inferred from this result. Accepted Hermes/OpenCode Chat live evidence
+from objective227 is reused; those implementations were not changed here.
+
+## Failed attempts and supervision corrections
+
+LAN1 failed on an omitted output-item index. A bounded HTTP probe established
+that defect. LAN2 then failed on argument deltas without indexes; one title
+request finalized and five main attempts charged as estimates. A second
+HTTP diagnostic established the missing argument index at sequence33.
+After repair, a12.562-second stream probe passed and finalized7006 reported
+tokens. LAN3 completed the read but produced no final answer: six upstream400
+continuation rejections reported `item['content'] is not an array`.
+Own-session data and the pinned SDK established an empty visible reasoning
+placeholder; no full production request was captured or invented.
+
+LAN3's99.191-second failure and all its accounting remain recorded. Root
+also sent its dispatch before inspecting a failed revision-label guard,
+then attempted a hold after the native process had started. The relabel
+restart overlapped that run, but its first400 preceded the restart. Both
+processes used the same verified code and limits. This is recorded as a
+supervision error, not concealed as a gateway defect. The final LAN4 runtime
+passed a separate guard and remained frozen throughout its successful run.
+
+LAN4 initially refused an already-existing empty run-root before any native
+client or provider request; removing that empty directory corrected setup.
+Exactly one actual native client then ran successfully. Conservative total
+qualification attempts are13, including recorded setup refusals and three
+HTTP diagnostics. Cumulative accounted LAN usage is129642 tokens/EUR0.129642
+(mixed reported/estimated, not an invoice); remaining OpenCode allowance is
+138.476 seconds/881833 tokens/EUR0.881833. No usage was reset and no
+replacement key evaded a limit. Temporary request subcaps6->12->14 were
+explicit audited strategic setup adjustments under the existing100-test
+delegation; no new human answer was received or claimed.
+
+## Historical execution evidence
+
+The sections below preserve earlier dated evidence and checkpoint claims.
+Their `not_run`, pending, or continuation statuses describe those checkpoints;
+the current result above supersedes them. Immutable OAP reports remain unchanged.
 
 ## Status
 
@@ -46,6 +124,17 @@ governance run at the final 228-b code head).
   run 2 executed and TERMINAL FAILED at a later stream event; the
   exact later-rejection structure is to be captured by the prepared
   task-local observer extension before the next scoped fix).
+  The later rejection structure WAS captured by the task-local
+  observer (9-tool synthetic HTTP probe on the pre-`6f041c83` revision:
+  `response.function_call_arguments.delta` missing `output_index`);
+  the bounded argument delta/closure repair +
+  `allow_function_arguments_done` fact landed at `6f041c83`.
+  The root-dispatched LAN3 native run on `6f041c83` then passed all
+  task-Gateway validator gates but was rejected by the UPSTREAM
+  provider (400 `item[content] is not an array`); the bounded
+  create-only empty-placeholder projection fix landed at the current
+  candidate `28d3fbd9`, and the next native run (LAN4) is pending the
+  new candidate CI gate plus the root-owned key/runtime switch.
 - Real provider inference: ATTEMPTED; tool loop FAILED during
   upstream-response validation (LAN1
   native tool loop + one synthetic HTTP diagnostic probe + run 2
@@ -59,6 +148,14 @@ governance run at the final 228-b code head).
   not zero, key 6 used / 49,080 tokens / EUR 0.04908 / 0 reserved /
   0 fenced; the only other LAN traffic is the read-only metadata
   preflight GET documented in the 228-c checkpoint).
+  LAN3 (candidate `6f041c83`, root-dispatched, hook-free runtime)
+  passed all task-Gateway validator gates: turn-1 main settled
+  (6876 in / 88 out) + one title aux settled (612 in / 408 out); the
+  continuation attempts that replay the assistant reasoning history
+  were rejected by the UPSTREAM provider with 400 `invalid_request_error`
+  (sanitized message: `item[content] is not an array`; 6 failed ledger
+  rows); provider usage on the failed streams unknown, not zero; key
+  10 used / 73,749 tokens / EUR 0.073749 / 0 reserved.
 - Governance: resolved at 228-b — focused OAP governance 10 passed at
   the final 228-b code head (the a-era 1 failed / 9 passed is preserved
   as immutable history; see below).
@@ -76,6 +173,18 @@ governance run at the final 228-b code head).
   604 verified unique node IDs (12 unit files of the 582 combined run
   plus the 22-case PG file) with node-set hash and all-pass receipts
   (cross-reference only; no duplicated arrays here).
+  (That binding is historical for `b6e85b79`. Pushed successors on the
+  same draft PR #401: `6f041c83` — argument-closure client fact +
+  strict-index separation, app tree
+  `1240585481d9f2eb73265b925c2b787cbd4eb7aa` — and the current
+  candidate `28d3fbd9` — create-only empty-visible-reasoning
+  projection, app tree
+  `aacd71af485c8ce5aede42e256f5b687a94f4196`. The root-owned manifest
+  gate was re-bound by one `--collect-only`: 622 required nodes
+  (352 direct current-source = 345 unit + 7 PG; 270 explicit
+  unchanged reuse), node-set hash `a878a754…`. The `28d3fbd9` CI
+  gate is root-watched and must be all-green before any further
+  protected traffic.)
 - No production certification, universal compatibility, or security
   certification claim.
 
@@ -1016,11 +1125,17 @@ complete (six cases, see 228-c checkpoint).
    terminal-order guard on both completed and incomplete forms,
    original provider status on the wire, legacy unchanged); the
    root-dispatched run 2 retry TERMINAL FAILED at a later stream
-   event (the prepared task-local observer extension will capture
-   the exact rejection structure before the next scoped fix).
+  event. The prepared task-local observer DID capture the exact later
+  rejection structure (9-tool synthetic HTTP probe on the
+  pre-`6f041c83` revision: `response.function_call_arguments.delta`
+  with top-level `output_index` ABSENT; already-registered item,
+  unknown keys 0); the bounded argument delta/closure repair +
+  `allow_function_arguments_done` fact then landed at `6f041c83`.
 5. Protected live-qualification gate: final qualification `not_run`
    (LAN1 failed; repair at `b6e85b79` with all CI green; run 2
-   TERMINAL FAILED at a later stream event).
+  TERMINAL FAILED at a later stream event; LAN3 failed at the
+  upstream provider; create-only fix at `28d3fbd9`; LAN4 pending the
+  new candidate CI gate).
 6. Final PR-head CI: RESOLVED — all green on candidate `b6e85b79`
    (three workflow identities / 9 jobs: CI `45553132761`, CodeQL
    `45553132702`, Code Quality `45553124958`), verified 2026-11-25
@@ -1036,3 +1151,42 @@ complete (six cases, see 228-c checkpoint).
    machine binding (manifest) plus 9/9 external CI identities. All
    further protected traffic (including diagnostics) requires this
    exact all-green candidate; no exception.
+9. LAN3 (228-c continuation, root-dispatched native LAN tool loop on
+   candidate `6f041c83`, hook-free runtime): passed all task-Gateway
+   validator gates (the missing-index wire repair was effective); the
+   upstream provider then returned 400 `invalid_request_error`
+   (sanitized message exactly `item[content] is not an array`) on the
+   continuation attempts replaying the assistant reasoning history;
+   6 failed ledger rows; PG: turn-1 main settled 6876 in / 88 out,
+   one title aux settled 612 in / 408 out; key `d2ee3f25…` 12 total /
+   10 used / 73,749 tokens / EUR 0.073749 / 0 reserved; no key
+   replacement, no reset, no cap change. Root primary-source match:
+   `ggml-org/llama.cpp` `tools/server/server-chat.cpp` (master; NOT
+   claimed as the deployed version) requires a non-canonical nonempty
+   `content` array on reasoning input items carrying a `summary`
+   array; the pinned OpenCode 1.19.3 SDK replays the exact id-less
+   empty placeholder `{"type":"reasoning","summary":[],
+   "encrypted_content":""}` (canonical 56 bytes), confirmed against
+   the root-owned session SQLite (zero visible text, zero-byte
+   cipher).
+10. LAN3 provider 400 — BOUNDED FIX LANDED at current candidate
+    `28d3fbd9` (create-only provider-safe projection): ONLY that exact
+    empty placeholder is omitted from the forwarded CREATE body copy,
+    and its canonical bytes are deducted from the create input
+    estimate before the (bytes+2)//3 ceil. The input-token-count
+    endpoint keeps denying visible-reasoning input (request-envelope
+    capability not enabled on that path — denial preserved as a
+    functional test, no API broadening), and the compact builder keeps
+    the full history bytes in both fact variants. Original input
+    validation, resource accounting, ownership, and HMAC/replay
+    authority remain on the complete history. Spec fact
+    `omit_empty_visible_reasoning` default `False`; `True` only in the
+    OpenCode module. Evidence: 241 focused unit (27 new functional +
+    214 policy), the 21-test input-token-count keyword selection, 3
+    provider-payload bypass guardrails, secondary PG 6/6 in 3.45 s
+    (27 collected / 21 deselected / 0 skip) on matching 4 app hashes;
+    root public probes (apply fact-off [base 1, empty 19] / fact-on
+    [1, 1]; compact fact-on/off both 19; count denial preserved).
+    Pending: LAN4 after the `28d3fbd9` CI gate (root-owned key 12 -> 14
+    subcap under the already-recorded ruling; 10 used / 73,749 tokens /
+    EUR 0.073749 preserved).

@@ -619,7 +619,7 @@ production certification follows, and the qualification is recorded in the
 [2026-11-20 consolidated verification
 record](verification/2026-11-20-hermes-opencode-chat.md).
 The separate pinned OpenCode Responses module (objective 228-a, final
-228-c candidate) is a preprotected candidate selected from the key
+228-c candidate) is a protected-qualified candidate selected from the key
 metadata pin `responses_policy.client_module`: exact
 `{id, version, fixture_sha256}` object (`id`
 `opencode-1.19.3-responses-v1`, `version` `"1"`, `fixture_sha256`
@@ -663,19 +663,35 @@ pinned OpenCode 1.19.3 loopback cases passed through the actual task
 Gateway and real PostgreSQL against a separate loopback upstream fake,
 as recorded in the [2026-11-23 consolidated verification
 record](verification/2026-11-23-opencode-responses-preprotected.md).
-The LAN half is partially executed: the root-dispatched first LAN run
-failed at the task Gateway validator (demonstrated missing
-`output_index` transport defect; zero settled usage), the bounded wire
-repair landed at the final candidate head with all CI green, and the
-root-dispatched LAN retry (run 2) TERMINAL FAILED at a later stream
-event (the first missing-index gap was passed; one auto-title aux
-settled; five main attempts charged as estimates; 6/6 key
-settled-request slots consumed; no reset, no cap change) — so the
-protected live-qualification gate remains open (final qualification
-`not_run`). The currently pending item is the human-async
-settled-request exception (6 -> 12, same key, unchanged remaining
-token/cost/time budgets); no traffic or quota mutation until that
-explicit reply. The 227-c Chat qualification above is executed historical
+The LAN half is COMPLETE: the root-dispatched final bounded LAN attempt
+(LAN4) PASSED on 2026-11-25 at the final candidate `28d3fbd9` (app tree
+`aacd71af…`, all CI green): one actual client tool loop, 32.197 s /
+exit 0, one completed read with matching call-ID and result marker,
+final 32 B byte-exact, three HTTP 200 FINALIZED requests (14,872 tokens
+/ EUR 0.014872 at the task pricing EUR 1/M, not a provider invoice),
+and all auth canaries clean; exactly one native HMAC read reference was
+proven from FINALIZED usage. The protected live-qualification gate is
+therefore RUN and passed. Explicit limits: the mock half is six
+loopback fake-upstream cases (mock-secret auth, mock route
+`slaif-228b-mock` / model `opencode228b`; mock usage is not settlement
+evidence), and the live half is bounded — one tool-loop client run per
+dispatch, key caps 6 -> 12 -> 14 settled requests on the same
+short-lived key, token/cost/time ceilings, and ≤100 outer launches.
+Historical LAN attempts (first run failed at the task Gateway
+validator; run 2 TERMINAL FAILED at a later stream event; LAN3 failed
+at the upstream provider) are labeled historical in the verification
+record. The settled-request raises (`request_limit_total` 6 -> 12, then
+12 -> 14, same key) were executed through the audited operator CLI as
+temporary setup subcaps under the existing human-approved 100-LAN-test
+delegation: the earlier separate request for a raise was withdrawn as
+unnecessary, and no new human answer is claimed. The final key snapshot
+before audit stands at 14 total / 13 used / 88,621 tokens / EUR
+0.088621 (token/cost/time ceilings unchanged); the short-lived task key
+was then REVOKED through the operator CLI after the full snapshot —
+revocation of the issued key, not a profile-pin clearing (clearing the
+pin only reverts the key to default validation and is not a key
+disablement). The 227-c Chat
+qualification above is executed historical
 evidence whose stock-retry exception applied to that execution only; the
 standing approved 228 bounded LAN plan allows stock native retries as a
 plan term. The gateway's strict zero-retry rule is gateway policy, not a

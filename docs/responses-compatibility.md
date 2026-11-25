@@ -1339,6 +1339,36 @@ association keep their existing denials, and the legacy Codex and default
 presets, including the legacy digest bytes, are unchanged. See the
 [security model boundary](security-model.md).
 
+Streaming tool round-trips under this profile validate the standard
+function-argument stream (argument deltas and the argument closure
+event) on **both** named server pairs. Where output-index strictness is
+enabled (both native pairs), every supplied `output_index` must equal
+the index registered for that `item_id` during its item lifecycle;
+unregistered, orphaned, conflicting, or contradictory positions are
+denied. Missing-position derivation (repairing an omitted
+`output_index` on argument delta/closure events) is active only on the
+`openai-compatible` pair and is off by default; it normalizes positions
+and grants no event permission to any other profile. The closure event
+itself is accepted only because this module's client policy declares
+`allow_function_arguments_done` (`true` here, `false` everywhere
+else); the legacy sparse-function paths and their default-`false`
+contracts are unchanged. This closure support is source-traced
+lifecycle consistency, not observed capture: the pinned SDK schema
+carries no explicit argument-closure branch, and the only
+live-observed defect was a missing-index argument delta.
+
+The pinned OpenCode 1.19.3 SDK also replays an id-less empty visible
+reasoning placeholder verbatim in turn-N input; the qualified
+openai-compatible backend rejects that exact canonical item. For the
+**create** request of this profile only, the gateway omits ONLY that
+exact placeholder (`{"type":"reasoning","summary":[],
+"encrypted_content":""}`) from the forwarded body copy and deducts its
+canonical bytes from the create input estimate before rounding. The
+input-token-count and compact builders keep the full history bytes and
+their existing denials unchanged, and validation, resource accounting,
+ownership, and HMAC/replay authority always cover the complete
+history.
+
 The gateway-side strict zero-retry forwarding rule is a gateway policy,
 not a promise about native client behavior. The pinned OpenCode session
 hardcodes a bounded native retry policy (`RETRY_MAX_RETRIES=5`, no
@@ -1363,11 +1393,20 @@ unchanged. Six pinned OpenCode 1.19.3 loopback cases pass through the
 actual task Gateway and real PostgreSQL against the separate loopback
 upstream fake.
 
-This profile is a **preprotected** candidate with the mock half of its
-preprotected obligations completed (six pinned OpenCode 1.19.3 loopback
-cases through the actual task Gateway and real PostgreSQL); the LAN half
-and the protected live-qualification gate remain `not_run` for this
-module, it grants no production-certification claim, and the Hermes/OpenCode
+This profile's preprotected obligations are complete: the mock half
+passed (six pinned OpenCode 1.19.3 loopback cases through the actual task
+Gateway and real PostgreSQL), and the bounded LAN half and the protected
+live-qualification gate are RUN — LAN4 PASSED on 2026-11-25 at the final
+candidate `28d3fbd9` (app tree `aacd71af…`, all CI green): one
+root-dispatched actual client tool loop, 32.197 s / exit 0, final 32 B
+byte-exact, one completed read with matching call-ID and result marker,
+three HTTP 200 FINALIZED requests (14,872 tokens / EUR 0.014872 at the
+task pricing), all auth canaries clean. The mock half remains loopback
+fake-upstream evidence (mock-secret auth, mock route `slaif-228b-mock`
+/ model `opencode228b`; mock usage is not settlement evidence), the live
+half stays bounded (one tool-loop run per dispatch, key caps 6 -> 12
+-> 14, token/cost/time ceilings, ≤100 outer launches), and the module
+still grants no production-certification claim; the Hermes/OpenCode
 Chat behavior delivered in 227 is unchanged. Native installation and
 configuration
 provenance is recorded in the client dossier
