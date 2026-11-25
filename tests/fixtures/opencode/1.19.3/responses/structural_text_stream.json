@@ -139,7 +139,8 @@
         "parameters": "json_schema_object",
         "strict": "boolean"
       },
-      "strict_key_state": "present_true_on_all_9",
+      "strict_key_state": "present_value_not_recorded",
+      "strict_provenance_correction": "annotation corrected in 228-c: the earlier value present_true_on_all_9 was false - the capture verifier records strict key PRESENCE only and never the value (no recapture performed); the presence-only fact is retained; the current pinned-native wire value strict:false is separately established by the 228-c direct-fake diagnostic (canonical record docs/verification/2026-11-23-opencode-responses-preprotected.md)",
       "counts_by_type": {
         "function": 9
       },
@@ -154,7 +155,7 @@
         "todowrite",
         "write"
       ],
-      "note": "PROVEN DIFFERENCE vs Chat capture: flat Responses tool items with strict=true, versus nested {type, function{...}} with strict absent",
+      "note": "PROVEN DIFFERENCE vs Chat capture: flat Responses tool items with a strict key present on all 9 (value NOT recorded by the verifier; presence only), versus nested {type, function{...}} with strict absent",
       "authority_note": "local function declarations only; a name never grants hosted execution, routing, or authority"
     },
     "tools_count": 9

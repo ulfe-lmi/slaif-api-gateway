@@ -59,5 +59,6 @@
     "home_workspace_paths_retained": false
   },
   "structural_fixture_digest_rule": "sha256 over, for each structural_*.json in tests/fixtures/opencode/1.19.3/responses sorted by filename: filename + NUL + file bytes (provenance.json excluded)",
-  "structural_fixture_sha256": "00127fa1b5ea43ac0a936ddf5d179d084eaf70512dc9d59a6e6f2a11253cbd53"
+  "structural_fixture_sha256": "1f128c25de8e8014e61855d6b2716a867e5f5364fbc6c01022a573d9e77f12e9",
+  "structural_fixture_sha256_note": "recomputed in 228-c after correcting the false strict-value annotation in structural_text_stream.json (present_true_on_all_9 -> present_value_not_recorded, presence only; the capture verifier never recorded the value); no recapture; prior digest 00127fa1b5ea43ac0a936ddf5d179d084eaf70512dc9d59a6e6f2a11253cbd53 covered the pre-correction bytes"
 }

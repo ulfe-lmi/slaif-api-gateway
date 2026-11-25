@@ -13,12 +13,21 @@ governance run at the final 228-b code head).
 - Objective status: `NEEDS_CONTINUATION` (honest incomplete). The 228-b
   completion order's item 6 — the pinned ACTUAL OpenCode 1.19.3 binary
   through the task-owned Gateway + real PostgreSQL + separate loopback
-  mock upstream (no `get_provider_adapter` monkeypatch) — is staged and
-  awaits root dispatch (`not_run`). The 228-a candidate label
-  `PREPROTECTED_READY` (candidate reviewable) is superseded by this
-  b-refresh; it never meant "qualified".
+  mock upstream (no `get_provider_adapter` monkeypatch) — loopback mock
+  half COMPLETE: six pinned OpenCode 1.19.3 cases passed through the
+  task-owned Gateway + real PostgreSQL + separate loopback mock (no
+  `get_provider_adapter` monkeypatch); root-verified PG reconciliation:
+  21 finalized ledger rows / 21 finalized reservations, 227,998 tokens,
+  0 pending/reserved; receipts/journals preserved (see 228-c
+  checkpoint). The protected LAN launch half of item 6 remains
+  `not_run`, pending the root CI/setup review of the frozen candidate
+  (a CI/setup review, not a human-decision gate). The 228-a candidate
+  label `PREPROTECTED_READY` (candidate reviewable) is superseded by
+  this b-refresh; it never meant "qualified".
 - Protected live-qualification gate: `not_run`.
-- Real provider inference: `not_run`.
+- Real provider inference: `not_run` (the only LAN traffic to date is
+  the read-only metadata preflight GET documented in the 228-c
+  checkpoint; no LAN inference).
 - Governance: resolved at 228-b — focused OAP governance 10 passed at
   the final 228-b code head (the a-era 1 failed / 9 passed is preserved
   as immutable history; see below).
@@ -54,6 +63,30 @@ governance run at the final 228-b code head).
   Profile DATA is unchanged: fixture (canonical document) digest
   `592c5d1baa7aa3a805320411f3f961521ba72b30cc34cafe01cb755ddf69f0ff`,
   client module `opencode-1.19.3-responses-v1` version `1`.
+- 228-c final app candidate head:
+  `3dde03bf6b7018f6bef2abfe9b0f645a5951a073` (chain from the 228-c
+  guard-fix head: `087895cd` aux-dispatch + fake assistant-message
+  standardization, `aeac5014` test-only umask follow-up, `6356589f`
+  docs-only attempt record, `3dde03bf` strict-boolean fix). This is the
+  app tree the task Gateway ran for all six loopback cases. Tree
+  identities: `HEAD:app` =
+  `e2e6ba68fd0329f7717c1057295c942e2ccb4c0c`;
+  `HEAD:app/slaif_gateway` =
+  `f7bad64806ba0e83901daba7c5c460ce1b03dbc7`. Profile DATA unchanged
+  (same fixture digest; client module `opencode-1.19.3-responses-v1`
+  version `1`).
+- Remote main reconciliation: remote `main` advanced to
+  `79265a8919a74a71083eded279bfcf79d00cd80a` (merge of docs-only PR
+  #402, `docs/responses-input-items-64k`: four docs about the ~65536
+  input-items limit — `docs/codex-tuning-qwen.md`,
+  `docs/configuration.md`, `docs/runbooks/codex-input-item-count.md`,
+  `docs/upgrade-runbook.md`; disjoint from `app/` and `tests/`, so the
+  app tree and all six case evidence are unaffected). Remote `main` is
+  NOT an ancestor of this head (branch base
+  `5f0f4c34ff13f1d76ae050708a37f387e6988451`); `origin/main` is
+  merged into this branch through primary Git ownership before the
+  final candidate freeze (no rebase, no reset; all repo docs and the
+  untracked trio preserved), not claimed as already reconciled.
 - Tree identities at `55482cc16b4f40530498040c70e0151433b3a9c1`:
   `HEAD:app` = `30610d166c7de6a55510774a76af51125f54e044`;
   `HEAD:app/slaif_gateway` = `1c254ceb09b9ebf155102fc15e8d25c1f985b566`.
@@ -374,13 +407,14 @@ governance run at the final 228-b code head).
 - Command:
   `PYTHONDONTWRITEBYTECODE=1 TMPDIR=/home/janezp/codex-work/tmp-228 TMP=$TMPDIR TEMP=$TMPDIR .venv/bin/python -m pytest tests/unit/test_oap_governance.py -q -o addopts= -p no:cacheprovider`
 
-### Task-owned native setup (staged; run not_run)
+### Task-owned native setup (staged; loopback mock half complete, LAN half not_run)
 
 - Services: task-owned PostgreSQL 16 on `127.0.0.1:54401` (database
   `slaif228_test`, trust, loopback only); task-owned Gateway at
   `http://127.0.0.1:18310/v1` running code
-  `d896ad91f5de1c34bdfb753fedcc51086717fa0b` (the final b code head is
-  test-only, so the app code is byte-identical); separate loopback
+  `3dde03bf6b7018f6bef2abfe9b0f645a5951a073` (the 228-c final app
+  candidate — the app tree all six loopback cases ran on); separate
+  loopback
   mock upstream at `127.0.0.1:18031` reusing the existing
   `scripts/verify_agent_chat/loopback_responses_fake.py` (no second
   SSE producer).
@@ -388,22 +422,27 @@ governance run at the final 228-b code head).
   route `slaif-228b-mock`, model `opencode228b` to upstream
   `opencode228b-upstream`, streaming, all four codex capabilities on,
   `provider_max_retries=0`, EUR 1/M input and output pricing,
-  `codex_limits` 1,050,000 / 32,768 / 128,000.
+  `codex_limits` 1,050,000 / 32,768 / 128,000, and task-scoped
+  `RESPONSES_MAX_FUNCTION_TOOL_DESCRIPTION_BYTES=8192` (shared default
+  4096 unchanged; operator must set and restart).
 - Task key: `/v1/responses`-only. Preflight verified wrong key 401,
   models 403 `endpoint_not_allowed`, minimal body 400
   `opencode_1193_fields`, wrong model 403, and PG counters
   0 admitted / 0 reserved / 0 used (no admission).
-- Pinned-binary launcher pre-positioned (task-local nonsecret setup
-  record, not committed); the actual run awaits root dispatch:
+- Pinned-binary launcher (task-local, nonsecret setup record, not
+  committed; the secondary-owned live tool-loop branch is in prep):
+  loopback mock half complete (six cases, see the 228-c checkpoint);
+  the protected LAN launch half awaits the root CI/setup gate:
   `not_run`.
 
 ### Not run
 
-- Order item 6: pinned ACTUAL OpenCode 1.19.3 binary through the
-  task-owned Gateway + real PostgreSQL + separate loopback mock upstream
-  (no `get_provider_adapter` monkeypatch): setup staged and verified,
-  run `not_run` (awaits root dispatch).
-- Real provider inference: `not_run`.
+- Order item 6, protected LAN half: bounded human-approved LAN plan
+  staged (provider/route/pricing seeded in the task PG; short-lived
+  LAN key created at dispatch only); NOT executed; `not_run`, gated on
+  root CI/setup review of the frozen candidate (not a human decision).
+- Real provider inference: `not_run` (the only LAN traffic to date is
+  the read-only metadata preflight GET; no LAN inference).
 - Protected live-qualification gate: `not_run`.
 
 ## Findings
@@ -469,7 +508,7 @@ as "227-reused": Chat-only, that execution only, with its documented
 stock-retry exception. No 227 evidence is relabeled as a 228 execution,
 and nothing in it qualifies this Responses module.
 
-## 228-c checkpoint (in progress; no native run yet)
+## 228-c checkpoint (loopback mock half complete; protected LAN half not run)
 
 - Guard correction: `response.reasoning_summary_part.done` is now
   scoped by the new selected-native typed stream property
@@ -491,7 +530,8 @@ and nothing in it qualifies this Responses module.
 - LAN target fresh nonsecret readiness: `10.8.132.55:18021` TCP
   connect OK; unauthenticated `GET /v1/models` → 401 (target up, no
   credentials used).
-- Safe LAN preflight (no LAN traffic sent): task PG now also holds the
+- Safe LAN preflight (authenticated `GET /v1/models` read-only metadata
+  only; no LAN inference sent): task PG now also holds the
   accepted LAN target as provider `qwen-student-lan`
   (`openai_compatible`, base `http://10.8.132.55:18021/v1`,
   `max_retries=0`, timeout 60 s, key resolved from
@@ -567,21 +607,101 @@ and nothing in it qualifies this Responses module.
   1.19.3 sha256
   `179ca421d61eefeadfa0c50e084a6e79c1623734732f0f4593f81ccfd3ab7ee9`
   (unchanged); receipt and private logs preserved in the run root; PG
-  usage preserved (no reset). Working root-traced hypothesis, NOT yet
-  proven: the module requires `strict: true` per function tool
-  (`_validate_tool_declaration`), while the pinned OpenCode source
-  (`packages/llm/src/protocols/openai-responses.ts:265`) emits
-  `strict: false` which the SDK propagates. One fresh synthetic-only
-  direct-fake diagnostic (secondary) captures the actual 9 strict
-  booleans/field sizes before a bounded native-only fix; no rerun,
-  capture facility, or permission widening until then.
+  usage preserved (no reset). The root-traced hypothesis was
+  CONFIRMED by the secondary synthetic-only direct-fake diagnostic
+  (facts in the strict-value diagnostic bullet below); the bounded
+  native-only fix followed.
 - Credential isolation after the attempt: the task key (75 B, sha8
   `f9c03464`) is absent from every file under the fake case directory;
   the fake journal records the upstream Authorization as a redacted
   placeholder Bearer (token_sha256_8 `980e55c0`, the mock upstream
   key), i.e. the task Gateway key never reached the mock.
-- Protected LAN launch: still `not_run`, awaiting root dispatch per
-  the 228-c order.
+- Strict-value diagnostic (secondary, synthetic-only direct-fake; the
+  task Gateway was not touched): all 9 flat function tools on the wire
+  carry `strict: false` as a JSON boolean with exactly the 5 declared
+  keys; description sizes 399–4694 B; max serialized declaration
+  5210 B; the fake-only native loop passed (exit 0, 6.532 s, exact
+  marker, read completed, config removed, no key leak); journals
+  removed per approved cleanup; safe facts in task-root-only
+  `runs/228c-strict-diagnostic-result.json`. Note (presence vs value):
+  the initial validator assumed `strict is True`; the earlier
+  structural capture recorded `strict` field presence only, which is
+  insufficient about the value; the current pinned native diagnostic
+  established the wire value `false` (the pinned OpenCode source
+  agrees). No client/version change across eras is claimed; the
+  module must accept the observed value, not coerce it.
+- Bounded native-only fix
+  `3dde03bf6b7018f6bef2abfe9b0f645a5951a073`: `_validate_tool_declaration`
+  now accepts both boolean values for `strict` (existing `true`
+  preserved; observed `false` added), still rejects `0`/`1`/
+  strings/`null`/omission/unknown fields, and preserves the upstream
+  `false` verbatim (no coercion). 106-test focused unit run over the
+  directly affected files plus `ruff check` on the changed files pass.
+  Secondary-owned fixtures/verifier untouched.
+- Historical failed attempts (preserved, labeled; their usage is
+  included in the reconciliation below, never reset):
+  - attempt 1 (app head `087895cd`): main request rejected
+    pre-upstream with 400 `opencode_1193_tool_declaration` (the
+    strict-is-True validator; root cause per the confirmed
+    diagnostic); title aux settled (1 ledger row 4/2 + 1 finalized
+    reservation).
+  - retry 1 (app head `3dde03bf`, before the 8192 cap): main request
+    rejected with 400 `responses_tool_invalid_shape`, param
+    `tools[0].description` (shared default 4096-byte description cap;
+    the pinned bash declaration is 5210 B serialized); title aux
+    settled.
+- Task-scoped description cap: the task Gateway env (0600 file) sets
+  `RESPONSES_MAX_FUNCTION_TOOL_DESCRIPTION_BYTES=8192` explicitly.
+  The shared code default (4096) is NOT widened; an operator running
+  this module must set the same env var and restart. The loopback
+  fake script sha256
+  `118ec65e28dbedc686f6154ed7137dd5553a21220d6d5ab2423ea0e7fb51e250`
+  was unchanged across the per-case fake restarts.
+- SIX actual loopback cases PASSED (root-dispatched one at a time;
+  pinned OpenCode 1.19.3; task Gateway on `3dde03bf` with the 8192
+  cap; real PG; separate loopback mock; fresh client run-roots under
+  task `runs/228c-native-*`; all exit 0, run-local config removed,
+  task-key canary clean):
+  - `228c-native-baseline-retry2` assistant_tool baseline (6.732 s):
+    9/9 case predicates; final 40 B byte-exact marker; read tool
+    completed; upstream 3 POSTs (auto-title aux + 2 mains); both
+    mains carried 9/9 `strict: false` preserved verbatim, max
+    description 4699 B; reused baseline key (no reset).
+  - `228c-native-reasoning` encrypted reasoning continuation
+    (6.379 s): 6/6 cipher+linkage predicates; issued cipher 64 B
+    (sha8 `28b052fa`); full-byte encrypted replay equal to the issued
+    ciphertext; final 32 B byte-exact static sentinel.
+  - `228c-native-visible-absent` (6.43 s) /
+    `228c-native-visible-null` (6.38 s) /
+    `228c-native-visible-empty` (6.732 s): 8/8 each; reasoning
+    encrypted_content transitions absent→absent, null→null,
+    empty→empty_string (kept verbatim); 40 B byte-exact markers; NO
+    opaque references issued for the visible states.
+  - `228c-native-compaction` (6.681 s): 10/10; upstream 4 POSTs (2
+    aux); summary request exactly 7 top-level fields (stream true, no
+    tools); 164 B summary; continuation restored the 9 tools with 4
+    typeless items `[developer, user, assistant, user]` carrying the
+    byte-exact summary; 33 B byte-exact static sentinel; synthetic
+    overflow usage 225000/2000.
+- Root independent reconciliation (authoritative PG; the agent did
+  not re-query): 21 successful finalized ledger rows / 21 finalized
+  reservations; 225,694 input + 2,304 output = 227,998 tokens,
+  EUR 0.227998 (task pricing EUR 1/M input and output,
+  `slaif_calculated`, not a provider invoice); 0 reserved, 0
+  diagnostics, 0 non-finalized rows; 8 `codex_replay_references` =
+  6 function_call + 2 reasoning (each an ID reference plus the
+  selected-profile v3 ciphertext alias), all mock route; 0
+  `response_references`; in all six fake journals the upstream
+  Authorization hash matches the server MOCK secret, differs per
+  gateway key, and every full gateway key is absent. POST counts:
+  compaction 4, the other five cases 3 each, plus 2 historical failed
+  title aux = 21. Per-key final counters: baseline 5/6 requests
+  (104 tokens), reasoning 3/6 (62), each visible case 3/6 (92 each),
+  compaction 4/6 (227,556).
+- Protected LAN launch: `not_run`. Gated on root CI/setup review of
+  the frozen candidate (`3dde03bf`: three workflow identities, nine
+  jobs, CodeQL aggregate) and the staged target/setup; the bounded
+  LAN plan is human-approved; no further human decision is pending.
 
 ## Approved bounded live plan (declared; NOT yet executed)
 
@@ -589,7 +709,10 @@ Status: protected/`not_run`. The bounded LAN qualification is already
 human-approved ("Approve 100 LAN tests with built-in retries"); there
 is no further human decision gate. Execution remains gated on the
 root-reviewed frozen candidate (green CI) and the concrete
-target/setup, with no counter reset.
+target/setup, with no counter reset. The order-item-6 loopback mock
+half is complete (six cases, see 228-c checkpoint); only the LAN
+launch remains under this gate (a CI/setup review, not a human
+decision).
 
 - Limits: ≤100 outer launches (actual prior spend: 5 of the 227-c
   bounded LAN Chat qualification, linked below, not duplicated);
@@ -618,15 +741,25 @@ target/setup, with no counter reset.
    `NEW_PR` vs validator `CREATE_NEW_PR`) is preserved as immutable
    history; order, tests, and `oap/active` were unchanged in both
    rounds.
-2. Order item 6 (228-b): pinned ACTUAL OpenCode 1.19.3 binary through
-   the task-owned Gateway + real PostgreSQL + separate loopback mock
-   upstream (no `get_provider_adapter` monkeypatch): setup staged and
-   verified; restarted onto the aux-dispatch head `087895cd`; first
-   loopback baseline dispatched and ATTEMPTED 2026-11-25T01:46Z -
-   title aux settled, main request rejected pre-upstream (400
-   `opencode_1193_tool_declaration`); case incomplete, usage/receipt
-   preserved; bounded native-only fix and rerun await the actual
-   strict-value diagnostic (see 228-c checkpoint).
+2. Order item 6 (228-b/c) — loopback mock half COMPLETE: six pinned
+   ACTUAL OpenCode 1.19.3 cases passed through the task-owned Gateway
+   (`3dde03bf`) + real PostgreSQL + separate loopback mock upstream
+   (no `get_provider_adapter` monkeypatch); root independent PG
+   reconciliation: 21 finalized ledger rows / 21 finalized
+   reservations, 227,998 tokens, EUR 0.227998, 0 reserved/pending,
+   8 replay references (6 function_call + 2 reasoning), credential
+   isolation verified in all six journals. Historical failed attempts
+   preserved and labeled: attempt 1 (400
+   `opencode_1193_tool_declaration`, strict-is-True validator per the
+   confirmed diagnostic, head `087895cd`) and
+   retry 1 (400 `responses_tool_invalid_shape`, description cap, head
+   `3dde03bf` pre-8192); both title aux settled; usage included, no
+   reset. Fixes: `3dde03bf` (accept both `strict` boolean values,
+   preserved verbatim) + task-scoped
+   `RESPONSES_MAX_FUNCTION_TOOL_DESCRIPTION_BYTES=8192` (shared
+   default 4096 unchanged; operator must set + restart). The
+   protected LAN half of item 6 remains `not_run` under the root
+   CI/setup gate.
 3. Strict zero-retry plus six-settled-request admission guarantee:
    `UNSATISFIED`. Source proof: pinned OpenCode session
    `packages/opencode/src/session/llm.ts` line 323

@@ -128,7 +128,8 @@ def test_text_stream_envelope_facts():
     _assert_contract(data["request"])
     decl = data["request"]["tool_declarations"]
     assert decl["form"] == "flat"
-    assert decl["strict_key_state"] == "present_true_on_all_9"
+    # presence only: the capture verifier never recorded the strict value
+    assert decl["strict_key_state"] == "present_value_not_recorded"
     assert decl["counts_by_type"] == {"function": 9}
     assert decl["baseline_vocabulary_9"] == BASELINE_VOCABULARY
     items = data["request"]["input_items"]
