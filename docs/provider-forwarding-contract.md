@@ -995,14 +995,21 @@ forwarded. The strict gateway zero-retry forwarding rule is gateway
 policy only: the pinned OpenCode session hardcodes a bounded native retry
 policy above the SDK default of zero retries, so zero native HTTP retries
 are never claimed for this profile; the 227-c human-authorized bounded LAN
-qualification (Chat profiles) is the only recorded stock-retry exception
-and applied to that execution only.
+qualification (Chat profiles) is executed historical evidence whose
+documented stock-retry exception applied to that execution only. The
+standing, separately approved bounded 228 LAN plan for this Responses
+module (human-approved; execution gated on the root CI/setup review of the
+frozen candidate, not a new human decision) explicitly allows stock native
+retries as a plan term.
 
 A data-only profile upgrade is new document bytes with a new digest, a
 re-pinned operator key, and a process restart; there is no database
-migration or engine upgrade. The module is a preprotected candidate: the
-protected live-qualification gate is `not_run`, and this section creates
-no live-qualification, deployment, or certification claim. Selection and
+migration or engine upgrade. The module is a preprotected candidate with
+the mock half of its preprotected obligations completed (six pinned
+OpenCode 1.19.3 loopback cases through the actual task Gateway and real
+PostgreSQL); the LAN half and the protected live-qualification gate remain
+`not_run`, and this section creates no live-qualification, deployment, or
+certification claim. Selection and
 dialect are documented in
 [responses-compatibility.md](responses-compatibility.md), and the replay
 boundary in [security-model.md](security-model.md).

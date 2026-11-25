@@ -1220,10 +1220,16 @@ native client guarantee. The pinned OpenCode session hardcodes a bounded
 native retry policy (`RETRY_MAX_RETRIES=5`, no override parameter) above
 the SDK default of zero retries, so zero native HTTP retries are never
 claimed for this profile. The 227-c human-authorized bounded LAN Chat
-qualification remains the only recorded stock-retry exception, applied to
-that execution only. The module is a preprotected candidate: the protected
-live-qualification gate is `not_run`, and nothing in this boundary grants
-live qualification or production certification.
+qualification is executed historical evidence whose documented stock-retry
+exception applied to that execution only. The standing, separately
+approved bounded 228 LAN plan for this Responses module (human-approved;
+execution gated on the root CI/setup review of the frozen candidate, not a
+new human decision) explicitly allows stock native retries as a plan term.
+The module is a preprotected candidate with the mock half of its
+preprotected obligations completed (six pinned OpenCode 1.19.3 loopback
+cases through the actual task Gateway and real PostgreSQL); the LAN half
+and the protected live-qualification gate remain `not_run`, and nothing in
+this boundary grants live qualification or production certification.
 
 ## Catalog Refresh Research Boundary
 

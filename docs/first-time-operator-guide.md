@@ -618,11 +618,32 @@ record](verification/2026-11-20-hermes-opencode-chat.md).
 The separate pinned OpenCode Responses module
 `opencode-1.19.3-responses-v1` (objective 228-a) is a preprotected
 candidate selected from the key metadata pin
-`responses_policy.client_module`; its protected live-qualification gate is
-`not_run`. The gateway's strict zero-retry rule is gateway policy, not a
+`responses_policy.client_module`. Its mock half is complete: six pinned
+OpenCode 1.19.3 loopback cases passed through the actual task Gateway and
+real PostgreSQL against a separate loopback upstream fake, as recorded in
+the [2026-11-23 consolidated verification
+record](verification/2026-11-23-opencode-responses-preprotected.md). The
+LAN half and the protected live-qualification gate remain `not_run`,
+gated on the root CI/setup review of the frozen candidate — not a new
+human decision. The 227-c Chat qualification above is executed historical
+evidence whose stock-retry exception applied to that execution only; the
+standing approved 228 bounded LAN plan allows stock native retries as a
+plan term. The gateway's strict zero-retry rule is gateway policy, not a
 native-client bound: the pinned OpenCode native session hardcodes
 `RETRY_MAX_RETRIES=5` with no override above the SDK default, so no
-zero-native-retry guarantee is claimed for this module. See
+zero-native-retry guarantee is claimed for this module. One additional
+operator environment value is required in `.env` (applied with
+`./scripts/docker-refresh.sh --env-only` plus a service recreate/restart);
+the shared default of `4096` is NOT widened:
+
+```bash
+RESPONSES_MAX_FUNCTION_TOOL_DESCRIPTION_BYTES=8192
+```
+
+The pinned 1.19.3 baseline tool declarations serialize to at most 5210
+bytes, so `8192` covers them; the `CHAT_MAX_TOOL_DESCRIPTION_BYTES=8192`
+and `HARD_MAX_OUTPUT_TOKENS=32768` values above remain separate
+Chat-profile settings. See
 [responses-compatibility.md](responses-compatibility.md).
 
 ## Real-Provider Smoke Test

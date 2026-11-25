@@ -7,7 +7,9 @@ PostgreSQL settlement, or production claim. The protected gate is `not_run`,
 the packaged profile DATA was subsequently packaged by primary
 (section 2); the protected gate remains `not_run`, and the current
 objective status is recorded in the consolidated verification record
-(228-b: `NEEDS_CONTINUATION`).
+(228-b: `NEEDS_CONTINUATION`; 228-c completed the mock half — six
+pinned-binary loopback cases through the task-owned Gateway and real
+PostgreSQL — while the protected LAN half and gate remain `not_run`).
 
 ## 1. Pinned client identity
 
@@ -41,8 +43,12 @@ objective status is recorded in the consolidated verification record
   top-level `reasoning_effort` string); `max_output_tokens` 32000 emitted
   from a configured 32768 limit; `store: false`; `stream: true`;
   `tool_choice: "auto"`; `include: ["reasoning.encrypted_content"]`;
-  flat tool declarations with `strict: true` on all 9 (proven difference vs
-  the Chat wire's nested declarations without `strict`); typeless input
+  flat tool declarations with the `strict` key present on all 9
+  (presence only — the capture verifier never recorded the value; the
+  current pinned-native wire value `false` is separately established by
+  the 228-c direct-fake diagnostic; see the fixture provenance note);
+  proven difference vs the Chat wire's nested declarations without
+  `strict`; typeless input
   message items (`role` + `content`, no `type`/`id`/`status`); ID-less
   continuation replay of `reasoning`, `function_call`, and
   `function_call_output` items (verbatim `encrypted_content` replay, no
@@ -240,8 +246,11 @@ objective status is recorded in the consolidated verification record
 - **Protected gate**: `not_run`. No live LAN or provider run occurred for
   the Responses wire in 228-a (preprotected candidate stage only). The
   consolidated verification record carries the current objective status
-  (228-b: `NEEDS_CONTINUATION` — the pinned-binary run is staged and
-  awaits root dispatch).
+  (228-b: `NEEDS_CONTINUATION`; 228-c: the mock half is complete — six
+  pinned-binary loopback cases passed through the task-owned Gateway,
+  real PostgreSQL, and a separate loopback mock upstream — while the
+  bounded LAN half and this protected gate remain `not_run`, awaiting
+  the root CI/setup review of the frozen candidate).
 
 ## 5. Known limits and follow-ups
 
@@ -260,11 +269,16 @@ objective status is recorded in the consolidated verification record
   fully replaces the pre-compaction history rather than appending to it.
   No real-provider overflow, no encrypted-summary ownership, and no
   compact-endpoint behavior is claimed.
-- Retry posture: the strict zero-retry rule is a separate concern from the
-  human-approved 100-LAN-launch stock-retry exception used in 227-c; the
-  native OpenCode client retry constant was pinned at 5 in source
-  inspection, and a zero-native-retry configuration is unproven/unsupported
-  in stock. Any future live Responses plan must reference the 227-c totals
+- Retry posture: the strict zero-retry rule is a separate concern from
+  stock native retries. The 227-c bounded LAN Chat qualification is
+  executed historical evidence whose human-approved 100-LAN-launch
+  stock-retry exception applied to that execution only; the standing,
+  separately approved bounded 228 LAN plan for this module explicitly
+  allows stock native retries as a plan term (not a new exception or
+  human gate). The native OpenCode client retry constant was pinned at 5
+  in source inspection, and a zero-native-retry configuration is
+  unproven/unsupported in stock. Any live Responses execution under the
+  228 plan must reference the 227-c totals
   (5 launches / 41,021 tokens / EUR 0.041021) without resetting them.
 - Primary owns the packaged profile DATA, the module binding, the combined
   qualification, and the consolidated verification record; this dossier's

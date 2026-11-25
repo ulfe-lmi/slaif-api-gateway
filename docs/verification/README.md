@@ -10,8 +10,9 @@ fitness, security, compliance, provider behavior, or scale.
 For current readers, these are the newest qualification and identity records
 on record. They are dated, commit-specific evidence, not certifications.
 
-- [`2026-11-23 Objective 228 (a + b) OpenCode 1.19.3 Responses module preprotected record`](2026-11-23-opencode-responses-preprotected.md)
-  (record finalized 2026-11-24; filename dated 2026-11-23 to match the
+- [`2026-11-23 Objective 228 (a + b, 228-c mock half consolidated) OpenCode 1.19.3 Responses module preprotected record`](2026-11-23-opencode-responses-preprotected.md)
+  (record finalized 2026-11-24, 228-c mock-half results consolidated
+  2026-11-25; filename dated 2026-11-23 to match the
   committed crosslinks; 228-b status `NEEDS_CONTINUATION`) - dedicated
   static client module `opencode-1.19.3-responses-v1` (engine version `1`)
   for the pinned native OpenCode 1.19.3 Responses client: profile DATA
@@ -35,11 +36,15 @@ on record. They are dated, commit-specific evidence, not certifications.
   real-factory adapter settlement over respx loopback with
   `get_provider_adapter` unpatched), secondary fake-only loopback capture
   checkpoints (NOT a Gateway/provider pass), ruff clean, governance 10/10
-  at b (a's 1/10 preserved as immutable history); the pinned-binary run
-  through the task-owned Gateway + PostgreSQL + loopback mock upstream is
-  staged and awaits root dispatch (`not_run`); protected gate `not_run`;
-  strict zero-retry/six-settled guarantee `UNSATISFIED` (source-proved);
-  no production certification.
+  at b (a's 1/10 preserved as immutable history); the 228-c mock half is
+  complete: six pinned OpenCode 1.19.3 loopback cases (assistant tool
+  loop, encrypted reasoning continuation, visible reasoning
+  absent/null/empty, compaction) passed through the task-owned Gateway +
+  real PostgreSQL + separate loopback mock upstream; the bounded LAN half
+  remains `not_run`, awaiting the root CI/setup review of the frozen
+  candidate (not a new human decision); protected gate `not_run`; strict
+  zero-retry/six-settled guarantee `UNSATISFIED` (source-proved); no
+  production certification.
 - [`2026-11-10 Objective 216-a GUI reviewed accounting recovery verification`](gui-cli-parity.md)
   (recorded 2026-11-10, same living record file) - admin GUI G14 of
   `docs/MISSING_GUI_FUNCTIONALITY.md` reusing the SAME shared

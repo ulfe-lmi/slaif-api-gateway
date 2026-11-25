@@ -1279,22 +1279,36 @@ changes are data-only: new document bytes with a new digest, a re-pinned
 operator key, and process restart; the module introduces no database
 migration and no engine upgrade.
 
-The normalized body is the exact captured first-turn shape and is
+The normalized main first-turn body is the exact captured shape and is
 streaming-only: the top-level field set is exactly `{include, input,
 max_output_tokens, model, reasoning, store, stream, tool_choice, tools}`;
 `stream` must be `true` (a `false` value is denied with
 `opencode_1193_field_shape`), `store` must be `false`, `tool_choice` must
 be `"auto"`, `include` is limited to `reasoning.encrypted_content`, input
 roles are `developer`/`user` (sent without a type field), and `tools` is
-the flat strict function declaration list drawn from the nine bounded
-names. `reasoning` is exactly
+the flat function declaration list drawn from the nine bounded names,
+each declaration carrying a `strict` boolean whose value is preserved
+upstream, not coerced (both boolean values are accepted — the pinned
+native diagnostic observed `false`, while `true` is accepted and tested
+synthetically; non-boolean, null, or omitted values are denied).
+`reasoning` is exactly
 `{"effort": <minimal|low|medium|high|xhigh>}`; `max_output_tokens` is an
 integer `1..1,048,576` (captured first turn: `32000`, a captured
-observation, not a hard cap). Tool declarations are flat and strict: at
-most 32 declarations, descriptions at most 20,000 bytes, schema depth at
-most 8, at most 64 properties, declarations at most 65,536 bytes;
-tool-call ids are 1..128 characters and arguments at most 65,536 bytes.
-No per-request relaxation exists.
+observation, not a hard cap). Tool declarations are flat: at most 32
+declarations, descriptions at most 20,000 bytes by module DATA and
+further capped by the shared deployment setting
+`RESPONSES_MAX_FUNCTION_TOOL_DESCRIPTION_BYTES` (default `4096`; the 228
+task Gateway ran at the operator-set `8192`, never a widened default),
+schema depth at most 8, at most 64 properties, declarations at most
+65,536 bytes; tool-call ids are 1..128 characters and arguments at most
+65,536 bytes. No per-request relaxation exists. The 9-field set is the
+main request shape only: the qualified auto-title auxiliary and
+compaction summary requests are the 7-field streamed tool-less variant
+(`include`, `input`, `max_output_tokens`, `model`, `reasoning`, `store`,
+`stream`; no `tools`/`tool_choice`), and continuation turns replay
+assistant text and reasoning as typeless input items — all observed in
+the six passing 228-c loopback cases recorded in the consolidated
+verification record below.
 
 The module pairs only with the two named server transports `openai` and
 `openai-compatible`; the signed Local Coding server module and every other
@@ -1312,7 +1326,10 @@ path: a domain-separated v3 digest
 ciphertext (non-empty, at most 1,048,576 bytes, immediate memory only),
 stored as an HMAC-only reference. Function-call replay keeps the existing
 call-digest path. References persist only after successful finalized
-output and are bound to the same key and route/provider/model. No
+output; the binding differs by kind. Function-call references are
+portable same-key references (bound to the same key, item kind, call,
+and tool name, not to a specific route/provider/model), while reasoning
+v3 references are bound to the same key and route/provider/model. No
 fabricated protocol IDs, no raw reasoning content, and no schema change
 are introduced; duplicate identical ciphers in one request,
 missing/empty/oversized ciphertext, id-present reasoning carrying a
@@ -1327,18 +1344,32 @@ not a promise about native client behavior. The pinned OpenCode session
 hardcodes a bounded native retry policy (`RETRY_MAX_RETRIES=5`, no
 override parameter) above an SDK default of zero retries, so zero native
 HTTP retries must never be claimed for this profile; the 227-c
-human-authorized bounded LAN qualification (Chat profiles) remains the
-only recorded stock-retry exception and applied to that execution only.
+human-authorized bounded LAN qualification (Chat profiles) is executed
+historical evidence whose documented stock-retry exception applied to that
+execution only. The standing, separately approved bounded 228 LAN plan for
+this Responses module (human-approved; execution gated on the root
+CI/setup review of the frozen candidate, not a new human decision)
+explicitly allows stock native retries as a plan term.
 
-The native flat tool-loop SSE stream is currently rejected by the
-three-layer Responses stream validation (progress events carrying
-`response_id` fail the strict field check); no L1/L2/L3 source change is
-made pending the root ruling on that gap.
+The 228-b streaming-gap ruling is resolved: L1/L3 are implemented
+(lifecycle dispatch independent of a non-empty tool count; the tool-event
+flag plus the exact active `(functions, name, function)` set gates new
+tool execution), L2 is intentionally not implemented (a fake-added
+`response_id` is not client-wire authority; the shared strict
+`_only_fields` check is not relaxed; the loopback fake no longer emits an
+artificial `response_id`), and the pinned-SDK required output/content
+indexes are enforced on the selected profile with legacy validators
+unchanged. Six pinned OpenCode 1.19.3 loopback cases pass through the
+actual task Gateway and real PostgreSQL against the separate loopback
+upstream fake.
 
-This profile is a **preprotected** candidate: the protected
-live-qualification gate is `not_run` for this module, it grants no
-production-certification claim, and the Hermes/OpenCode Chat behavior
-delivered in 227 is unchanged. Native installation and configuration
+This profile is a **preprotected** candidate with the mock half of its
+preprotected obligations completed (six pinned OpenCode 1.19.3 loopback
+cases through the actual task Gateway and real PostgreSQL); the LAN half
+and the protected live-qualification gate remain `not_run` for this
+module, it grants no production-certification claim, and the Hermes/OpenCode
+Chat behavior delivered in 227 is unchanged. Native installation and
+configuration
 provenance is recorded in the client dossier
 [agentic-clients/opencode-1.19.3-responses-v1.md](agentic-clients/opencode-1.19.3-responses-v1.md)
 and the [consolidated verification

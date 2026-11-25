@@ -195,18 +195,33 @@ behavior. The pinned OpenCode session hardcodes a bounded native retry
 policy (`RETRY_MAX_RETRIES=5`, no override parameter) above an SDK default
 of zero retries, so zero native HTTP retries must never be claimed for this
 profile; the 227-c human-authorized bounded LAN qualification (Chat
-profiles) remains the only recorded stock-retry exception and applied to
-that execution only. The native flat tool-loop SSE stream is currently
-rejected by the three-layer Responses stream validation (progress events
-carrying `response_id` fail the strict field check), and no L1/L2/L3 source
-change is made pending the root ruling on that gap.
+profiles) is executed historical evidence whose documented stock-retry
+exception applied to that execution only. The standing, separately
+approved bounded 228 LAN plan for this Responses module (human-approved;
+execution gated on the root CI/setup review of the frozen candidate, not a
+new human decision) explicitly allows stock native retries as a plan term.
+The 228-b streaming-gap ruling is resolved: L1/L3 are implemented
+(lifecycle dispatch independent of a non-empty tool count; the tool-event
+flag plus the exact active `(functions, name, function)` set gates new
+tool execution), L2 is intentionally not implemented (a fake-added
+`response_id` is not client-wire authority; the shared strict
+`_only_fields` check is not relaxed; the loopback fake no longer emits an
+artificial `response_id`), and the pinned-SDK required output/content
+indexes are enforced on the selected profile with legacy validators
+unchanged.
 
 Data-versus-engine upgrade boundary: a data-only profile upgrade is new
 document bytes with a new digest and requires a re-pinned operator key and
 process restart; the module itself introduces no database migration. Engine
 semantics changes are version-owned in source. This profile remains a
-preprotected candidate: the protected live-qualification gate is `not_run`
-for this module, and it grants no production-certification claim.
+preprotected candidate with the mock half of its preprotected obligations
+completed: six pinned OpenCode 1.19.3 loopback cases (assistant tool loop,
+encrypted reasoning continuation, visible reasoning absent/null/empty,
+and compaction) passed through the actual task Gateway and real PostgreSQL
+against the separate loopback upstream fake, as recorded in
+`docs/verification/2026-11-23-opencode-responses-preprotected.md`. The LAN
+half and the protected live-qualification gate remain `not_run` for this
+module, and the profile grants no production-certification claim.
 
 ## Change ownership
 
