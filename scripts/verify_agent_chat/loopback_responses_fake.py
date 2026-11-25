@@ -210,12 +210,15 @@ class Handler(BaseHTTPRequestHandler):
         msg_id = "msg_fake_" + uuid.uuid4().hex[:20]
         out = [
             _ev(resp_id, seq0, "response.output_item.added", output_index=0,
-                item={"type": "message", "id": msg_id}),
+                item={"type": "message", "id": msg_id,
+                      "status": "in_progress", "role": "assistant",
+                      "content": []}),
             _ev(resp_id, seq0 + 1, "response.output_text.delta",
                 item_id=msg_id, output_index=0, content_index=0,
                 delta=text),
             _ev(resp_id, seq0 + 2, "response.output_item.done", output_index=0,
                 item={"type": "message", "id": msg_id, "role": "assistant",
+                      "status": "completed",
                       "content": [{"type": "output_text", "text": text}]}),
         ]
         return out, seq0 + 3, [

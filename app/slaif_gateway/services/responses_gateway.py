@@ -479,15 +479,21 @@ def _derive_pair_local_codex_top_level_profile(
 ) -> tuple[frozenset[tuple[str, str, str]], bool]:
     """Derive pair-local top-level tool facts after route resolution.
 
-    The OpenCode 1.19.3 profile dispatches its streaming flat-function
-    lifecycle from the validated top-level taxonomy alone; its key and
-    route capability gates run in the caller. The 0.149 dialect remains
-    local-server-context gated.
+    The OpenCode 1.19.3 profile dispatches its streamed lifecycle from
+    ``stream is True`` alone, including seven-field no-tools auxiliary and
+    compaction requests where the taxonomy is absent or empty; the active
+    set then stays empty, so every newly generated tool call still fails
+    closed. Its key and route capability gates run in the caller. The
+    0.149 dialect remains local-server-context gated.
     """
     if client_module_id == OPENCODE_1193_RESPONSES_CLIENT_MODULE_ID:
-        if declared_tool_taxonomy is None or effective_body.get("stream") is not True:
+        if effective_body.get("stream") is not True:
             return frozenset(), False
-        return declared_tool_taxonomy, True
+        return (
+            declared_tool_taxonomy
+            if declared_tool_taxonomy is not None
+            else frozenset()
+        ), True
     if client_module_id != CODEX_0149_CLIENT_MODULE_ID or local_coding_server_context is None:
         return frozenset(), False
     declarations = (

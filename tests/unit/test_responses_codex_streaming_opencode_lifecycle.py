@@ -14,8 +14,10 @@ qualified id-less encrypted reasoning path:
   ``{type, id, encrypted_content}`` (bounded id, non-empty bounded cipher)
   under the replay profile; cumulative cipher bytes stay bounded.
 - ``_derive_pair_local_codex_top_level_profile`` dispatches the OpenCode
-  profile from the validated top-level taxonomy plus ``stream is True``
-  alone (no local-server context), while the 0.149 dialect stays
+  streamed lifecycle from ``stream is True`` alone (no local-server
+  context), including no-tools auxiliary/compaction requests whose
+  taxonomy is absent or empty (the active tool set then stays empty and
+  every new generated tool call fails closed); the 0.149 dialect stays
   context-gated.
 - The request policy admits streaming top-level function tools only when the
   selected-profile flag is forwarded; custom-tool streaming is deliberately
@@ -654,7 +656,10 @@ def test_derive_opencode_selected_profile() -> None:
     assert _derive_pair_local_codex_top_level_profile(
         declared_tool_taxonomy=TAXONOMY, **kwargs
     ) == (TAXONOMY, True)
-    assert _derive_pair_local_codex_top_level_profile(**kwargs) == (frozenset(), False)
+    assert _derive_pair_local_codex_top_level_profile(**kwargs) == (frozenset(), True)
+    assert _derive_pair_local_codex_top_level_profile(
+        declared_tool_taxonomy=frozenset(), **kwargs
+    ) == (frozenset(), True)
     assert _derive_pair_local_codex_top_level_profile(
         declared_tool_taxonomy=TAXONOMY,
         client_module_id=OPENCODE_1193_RESPONSES_CLIENT_MODULE_ID,
@@ -667,6 +672,105 @@ def test_derive_opencode_selected_profile() -> None:
         local_coding_server_context={"host": "x"},
         effective_body=body,
     ) == (TAXONOMY, True)
+
+
+def test_opencode_streamed_no_tools_aux_consumer_positive() -> None:
+    # Seven-field no-tools auxiliary/compaction lifecycle on the selected
+    # native profile: standard assistant message added/delta/done with an
+    # empty active tool set.  The message text is the only output item.
+    validator = _validator()
+    text = "Reading the probe file now."
+    message_done_item = {
+        "type": "message",
+        "id": "msg_1",
+        "status": "completed",
+        "role": "assistant",
+        "content": [{"type": "output_text", "text": text}],
+    }
+    events = [
+        {
+            "type": "response.created",
+            "sequence_number": 0,
+            "response": {
+                "id": "resp_1",
+                "object": "response",
+                "status": "in_progress",
+                "created_at": 1700000000,
+                "model": "qwen38-27b",
+            },
+        },
+        {
+            "type": "response.output_item.added",
+            "output_index": 0,
+            "sequence_number": 1,
+            "item": {
+                "type": "message",
+                "id": "msg_1",
+                "status": "in_progress",
+                "role": "assistant",
+                "content": [],
+            },
+        },
+        {
+            "type": "response.output_text.delta",
+            "item_id": "msg_1",
+            "output_index": 0,
+            "content_index": 0,
+            "sequence_number": 2,
+            "delta": text,
+        },
+        {
+            "type": "response.output_item.done",
+            "output_index": 0,
+            "sequence_number": 3,
+            "item": message_done_item,
+        },
+        {
+            "type": "response.completed",
+            "sequence_number": 4,
+            "response": {
+                "id": "resp_1",
+                "object": "response",
+                "status": "completed",
+                "created_at": 1700000000,
+                "model": "qwen38-27b",
+                "output": [message_done_item],
+                "usage": {
+                    "input_tokens": 4,
+                    "output_tokens": 2,
+                    "total_tokens": 6,
+                },
+            },
+        },
+    ]
+    _run(validator, *events)
+
+
+def test_opencode_streamed_no_tools_generated_tool_call_denied() -> None:
+    # With the active tool set empty (no-tools aux/compaction dispatch), a
+    # newly generated function_call item and its orphan done fail closed.
+    validator = _validator()
+    added = {
+        "type": "response.output_item.added",
+        "output_index": 0,
+        "sequence_number": 1,
+        "item": {
+            "type": "function_call",
+            "id": "fc_1",
+            "call_id": "call_1",
+            "name": "probe",
+            "namespace": "functions",
+            "arguments": "{}",
+        },
+    }
+    done = {
+        "type": "response.output_item.done",
+        "output_index": 0,
+        "sequence_number": 2,
+        "item": dict(added["item"], status="completed"),
+    }
+    assert validator.validate(added) is False
+    assert validator.validate(done) is False
 
 
 def test_derive_0149_requires_local_server_context() -> None:
