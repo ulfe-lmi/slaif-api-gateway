@@ -13,6 +13,7 @@ Fake producer evidence only: no network, provider, or database access.
 from __future__ import annotations
 
 import importlib
+import os
 import sys
 from pathlib import Path
 
@@ -30,6 +31,8 @@ def fake_handler(tmp_path, monkeypatch):
     workspace.mkdir()
     monkeypatch.setenv("AGENT_RESP_FAKE_RUN", str(run))
     monkeypatch.setenv("AGENT_RESP_FAKE_WORKSPACE", str(workspace))
+    prior_umask = os.umask(0o077)
+    os.umask(prior_umask)
     for name in list(sys.modules):
         if name.startswith("verify_agent_chat.loopback_responses_fake"):
             del sys.modules[name]
@@ -40,6 +43,9 @@ def fake_handler(tmp_path, monkeypatch):
         )
     finally:
         sys.path.remove(str(SCRIPTS_DIR))
+        # The fake module sets os.umask(0o077) at import time; restore the
+        # process umask so later tests are not polluted.
+        os.umask(prior_umask)
     return module.Handler
 
 
