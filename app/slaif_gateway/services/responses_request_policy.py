@@ -171,6 +171,29 @@ def codex_client_tool_taxonomy_id(policy: object) -> str | None:
     return None
 
 
+_EMPTY_VISIBLE_REASONING_PLACEHOLDER_KEYS = frozenset({"type", "summary", "encrypted_content"})
+
+
+def is_empty_visible_reasoning_placeholder(item: object) -> bool:
+    """Exact id-less empty reasoning replay placeholder (228-c LAN3).
+
+    The pinned OpenCode 1.19.3 SDK replays an assistant reasoning part with
+    empty visible text and zero-byte cipher as ``{"type": "reasoning",
+    "summary": [], "encrypted_content": ""}`` -- exactly three keys, no
+    ``id``/``status``/``content``/extra keys.  Only that exact shape carries
+    no visible text and no opaque data; anything else is meaningful history
+    and must be preserved.  Shared by the create-path provider-safe upstream
+    projection and its matching pre-rounding estimate deduction.
+    """
+    return (
+        isinstance(item, Mapping)
+        and set(item) == _EMPTY_VISIBLE_REASONING_PLACEHOLDER_KEYS
+        and item.get("type") == "reasoning"
+        and item.get("summary") == []
+        and item.get("encrypted_content") == ""
+    )
+
+
 class ResponsesRequestPolicyError(RequestPolicyError):
     """Request-policy error for Responses field validation."""
 
@@ -508,6 +531,10 @@ class ResponsesRequestPolicy:
                 else _codex_client_tool_declaration_estimation_bytes(
                     effective_body.get("input")
                 )
+            ),
+            omit_empty_visible_reasoning=(
+                self._codex_spec is not None
+                and self._codex_spec.omit_empty_visible_reasoning
             ),
         )
         input_ceiling = (
@@ -4601,8 +4628,26 @@ class ResponsesRequestPolicy:
         tools_schema_bytes: int = 0,
         tool_choice_bytes: int = 0,
         codex_client_tool_declaration_bytes: int = 0,
+        omit_empty_visible_reasoning: bool = False,
     ) -> tuple[int, int, int, tuple[str, ...]]:
         total_bytes = input_material_bytes
+        if omit_empty_visible_reasoning:
+            # Provider-safe projection (228-c LAN3, create only): the
+            # forwarded create body copy omits the exact empty reasoning
+            # placeholders for the selected client, so meter only what
+            # the provider receives.  The input-token-count and compact
+            # builders keep the default False and meter the full history
+            # bytes.  The deduction applies to the original full-history
+            # stats BEFORE the (total_bytes + 2) // 3 rounding;
+            # validation, resources, and HMAC authority still cover the
+            # complete history.
+            input_items = body.get("input")
+            if isinstance(input_items, list):
+                total_bytes -= sum(
+                    len(canonical_json_bytes(item))
+                    for item in input_items
+                    if is_empty_visible_reasoning_placeholder(item)
+                )
         if instructions is not None:
             total_bytes += len(instructions.encode("utf-8"))
         non_message_bytes = tools_schema_bytes + tool_choice_bytes

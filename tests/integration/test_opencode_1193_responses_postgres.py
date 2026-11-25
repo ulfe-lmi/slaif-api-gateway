@@ -14,6 +14,7 @@ The remaining cases pin the negative paths with no side effects.
 
 from __future__ import annotations
 
+from copy import deepcopy
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 import json
@@ -527,6 +528,22 @@ def _turn2_input() -> list[dict]:
     ]
 
 
+def _turn2_input_empty_placeholder() -> list[dict]:
+    """Turn 2 client input with the empty reasoning placeholder at index 2.
+
+    Synthetic stand-in for the LAN3 continuation shape inferred from the
+    native session store (empty visible reasoning plus empty
+    ``reasoningEncryptedContent``) and the pinned SDK serialization:
+    exactly ``{"type": "reasoning", "summary": [], "encrypted_content":
+    ""}`` replaces the baseline non-empty cipher node at history index 2.
+    Every other item is constructed from ``_turn2_input()`` and is
+    therefore byte-equivalent to the non-empty-cipher baseline.
+    """
+    input_ = _turn2_input()
+    input_[2] = {"type": "reasoning", "summary": [], "encrypted_content": ""}
+    return input_
+
+
 class _Adapter:
     def __init__(self, turns: list[list[dict]]) -> None:
         self._turns = list(turns)
@@ -1005,6 +1022,11 @@ async def test_mock_http_factory_adapter_settles_both_turns(
             assert key.token_hash.encode() not in content
             assert case["api_key_value"].encode() not in content
 
+        # Baseline proof: the opaque non-empty cipher reasoning node (input
+        # index 2) is still forwarded unchanged on the turn-2 wire.
+        turn2_body = json.loads(upstream.calls[1].request.content)
+        assert turn2_body["input"][2] == _turn2_input()[2]
+
     await session.refresh(key)
     # Settlement mirrors the adapter-mocked main case exactly: two finalized
     # turns of 5 in / 2 out at the seeded 2.00/8.00 per-1M pricing.
@@ -1034,6 +1056,167 @@ async def test_mock_http_factory_adapter_settles_both_turns(
     reservations = await _reservation_rows(session, key.id)
     assert len(reservations) == 2
     assert all(reservation.status == "finalized" for reservation in reservations)
+    reservations = await _reservation_rows(session, key.id)
+    assert len(reservations) == 2
+    assert all(reservation.status == "finalized" for reservation in reservations)
+
+
+# --- Real-factory empty reasoning-placeholder projection (228-c item) -------
+#
+# Synthetic case for the empty reasoning placeholder inferred from LAN3
+# (native session store: empty visible reasoning and empty
+# ``reasoningEncryptedContent``; pinned SDK serialization: ``summary: []``
+# plus ``encrypted_content: ""``).  This is NOT a captured full LAN3 body;
+# it is a minimal representative stand-in.  The real provider factory and
+# adapter stay unpatched (upstream HTTP loopback-mocked); the case pins the
+# required projection: after full gateway validation the provider body
+# must omit ONLY the placeholder node, with all remaining history
+# byte-equivalent and order-preserved, while settlement and same-key tool
+# ownership mirror the two-turn non-empty-cipher baseline, which keeps its
+# opaque cipher node forwarded unchanged.
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "case", _MOCK_ADAPTER_CASES, ids=["openai-native", "openai-compatible"]
+)
+async def test_mock_http_factory_adapter_omits_empty_reasoning_placeholder(
+    async_test_session, monkeypatch, case
+):
+    """Client input retains the empty placeholder; the provider body omits it.
+
+    Synthetic LAN3-representative case: the turn-2 client input carries the
+    empty reasoning placeholder at history index 2 and no non-empty cipher
+    node.  After full gateway validation the upstream body captured by
+    respx must contain exactly the client input minus that node (4 items,
+    byte-equivalent, order-preserved), with settlement and same-key tool
+    ownership mirroring the two-turn baseline.
+    """
+    session = async_test_session
+    owner, cohort, key, route = await _seed_opencode_world(
+        session,
+        caps=_OPENCODE_CAPS,
+        provider=case["provider"],
+        public_model=case["public_model"],
+        upstream_model=case["upstream_model"],
+    )
+    monkeypatch.setenv(case["api_key_env_var"], case["api_key_value"])
+    monkeypatch.delenv("OPENAI_UPSTREAM_API_KEY", raising=False)
+
+    async def db(request=None):
+        yield session
+
+    monkeypatch.setattr(gateway, "_get_db_session_after_auth_header_check", db)
+    monkeypatch.setattr(
+        gateway,
+        "_resolve_responses_route",
+        _gate_route_resolver(
+            _probe(
+                route.id,
+                _route_caps(_OPENCODE_CAPS),
+                provider=case["provider"],
+                provider_kind=case["provider_kind"],
+                base_url=case["base_url"],
+                api_key_env_var=case["api_key_env_var"],
+                public_model=case["public_model"],
+                upstream_model=case["upstream_model"],
+            )
+        ),
+    )
+
+    auth = _auth_key(key)
+    with respx.mock(assert_all_called=False) as router:
+        upstream = router.route(method="POST", url=f"{case['base_url']}/responses")
+        upstream.mock(
+            side_effect=[
+                httpx.Response(
+                    200,
+                    content=_sse_body(_turn1_events()),
+                    headers={"content-type": "text/event-stream"},
+                ),
+                httpx.Response(
+                    200,
+                    content=_sse_body(_turn2_events()),
+                    headers={"content-type": "text/event-stream"},
+                ),
+            ]
+        )
+
+        await _settle_turn1(session, auth, _settings(), key, model=case["public_model"])
+
+        client_input = _turn2_input_empty_placeholder()
+        sent_input = deepcopy(client_input)
+        assert client_input[2] == {"type": "reasoning", "summary": [], "encrypted_content": ""}
+        body2 = _full_body(stream=True)
+        body2["model"] = case["public_model"]
+        body2["input"] = client_input
+        response2 = await handle_response_create(
+            payload=_payload(body2), authenticated_key=auth, settings=_settings()
+        )
+        joined2 = "".join([s async for s in response2.body_iterator])
+        assert "response.completed" in joined2
+        assert "response.failed" not in joined2
+
+        # Wire facts: one upstream POST per admitted turn, exact model
+        # substitution, stream true, Bearer substitution, no secrets on the
+        # wire, and the turn-2 provider body omits ONLY the empty
+        # placeholder node while the remaining history is byte-equivalent
+        # and order-preserved.  The client sent no non-empty cipher node in
+        # this variant, so none may appear in the provider body.
+        assert upstream.calls.call_count == 2
+        for call in upstream.calls:
+            request_body = json.loads(call.request.content)
+            assert request_body["model"] == case["upstream_model"]
+            assert request_body["stream"] is True
+            assert (
+                call.request.headers["authorization"] == f"Bearer {case['api_key_value']}"
+            )
+            content = call.request.content
+            assert _HMAC_SECRET.encode() not in content
+            assert key.token_hash.encode() not in content
+            assert case["api_key_value"].encode() not in content
+
+        # Projection: the provider body keeps exactly the client input with
+        # the placeholder node at index 2 removed (4 items, order-preserved,
+        # byte-equivalent), derived from a deep copy so the expected shape
+        # is the original client input, not whatever the live list holds.
+        expected_forwarded = sent_input[:2] + sent_input[3:]
+        assert len(expected_forwarded) == 4
+        turn2_body = json.loads(upstream.calls[1].request.content)
+        forwarded_input = turn2_body["input"]
+        assert forwarded_input == expected_forwarded
+        assert json.dumps(forwarded_input, sort_keys=True) == json.dumps(
+            expected_forwarded, sort_keys=True
+        )
+        assert {"type": "reasoning", "summary": [], "encrypted_content": ""} not in forwarded_input
+        assert _turn2_input()[2] not in forwarded_input
+
+    await session.refresh(key)
+    # Two-turn actual-usage settlement with zero pending state, mirroring
+    # the adapter-mocked and real-factory baselines exactly.
+    assert key.requests_used_total == 11
+    assert key.tokens_used_total == 12_359
+    assert key.tokens_reserved_total == 0
+    assert key.requests_reserved_total == 0
+    assert key.cost_used_eur == Decimal("7.250052")
+    refs = await _ref_rows(session, key.id)
+    assert len(refs) == 3
+    assert {r.item_id_hmac for r in refs} == {D_V1_RS, D_V3_CIPHER, D_V1_FC}
+    assert {r.item_kind for r in refs} == {"reasoning", "function_call"}
+    fc = next(r for r in refs if r.item_kind == "function_call")
+    assert fc.call_id_hmac == D_V1_CALL
+    assert fc.tool_namespace == "functions"
+    assert fc.tool_name == "read"
+    assert fc.route_id == route.id
+    assert fc.provider == case["provider"]
+    assert fc.upstream_model == case["upstream_model"]
+    for reasoning in (r for r in refs if r.item_kind == "reasoning"):
+        assert reasoning.call_id_hmac is None
+        assert reasoning.tool_namespace is None
+        assert reasoning.tool_name is None
+    ledger = await _ledger_rows(session, key.id)
+    assert len(ledger) == 2
+    assert all(row.success is True and row.accounting_status == "finalized" for row in ledger)
     reservations = await _reservation_rows(session, key.id)
     assert len(reservations) == 2
     assert all(reservation.status == "finalized" for reservation in reservations)

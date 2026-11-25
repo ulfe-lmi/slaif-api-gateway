@@ -438,6 +438,16 @@ OPENCODE_1193_RESPONSES_POLICY_SPEC = dataclasses.replace(
     # carries no ciphertext authority: v3 ciphertext references are issued
     # only from nonempty validated finalized output.
     allow_empty_visible_reasoning=True,
+    # Provider-safe upstream projection (create only, 228-c LAN3): the
+    # pinned SDK replays the empty id-less reasoning placeholder
+    # verbatim, and the qualified openai-compatible backend rejects that
+    # exact empty canonical item.  The exact empty placeholder (no
+    # visible text, no cipher, no ID) is omitted from the forwarded
+    # create body copy and that create request's pre-rounding input
+    # estimate only; acceptance of visible reasoning stays
+    # allow_empty_visible_reasoning, and full-history
+    # validation/resource/HMAC authority are unchanged.
+    omit_empty_visible_reasoning=True,
     # The captured OpenCode 1.19.3 visible reasoning lifecycle (added item
     # without summary, done item with summary and no content key) is a
     # property of this selected native profile's wire, not of the local

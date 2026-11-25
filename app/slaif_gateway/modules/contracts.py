@@ -116,6 +116,15 @@ class ResponsesClientPolicySpec:
     custom_client_tools: frozenset[tuple[str, str, str]] = frozenset({("functions", "exec", "custom")})
     allow_sparse_visible_reasoning: bool = False
     allow_empty_visible_reasoning: bool = False
+    # Provider-safe upstream projection (create request only, 228-c LAN3):
+    # the selected client's exact empty id-less reasoning replay
+    # placeholder may be omitted from the forwarded create body copy AND
+    # from that create request's pre-rounding input estimate; the
+    # input-token-count and compact builders keep the full history bytes.
+    # This is separate from ACCEPTANCE of empty visible reasoning
+    # (allow_empty_visible_reasoning), which frozen Codex presets may set
+    # via DATA; frozen presets keep this False.
+    omit_empty_visible_reasoning: bool = False
     allow_sparse_function_events: bool = False
     # Selected native profiles whose pinned SDK wire requires a valid
     # ``output_index`` on every ``response.output_item.added``/``done``

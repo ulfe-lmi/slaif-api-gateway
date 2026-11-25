@@ -209,6 +209,7 @@ from slaif_gateway.services.responses_request_policy import (
     ResponsesRequestPolicy,
     apply_codex_positional_prepared_estimate,
     apply_codex_route_limits,
+    is_empty_visible_reasoning_placeholder,
     codex_client_tool_declarations,
     codex_client_tool_taxonomy_id,
     codex_replay_request_candidates,
@@ -342,6 +343,35 @@ class _ExternalToolPricingFacts:
     fx: FxConversionResult
 
 
+def _project_empty_visible_reasoning(
+    effective_body: Mapping[str, object],
+) -> Mapping[str, object]:
+    """Provider-safe projection (228-c LAN3) of the create body copy.
+
+    Some openai-compatible servers reject the canonical id-less empty
+    reasoning replay placeholder with 400 (they require a non-canonical
+    nonempty ``content`` array on reasoning input items).  The validated
+    original is retained for resource accounting, ownership, and replay
+    authority over the complete history; this drops ONLY the exact empty
+    placeholder from the forwarded copy, and forwarding still waits for
+    quota admission.  No mutation, no other key dropped; meaningful
+    items are preserved as-is.
+    """
+    input_items = effective_body.get("input")
+    if not isinstance(input_items, list):
+        return effective_body
+    kept = [
+        item
+        for item in input_items
+        if not is_empty_visible_reasoning_placeholder(item)
+    ]
+    if len(kept) == len(input_items):
+        return effective_body
+    projected = dict(effective_body)
+    projected["input"] = kept
+    return projected
+
+
 def _build_safe_responses_upstream_body(
     *,
     policy_result: ResponsesPolicyResult,
@@ -349,6 +379,7 @@ def _build_safe_responses_upstream_body(
     omit_prompt_cache_key: bool = False,
     lower_codex_0162_initial_declaration: bool = False,
     lower_codex_0162_positional_history: bool = False,
+    omit_empty_visible_reasoning: bool = False,
 ) -> dict[str, object]:
     try:
         effective_body = policy_result.effective_body
@@ -372,6 +403,8 @@ def _build_safe_responses_upstream_body(
             # HMAC signing, never afterward, and forwarding still waits for
             # quota admission.
             effective_body = codex_0162_lower_initial_additional_tools(effective_body)
+        if omit_empty_visible_reasoning:
+            effective_body = _project_empty_visible_reasoning(effective_body)
         normalized_request = normalize_responses_upstream_request(
             effective_body,
             requested_model=policy_result.effective_body["model"],
@@ -1619,6 +1652,10 @@ async def handle_response_create(
                     client_module_id=client_module.module_id,
                     local_coding_server_context=local_coding_server_context,
                 ),
+                omit_empty_visible_reasoning=(
+                    client_module.policy_spec is not None
+                    and client_module.policy_spec.omit_empty_visible_reasoning
+                ),
             )
             policy_result = apply_codex_positional_prepared_estimate(
                 policy_result,
@@ -1699,6 +1736,10 @@ async def handle_response_create(
         lower_codex_0162_initial_declaration=_codex_0162_local_pair_lowers_declaration(
             client_module_id=client_module.module_id,
             local_coding_server_context=local_coding_server_context,
+        ),
+        omit_empty_visible_reasoning=(
+            client_module.policy_spec is not None
+            and client_module.policy_spec.omit_empty_visible_reasoning
         ),
     )
     external_pricing_lookup = None
@@ -1792,6 +1833,10 @@ async def handle_response_create(
                     lower_codex_0162_initial_declaration=_codex_0162_local_pair_lowers_declaration(
                         client_module_id=client_module.module_id,
                         local_coding_server_context=local_coding_server_context,
+                    ),
+                    omit_empty_visible_reasoning=(
+                        client_module.policy_spec is not None
+                        and client_module.policy_spec.omit_empty_visible_reasoning
                     ),
                 )
                 current_policy_result = apply_codex_positional_prepared_estimate(
@@ -1889,6 +1934,10 @@ async def handle_response_create(
             lower_codex_0162_initial_declaration=_codex_0162_local_pair_lowers_declaration(
                 client_module_id=client_module.module_id,
                 local_coding_server_context=local_coding_server_context,
+            ),
+            omit_empty_visible_reasoning=(
+                client_module.policy_spec is not None
+                and client_module.policy_spec.omit_empty_visible_reasoning
             ),
         )
     # Qualified native wire repair gate (228-c transport defect): only the
