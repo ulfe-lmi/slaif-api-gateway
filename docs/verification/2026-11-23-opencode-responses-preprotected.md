@@ -1,8 +1,11 @@
 # 228-a/228-b OpenCode 1.19.3 Responses Module — Preprotected Verification Record
 
-Record finalized 2026-11-24 (228-b refresh of the 228-a record; this
-filename is dated 2026-11-23 to match the crosslinks already committed
-in `docs/responses-compatibility.md`).
+Record finalized 2026-11-24, refreshed 2026-11-25 (228-c final
+candidate `b6e85b79` evidence, LAN1 failure + wire repair, run 2
+terminal FAIL at a later stream event; the 228-a/228-b content is
+preserved as labeled history).
+This filename is dated 2026-11-23 to match the crosslinks already
+committed in `docs/responses-compatibility.md`.
 All evidence was produced at the tested implementation heads named
 below (labeled per head; the later code commits are re-covered by the
 467-test focused regression, the 20-test PG run, and the 10-pass
@@ -19,15 +22,43 @@ governance run at the final 228-b code head).
   `get_provider_adapter` monkeypatch); root-verified PG reconciliation:
   21 finalized ledger rows / 21 finalized reservations, 227,998 tokens,
   0 pending/reserved; receipts/journals preserved (see 228-c
-  checkpoint). The protected LAN launch half of item 6 remains
-  `not_run`, pending the root CI/setup review of the frozen candidate
-  (a CI/setup review, not a human-decision gate). The 228-a candidate
+  checkpoint). The protected LAN launch half of item 6 is partially
+  executed: the root-dispatched LAN1 native tool-loop run failed at
+  the task Gateway validator (demonstrated missing `output_index`
+  transport defect; zero settled usage); the bounded wire repair
+  landed at final candidate head `b6e85b79` with all CI green; the
+  root-dispatched LAN retry (run 2, `runs/228c-native-lan-2`)
+  TERMINAL FAILED at 130.544 s: the repaired first missing-index
+  gap was passed, but five main attempts then failed at a LATER
+  stream event with the same `responses_stream_event_not_supported`
+  code (charged as estimates); one auto-title aux settled (612 in
+  / 46 out); all 6/6 key settled-request slots consumed. No key
+  replacement, reset, or cap change. A bounded settled-request
+  extension (6 -> 12, same key, within the unchanged remaining
+  token/cost/time budgets) was requested asynchronously from the
+  human maintainer; no traffic or quota mutation until that
+  explicit reply. The 228-a candidate
   label `PREPROTECTED_READY` (candidate reviewable) is superseded by
   this b-refresh; it never meant "qualified".
-- Protected live-qualification gate: `not_run`.
-- Real provider inference: `not_run` (the only LAN traffic to date is
-  the read-only metadata preflight GET documented in the 228-c
-  checkpoint; no LAN inference).
+- Protected live-qualification gate: final qualification `not_run`
+  (LAN1 + one HTTP diagnostic probe executed, both failed at the task
+  Gateway validator with zero settled usage; repair verified in CI;
+  run 2 executed and TERMINAL FAILED at a later stream event; the
+  exact later-rejection structure is to be captured by the prepared
+  task-local observer extension before the next scoped fix).
+- Real provider inference: ATTEMPTED; tool loop FAILED during
+  upstream-response validation (LAN1
+  native tool loop + one synthetic HTTP diagnostic probe + run 2
+  native tool loop; every main attempt terminated at the task Gateway
+  validator with `response.failed` code
+  `responses_stream_event_not_supported`; LAN1 + probe: 10 failed
+  ledger rows / 10 released reservations, zero settled; run 2: one
+  auto-title aux settled (612 in / 46 out) + five main failures
+  charged as estimates (48,422 tokens / EUR 0.048422), 6 finalized
+  reservations, all 6 key request slots consumed; provider usage unknown
+  not zero, key 6 used / 49,080 tokens / EUR 0.04908 / 0 reserved /
+  0 fenced; the only other LAN traffic is the read-only metadata
+  preflight GET documented in the 228-c checkpoint).
 - Governance: resolved at 228-b — focused OAP governance 10 passed at
   the final 228-b code head (the a-era 1 failed / 9 passed is preserved
   as immutable history; see below).
@@ -37,7 +68,14 @@ governance run at the final 228-b code head).
   stock native retries; six is a settled-request quota and failed
   admissions can release reservations. This is not a pending
   human-decision gate (see Approved bounded live plan).
-- Final PR-head CI: pending (GitHub, after push; not claimed as pass).
+- Final PR-head CI: GREEN — three workflow identities, 9/9 jobs on
+  candidate head `b6e85b79` (verified 2026-11-25 ~05:45Z): CI run
+  `45553132761` (6 jobs), CodeQL `45553132702` (1 job), Code Quality
+  PR #401 `45553124958` (2 jobs), CodeQL aggregate success. AGENTIC-40
+  machine gate bound in the manifest `preprotected_index_repair_gate` block:
+  604 verified unique node IDs (12 unit files of the 582 combined run
+  plus the 22-case PG file) with node-set hash and all-pass receipts
+  (cross-reference only; no duplicated arrays here).
 - No production certification, universal compatibility, or security
   certification claim.
 
@@ -75,18 +113,29 @@ governance run at the final 228-b code head).
   `f7bad64806ba0e83901daba7c5c460ce1b03dbc7`. Profile DATA unchanged
   (same fixture digest; client module `opencode-1.19.3-responses-v1`
   version `1`).
+- 228-c final repair candidate head:
+  `b6e85b7930c20cb36f5142aea146fba617867aaf` (chain from the 228-c
+  final app candidate: `b66b8b05` docs, `2f7970fa` docs, `564d21ba`
+  merge of `origin/main` `79265a89`, `b6e85b79` scoped
+  missing-`output_index` wire repair). This is the app tree the task
+  Gateway currently runs and the head of the all-green CI. Tree
+  identities: `HEAD:app` =
+  `bf0958c7cae0bde896a9395ea96c03709fd3f752`;
+  `HEAD:app/slaif_gateway` =
+  `5e8c1606f37e9f2882b3fb1647259e56792c29c6`. Profile DATA unchanged
+  (same fixture digest; client module
+  `opencode-1.19.3-responses-v1` version `1`).
 - Remote main reconciliation: remote `main` advanced to
   `79265a8919a74a71083eded279bfcf79d00cd80a` (merge of docs-only PR
   #402, `docs/responses-input-items-64k`: four docs about the ~65536
   input-items limit — `docs/codex-tuning-qwen.md`,
   `docs/configuration.md`, `docs/runbooks/codex-input-item-count.md`,
   `docs/upgrade-runbook.md`; disjoint from `app/` and `tests/`, so the
-  app tree and all six case evidence are unaffected). Remote `main` is
-  NOT an ancestor of this head (branch base
-  `5f0f4c34ff13f1d76ae050708a37f387e6988451`); `origin/main` is
-  merged into this branch through primary Git ownership before the
-  final candidate freeze (no rebase, no reset; all repo docs and the
-  untracked trio preserved), not claimed as already reconciled.
+  app tree and all six case evidence are unaffected). Remote `main` IS
+  now an ancestor: `origin/main` was merged into this branch through
+  primary Git ownership as `564d21ba` before the final candidate
+  freeze (no rebase, no reset; all repo docs and the untracked trio
+  preserved).
 - Tree identities at `55482cc16b4f40530498040c70e0151433b3a9c1`:
   `HEAD:app` = `30610d166c7de6a55510774a76af51125f54e044`;
   `HEAD:app/slaif_gateway` = `1c254ceb09b9ebf155102fc15e8d25c1f985b566`.
@@ -407,15 +456,113 @@ governance run at the final 228-b code head).
 - Command:
   `PYTHONDONTWRITEBYTECODE=1 TMPDIR=/home/janezp/codex-work/tmp-228 TMP=$TMPDIR TEMP=$TMPDIR .venv/bin/python -m pytest tests/unit/test_oap_governance.py -q -o addopts= -p no:cacheprovider`
 
-### Task-owned native setup (staged; loopback mock half complete, LAN half not_run)
+### 228-c final candidate evidence (b6e85b79; CI green)
+
+- 582-test combined focused unit run at candidate head `b6e85b79`
+  (12 unit files, one run; receipts are never summed): includes the
+  29-test new repair file (pure validator cases plus 3 wire cases)
+  and root's independently re-run 242-test subset
+  (`test_responses_codex_streaming_tools.py` 197 +
+  `test_responses_codex_streaming_opencode_lifecycle.py` 45).
+- The 3 wire cases are a SUBSET of the 29-test file: synthetic
+  profile with AuthGatewayKey-style DB/route fixtures; HTTP
+  authentication is NOT proven there — HTTP evidence remains the six
+  loopback cases and the existing e2e.
+- 22-test real isolated PostgreSQL run (exit 0) on the NEW
+  disposable database `slaif228_index_fix_test` (`TEST_DATABASE_URL`
+  on `postgresql+asyncpg://postgres@127.0.0.1:54401/slaif228_index_fix_test`;
+  the qualification DB `slaif228_test` was not touched). Same
+  auth-scope wording: AuthGatewayKey-style fixtures; HTTP auth
+  separate. The two new cases: (a) missing-`output_index` two-turn
+  settlement — only the FIRST added-absence is observed natively, the
+  second-turn extension is SYNTHETIC; (b) contradictory-terminal
+  denial → `response.failed` +
+  `responses_stream_event_not_supported` with estimated settlement +
+  finalized reservation + 0 refs.
+- AGENTIC-40 machine gate: one `--collect-only` over the verified
+  12-file 582 selection plus the 22-case PG file = 604 unique node
+  IDs; the node-set list, count, hash, and all-pass execution receipts
+  are bound in the manifest `preprotected_index_repair_gate` block
+  (cross-reference only; no duplicated arrays here). External checks:
+  the three workflow identities / 9 jobs listed in Status, all green.
+- Mock-half reuse: all six loopback cases' upstream events carry
+  explicit output indexes, so the repair derives nothing for them
+  (inert); their evidence is reused without rerun.
+
+### 228-c LAN half (partially executed; repair landed; run 2
+terminal FAIL at a later stream event)
+
+- LAN1 (root-dispatched, run root `runs/228c-native-lan-1`,
+  `live_tool_loop`, short-lived key `d2ee3f25…`, model
+  `qwen38-27b`, 540 s watchdog): 134.178 s / exit 1 / no tool;
+  `response.failed` code `responses_stream_event_not_supported`. PG:
+  9 failed ledger rows (HTTP 200, accounting failed) + 9 released
+  reservations; key 0 used / 0 reserved / 0 fenced; provider usage
+  UNKNOWN (not zero — provider work occurred before the gateway
+  failure point); the prior 21 mock finalized rows preserved.
+- HTTP diagnostic probe (root-executed, exactly 1 request, 1.406 s,
+  exit 0, same key/candidate, 7-field stream body, max output 128,
+  no retries): first rejection was
+  `response.output_item.added` (seq 2, item present, top-level
+  `output_index` ABSENT, unknown keys 0) — demonstrates the cause of
+  the FIRST failure; NOT proof of no later gap. +1 failed row / +1
+  released reservation → key totals 10 failed / 10 released, 0 used.
+- Observer artifacts (0600, preserved; hashes recorded before the
+  observer Gateway was retired):
+  `native/obs228c-rejections.json` sha256
+  `ea6698514492c7a6893b27ae151b00cbf515032030458f558d53f9908f87ccae`
+  (2303 B); `gw-observer.out` sha256
+  `0943f75e50dc344369c965c163ba8b290c7118965fe689a94bb83193cad248e9`
+  (183 B); `gw-observer.err` sha256
+  `10235a3ce4b354893b4bcb6c14915efd9a6dce1a7902e5cb0f861390e678645d`
+  (276 B).
+- Bounded wire repair (candidate `b6e85b79`): typed profile flag
+  `repair_missing_output_indices` (default `False`), enabled only for
+  the selected native pair (exact client module identity plus resolved
+  server module `openai-compatible`); `require_output_indices = True`
+  kept; derived positions fail closed on ambiguity, conflict,
+  orphans, or order contradiction; the terminal-order guard covers
+  BOTH `response.completed` and `response.incomplete` forms; the
+  original provider status is preserved on the wire (validation-only
+  normalization is never forwarded); legacy profiles unchanged.
+- LAN retry (run 2, `runs/228c-native-lan-2`): root-dispatched on the
+  all-green candidate (400 s watchdog, within the 423.758 s remaining
+  at last observation); TERMINAL FAILED at 130.544 s / exit 1 / no
+  tool / one error event / final marker mismatch / config removed /
+  canary clean. The repaired first missing-index gap was passed;
+  five main attempts then failed at a LATER stream event with the
+  same `responses_stream_event_not_supported` code (5 rows charged
+  as estimates; 47,940 in / 482 out); one auto-title aux settled
+  (612 in / 46 out); all 6/6 key settled-request slots consumed, so
+  the final 429 on the last attempt is secondary to the stream
+  defect. Key PG totals: 1 finalized + 5 estimated + 10 failed
+  ledger rows; 6 finalized + 10 released reservations; 49,080
+  tokens / EUR 0.04908; 0 reserved / 0 fenced; no key replacement,
+  no reset, no cap change. The settled-request extension (6 -> 12,
+  same key, unchanged remaining token/cost/time budgets) was
+  requested asynchronously from the human maintainer; no traffic or
+  quota mutation until the explicit reply. The exact later rejection
+  structure is to be captured by the prepared task-local observer
+  extension (safe public metadata only; offline canary 65/65 PASS;
+  no server started) before any next scoped code fix. Spend to date
+  under the bounded plan (root conservative count): 8 LAN tests (7
+  native outer + 1 HTTP diagnostic probe); after run 2,
+  293.214 s OpenCode / 851.194 s aggregate wall remaining; no counter reset.
+
+### Task-owned native setup (loopback mock half complete; LAN half partially executed; run 2 terminal FAIL at a later stream event)
 
 - Services: task-owned PostgreSQL 16 on `127.0.0.1:54401` (database
-  `slaif228_test`, trust, loopback only); task-owned Gateway at
-  `http://127.0.0.1:18310/v1` running code
-  `3dde03bf6b7018f6bef2abfe9b0f645a5951a073` (the 228-c final app
-  candidate — the app tree all six loopback cases ran on); separate
-  loopback
-  mock upstream at `127.0.0.1:18031` reusing the existing
+  `slaif228_test`, trust, loopback only; PID 33486); the six
+  loopback cases ran on the task Gateway at
+  `http://127.0.0.1:18310/v1` running app candidate `3dde03bf`; the
+  observer Gateway (PID 1168152) used for the LAN1 diagnosis was
+  retired and replaced by a normal hook-free uvicorn Gateway PID
+  1233012 running the final candidate `b6e85b79` (app tree
+  `bf0958c7`), same private env, `WEB_CONCURRENCY=1`,
+  `REQUEST_CAPTURE_ENABLED=false`, private 0600 log
+  `native/gateway-b6e85b79-hookfree.log`; separate loopback mock
+  upstream at `127.0.0.1:18031` (PID 1074660, compaction case)
+  reusing the existing
   `scripts/verify_agent_chat/loopback_responses_fake.py` (no second
   SSE producer).
 - Gateway env: `REQUEST_CAPTURE_ENABLED=false`, Redis rate limits off;
@@ -429,21 +576,59 @@ governance run at the final 228-b code head).
   models 403 `endpoint_not_allowed`, minimal body 400
   `opencode_1193_fields`, wrong model 403, and PG counters
   0 admitted / 0 reserved / 0 used (no admission).
+- Short-lived LAN key `d2ee3f25…` (0600 private file, value never
+  printed; `/v1/responses`-only, hosted denied): pin
+  `opencode-1.19.3-responses-v1` version `1` digest
+  `592c5d1baa7aa3a805320411f3f961521ba72b30cc34cafe01cb755ddf69f0ff`;
+  the four required capabilities (`codex_request_envelope`,
+  `codex_client_tools`, `codex_streaming_tool_events`,
+  `codex_encrypted_reasoning_replay`); provider `qwen-student-lan`,
+  model `qwen38-27b`; max 6 settled requests, 970,454 tokens,
+  EUR 0.970454; expiry re-narrowed to
+  2026-11-25T06:35:59.992285Z (all other row fields verified
+  unchanged); 0 used / 0 reserved / 0 fenced; no settled provider
+  usage (LAN1 + probe failed at the gateway validator; provider usage
+  unknown, not zero).
 - Pinned-binary launcher (task-local, nonsecret setup record, not
-  committed; the secondary-owned live tool-loop branch is in prep):
-  loopback mock half complete (six cases, see the 228-c checkpoint);
-  the protected LAN launch half awaits the root CI/setup gate:
-  `not_run`.
+  committed; the secondary-owned live tool-loop branch executed for
+  LAN1, probe, and run 2): loopback mock half complete (six cases,
+  see the 228-c checkpoint); the LAN half is partially executed
+  (LAN1 + probe failed at the gateway validator; run 2 TERMINAL
+  FAILED at a later stream event — see the "228-c LAN half" evidence
+  subsection).
 
 ### Not run
 
-- Order item 6, protected LAN half: bounded human-approved LAN plan
-  staged (provider/route/pricing seeded in the task PG; short-lived
-  LAN key created at dispatch only); NOT executed; `not_run`, gated on
-  root CI/setup review of the frozen candidate (not a human decision).
-- Real provider inference: `not_run` (the only LAN traffic to date is
-  the read-only metadata preflight GET; no LAN inference).
-- Protected live-qualification gate: `not_run`.
+- Order item 6, protected LAN half: PARTIALLY EXECUTED — LAN1
+  (root-dispatched) and one HTTP diagnostic probe executed; both
+  failed at the task Gateway validator with zero settled usage (10
+  failed ledger rows / 10 released reservations; key 0 used /
+  0 reserved / 0 fenced; provider usage unknown, not zero). The
+  demonstrated missing-`output_index` defect is repaired at
+  `b6e85b79` (all CI green); the root-dispatched run 2 retry
+  (`runs/228c-native-lan-2`) TERMINAL FAILED at 130.544 s / exit 1 /
+  no tool / final marker mismatch. The repaired first missing-index
+  gap was passed; five main attempts then failed at a LATER stream
+  event with the same `responses_stream_event_not_supported` code
+  (5 charged as estimates, 47,940 in / 482 out; one auto-title aux
+  settled, 612 in / 46 out; 6/6 key slots consumed). The exact
+  later-rejection structure is to be captured by the prepared
+  task-local observer extension (offline canary 65/65 PASS; no
+  server started) before the next scoped fix. The CI/setup review
+  gate is satisfied (CI green); this is not a human decision.
+- Real provider inference: ATTEMPTED; tool loop FAILED during
+  upstream-response validation (see the
+  "228-c LAN half" evidence subsection); one auxiliary request
+  settled with provider-reported usage and five main failures were
+  charged as estimates; actual main provider work/cost is unknown.
+  The only other LAN traffic is the read-only metadata
+  preflight GET.
+- Protected live-qualification gate: final qualification `not_run`
+  (LAN1 + one HTTP diagnostic probe failed at the task Gateway
+  validator with zero settled usage; run 2 executed and TERMINAL
+  FAILED at a later stream event; the prepared task-local observer
+  extension will capture the exact later-rejection structure before
+  the next scoped fix).
 
 ## Findings
 
@@ -508,7 +693,7 @@ as "227-reused": Chat-only, that execution only, with its documented
 stock-retry exception. No 227 evidence is relabeled as a 228 execution,
 and nothing in it qualifies this Responses module.
 
-## 228-c checkpoint (loopback mock half complete; protected LAN half not run)
+## 228-c checkpoint (loopback mock half complete; LAN half partially executed — LAN1 failed, wire repair at b6e85b79, run 2 terminal FAIL at a later stream event)
 
 - Guard correction: `response.reasoning_summary_part.done` is now
   scoped by the new selected-native typed stream property
@@ -698,21 +883,44 @@ and nothing in it qualifies this Responses module.
   title aux = 21. Per-key final counters: baseline 5/6 requests
   (104 tokens), reasoning 3/6 (62), each visible case 3/6 (92 each),
   compaction 4/6 (227,556).
-- Protected LAN launch: `not_run`. Gated on root CI/setup review of
-  the frozen candidate (`3dde03bf`: three workflow identities, nine
-  jobs, CodeQL aggregate) and the staged target/setup; the bounded
-  LAN plan is human-approved; no further human decision is pending.
+- Protected LAN launch: partially executed — LAN1 (root-dispatched)
+  failed at the task Gateway validator (demonstrated missing
+  `output_index` transport defect; 9 failed ledger rows / 9 released
+  reservations; zero settled usage; provider usage unknown, not
+  zero); one root-executed HTTP diagnostic probe (1.406 s) confirmed
+  the first rejection structure (+1 failed row / +1 released
+  reservation). The bounded wire repair landed at final candidate
+  `b6e85b79`; all CI green (three workflow identities / 9 jobs); the
+  root-dispatched run 2 retry (`runs/228c-native-lan-2`) TERMINAL
+  FAILED at 130.544 s at a later stream event (first repaired gap
+  passed; five main attempts failed with the same
+  `responses_stream_event_not_supported` code; one auto-title aux
+  settled 612 in / 46 out; 47,940 in / 482 out charged as
+  estimates; 6/6 key slots consumed; key totals 49,080 tokens / EUR
+  0.04908; no replacement, no reset, no cap change). The bounded LAN
+  plan remains human-approved; the settled-request extension (6 ->
+  12, same key, unchanged remaining budgets) is an asynchronous
+  request to the human maintainer — no traffic or quota mutation
+  until the explicit reply. Details in the "228-c LAN half" evidence
+  subsection.
 
-## Approved bounded live plan (declared; NOT yet executed)
+## Approved bounded live plan (partially executed; run 2 terminal FAIL at a later stream event)
 
-Status: protected/`not_run`. The bounded LAN qualification is already
-human-approved ("Approve 100 LAN tests with built-in retries"); there
-is no further human decision gate. Execution remains gated on the
-root-reviewed frozen candidate (green CI) and the concrete
-target/setup, with no counter reset. The order-item-6 loopback mock
-half is complete (six cases, see 228-c checkpoint); only the LAN
-launch remains under this gate (a CI/setup review, not a human
-decision).
+Status: PARTIALLY EXECUTED under this gate. The bounded LAN
+qualification is already human-approved ("Approve 100 LAN tests with
+built-in retries"); there is no further human decision gate. LAN1
+(root-dispatched native tool loop) and one synthetic HTTP diagnostic
+probe were executed; both terminated at the task Gateway validator
+with zero settled usage (10 failed ledger rows / 10 released
+reservations; key 0 used / 0 reserved / 0 fenced; provider usage
+unknown, not zero). The demonstrated missing-`output_index` defect is
+repaired at final candidate `b6e85b79` with all CI green; the
+root-dispatched run 2 retry TERMINAL FAILED at 130.544 s at a later
+stream event (no tool; final marker mismatch; one auto-title aux
+settled 612 in / 46 out; five charged as estimates 47,940 in /
+482 out; 6/6 key slots consumed; key totals 49,080 tokens / EUR
+0.04908). No counter reset. The order-item-6 loopback mock half is
+complete (six cases, see 228-c checkpoint).
 
 - Limits: ≤100 outer launches (actual prior spend: 5 of the 227-c
   bounded LAN Chat qualification, linked below, not duplicated);
@@ -728,6 +936,13 @@ decision).
   production traffic.
 - Actual prior spend (227-reused; linked, failure history preserved):
   5 launches, 41,021 tokens, EUR 0.041021.
+- 228-c LAN spend to date (root conservative count): 8 LAN tests (7
+  native outer + 1 HTTP diagnostic probe); after run 2,
+  293.214 s OpenCode / 851.194 s aggregate wall remaining; after run 2: key PG totals 1 finalized + 5
+  estimated + 10 failed ledger rows, 6 finalized + 10 released
+  reservations, 49,080 tokens / EUR 0.04908, 0 reserved / 0 fenced;
+  all mock and LAN rows preserved; no reset, no key replacement, no
+  cap change.
 - The strict zero-retry plus six-settled-request admission guarantee
   remains `UNSATISFIED` under this plan; it is recorded as a
   limitation, is NOT a requirement of the approved plan, and is NOT a
@@ -758,8 +973,21 @@ decision).
    preserved verbatim) + task-scoped
    `RESPONSES_MAX_FUNCTION_TOOL_DESCRIPTION_BYTES=8192` (shared
    default 4096 unchanged; operator must set + restart). The
-   protected LAN half of item 6 remains `not_run` under the root
-   CI/setup gate.
+   protected LAN half of item 6 is partially executed: LAN1
+   (root-dispatched) failed at the task Gateway validator
+   (`response.failed` code
+   `responses_stream_event_not_supported`; demonstrated missing
+   `output_index`); the bounded wire repair is at final candidate
+   `b6e85b79` (all CI green); the root-dispatched run 2 retry
+   TERMINAL FAILED at 130.544 s at a later stream event (no tool;
+   final marker mismatch; same `responses_stream_event_not_supported`
+   code after the repaired first gap; one auto-title aux settled
+   612 in / 46 out; five charged as estimates 47,940 in / 482 out;
+   6/6 key slots consumed; key totals 49,080 tokens / EUR 0.04908;
+   no replacement, no reset, no cap change). LAN1 and the probe
+   left zero settled usage (10 failed ledger rows / 10 released
+   reservations; key 0 used / 0 reserved; provider usage unknown,
+   not zero).
 3. Strict zero-retry plus six-settled-request admission guarantee:
    `UNSATISFIED`. Source proof: pinned OpenCode session
    `packages/opencode/src/session/llm.ts` line 323
@@ -774,8 +1002,37 @@ decision).
    explicitly allows stock native retries, so this strict variant is
    not a requirement of that plan and not a pending human-decision
    gate.
-4. Protected live-qualification gate: `not_run`.
-5. Final PR-head CI: pending (GitHub, after push).
-6. Obligation mapping: this record and its manifest are an evidence
-   index, not a verified per-obligation node-ID mapping; the proposed
-   live plan is declared, not executed.
+4. LAN1 (228-c, root-dispatched native LAN tool loop, run root
+   `runs/228c-native-lan-1`): 134.178 s / exit 1 / no tool;
+   `response.failed` code `responses_stream_event_not_supported`;
+   9 failed ledger rows (HTTP 200, accounting failed) + 9 released
+   reservations; key 0 used / 0 reserved / 0 fenced; provider usage
+   UNKNOWN (not zero). The root-executed HTTP diagnostic probe
+   (1.406 s) demonstrated the first rejection structure:
+   `response.output_item.added` with top-level `output_index` ABSENT
+   (not proof of no later gap). Bounded wire repair landed at
+   `b6e85b79` (flag `repair_missing_output_indices` default `False`,
+   selected-native pair only, `require_output_indices=True` kept,
+   terminal-order guard on both completed and incomplete forms,
+   original provider status on the wire, legacy unchanged); the
+   root-dispatched run 2 retry TERMINAL FAILED at a later stream
+   event (the prepared task-local observer extension will capture
+   the exact rejection structure before the next scoped fix).
+5. Protected live-qualification gate: final qualification `not_run`
+   (LAN1 failed; repair at `b6e85b79` with all CI green; run 2
+   TERMINAL FAILED at a later stream event).
+6. Final PR-head CI: RESOLVED — all green on candidate `b6e85b79`
+   (three workflow identities / 9 jobs: CI `45553132761`, CodeQL
+   `45553132702`, Code Quality `45553124958`), verified 2026-11-25
+   ~05:45Z.
+7. Obligation mapping: AGENTIC-40 machine gate bound in the manifest
+   `preprotected_index_repair_gate` block — one `--collect-only` over the
+   verified 12-file 582 selection plus the 22-case PG file = 604
+   unique node IDs, with node-set list, count, hash, and all-pass
+   execution receipts (no duplicated arrays). The live plan is
+   partially executed (LAN1 + probe failed at the gateway validator;
+   run 2 TERMINAL FAILED at a later stream event).
+8. AGENTIC-40 gate: satisfied for the current candidate — 604-node
+   machine binding (manifest) plus 9/9 external CI identities. All
+   further protected traffic (including diagnostics) requires this
+   exact all-green candidate; no exception.
