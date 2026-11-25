@@ -1026,3 +1026,249 @@ async def test_mock_http_factory_adapter_settles_both_turns(
     reservations = await _reservation_rows(session, key.id)
     assert len(reservations) == 2
     assert all(reservation.status == "finalized" for reservation in reservations)
+    reservations = await _reservation_rows(session, key.id)
+    assert len(reservations) == 2
+    assert all(reservation.status == "finalized" for reservation in reservations)
+
+
+# --- Real-factory missing output_index repair (228-c focused item) -----------
+#
+# Demonstrated LAN defect: the first rejected native producer event was
+# ``response.output_item.added`` with ``output_index`` ABSENT.  These cases
+# exercise the scoped normalization through the UNPATCHED real provider
+# factory and adapter (only the openai-compatible server-module pair gets
+# the repair gate), with real PostgreSQL settlement; the upstream HTTP
+# transport stays loopback-mocked.  No live provider, LAN, or real
+# credential is involved.
+
+
+def _missing_index_turn1_events() -> list[dict]:
+    """Turn 1 with ``output_index`` removed from every output_item event.
+
+    Only the FIRST added absence was observed natively (the demonstrated
+    LAN defect); extending the absence to the remaining added/done
+    events while the delta/part events keep supplied indexes is a
+    synthetic extension of that observed shape.  The terminal response
+    gains the registered ID -> index output ordering that the repair
+    guard validates (reasoning done at 0, function_call done at 1).
+    """
+    events = _turn1_events()
+    for event in events:
+        if event["type"] in {"response.output_item.added", "response.output_item.done"}:
+            del event["output_index"]
+    terminal = events[-1]
+    assert terminal["type"] == "response.completed"
+    terminal["response"]["output"] = [
+        events[5]["item"],  # reasoning done item (registered index 0)
+        events[8]["item"],  # function_call done item (registered index 1)
+    ]
+    return events
+
+
+def _contradictory_terminal_turn1_events() -> list[dict]:
+    """Missing-index turn 1 whose terminal output order is REVERSED."""
+    events = _missing_index_turn1_events()
+    events[-1]["response"]["output"] = list(reversed(events[-1]["response"]["output"]))
+    return events
+
+
+@pytest.mark.asyncio
+async def test_mock_http_factory_adapter_settles_missing_index_wire(
+    async_test_session, monkeypatch
+) -> None:
+    session = async_test_session
+    case = _MOCK_ADAPTER_CASES[1]  # openai-compatible pair: repair gate active
+    owner, cohort, key, route = await _seed_opencode_world(
+        session,
+        caps=_OPENCODE_CAPS,
+        provider=case["provider"],
+        public_model=case["public_model"],
+        upstream_model=case["upstream_model"],
+    )
+    monkeypatch.setenv(case["api_key_env_var"], case["api_key_value"])
+    monkeypatch.delenv("OPENAI_UPSTREAM_API_KEY", raising=False)
+
+    async def db(request=None):
+        yield session
+
+    monkeypatch.setattr(gateway, "_get_db_session_after_auth_header_check", db)
+    monkeypatch.setattr(
+        gateway,
+        "_resolve_responses_route",
+        _gate_route_resolver(
+            _probe(
+                route.id,
+                _route_caps(_OPENCODE_CAPS),
+                provider=case["provider"],
+                provider_kind=case["provider_kind"],
+                base_url=case["base_url"],
+                api_key_env_var=case["api_key_env_var"],
+                public_model=case["public_model"],
+                upstream_model=case["upstream_model"],
+            )
+        ),
+    )
+
+    auth = _auth_key(key)
+    turn1 = _missing_index_turn1_events()
+    # Repaired wire truth: compact re-encoding with the derived index
+    # appended last.  The unmodified producer frame (default separators,
+    # no index) must never be forwarded.
+    repaired_frame = 'data: ' + json.dumps(
+        {**turn1[1], "output_index": 0}, separators=(",", ":")
+    ) + "\n\n"
+    raw_missing_frame = "data: " + json.dumps(turn1[1]) + "\n\n"
+
+    with respx.mock(assert_all_called=False) as router:
+        upstream = router.route(method="POST", url=f"{case['base_url']}/responses")
+        upstream.mock(
+            side_effect=[
+                httpx.Response(
+                    200,
+                    content=_sse_body(turn1),
+                    headers={"content-type": "text/event-stream"},
+                ),
+                httpx.Response(
+                    200,
+                    content=_sse_body(_turn2_events()),
+                    headers={"content-type": "text/event-stream"},
+                ),
+            ]
+        )
+
+        body = _full_body(stream=True)
+        body["model"] = case["public_model"]
+        response1 = await handle_response_create(
+            payload=_payload(body), authenticated_key=auth, settings=_settings()
+        )
+        joined1 = "".join([s async for s in response1.body_iterator])
+        assert "response.completed" in joined1
+        assert "response.failed" not in joined1
+        assert repaired_frame in joined1
+        assert raw_missing_frame not in joined1
+
+        body2 = _full_body(stream=True)
+        body2["model"] = case["public_model"]
+        body2["input"] = _turn2_input()
+        response2 = await handle_response_create(
+            payload=_payload(body2), authenticated_key=auth, settings=_settings()
+        )
+        joined2 = "".join([s async for s in response2.body_iterator])
+        assert "response.completed" in joined2
+        assert "response.failed" not in joined2
+
+        # Wire facts: exactly one upstream POST per admitted turn, exact
+        # public-to-upstream model substitution, stream true, and the
+        # operator credential in the Bearer header only (never in the body).
+        assert upstream.calls.call_count == 2
+        for call in upstream.calls:
+            request_body = json.loads(call.request.content)
+            assert request_body["model"] == case["upstream_model"]
+            assert request_body["stream"] is True
+            assert (
+                call.request.headers["authorization"] == f"Bearer {case['api_key_value']}"
+            )
+            content = call.request.content
+            assert _HMAC_SECRET.encode() not in content
+            assert key.token_hash.encode() not in content
+            assert case["api_key_value"].encode() not in content
+
+    await session.refresh(key)
+    # Settlement mirrors the two-turn factory case exactly: the repaired
+    # wire changes nothing about accounting (5 in / 2 out per turn at the
+    # seeded 2.00/8.00 per-1M pricing).
+    assert key.requests_used_total == 11
+    assert key.tokens_used_total == 12_359
+    assert key.tokens_reserved_total == 0
+    assert key.requests_reserved_total == 0
+    assert key.cost_used_eur == Decimal("7.250052")
+    refs = await _ref_rows(session, key.id)
+    assert len(refs) == 3
+    assert {r.item_id_hmac for r in refs} == {D_V1_RS, D_V3_CIPHER, D_V1_FC}
+    ledger = await _ledger_rows(session, key.id)
+    assert len(ledger) == 2
+    assert all(row.success is True and row.accounting_status == "finalized" for row in ledger)
+
+
+@pytest.mark.asyncio
+async def test_mock_http_factory_adapter_rejects_contradictory_terminal_no_refs(
+    async_test_session, monkeypatch
+) -> None:
+    session = async_test_session
+    case = _MOCK_ADAPTER_CASES[1]
+    owner, cohort, key, route = await _seed_opencode_world(
+        session,
+        caps=_OPENCODE_CAPS,
+        provider=case["provider"],
+        public_model=case["public_model"],
+        upstream_model=case["upstream_model"],
+    )
+    monkeypatch.setenv(case["api_key_env_var"], case["api_key_value"])
+    monkeypatch.delenv("OPENAI_UPSTREAM_API_KEY", raising=False)
+
+    async def db(request=None):
+        yield session
+
+    monkeypatch.setattr(gateway, "_get_db_session_after_auth_header_check", db)
+    monkeypatch.setattr(
+        gateway,
+        "_resolve_responses_route",
+        _gate_route_resolver(
+            _probe(
+                route.id,
+                _route_caps(_OPENCODE_CAPS),
+                provider=case["provider"],
+                provider_kind=case["provider_kind"],
+                base_url=case["base_url"],
+                api_key_env_var=case["api_key_env_var"],
+                public_model=case["public_model"],
+                upstream_model=case["upstream_model"],
+            )
+        ),
+    )
+
+    auth = _auth_key(key)
+    with respx.mock(assert_all_called=False) as router:
+        upstream = router.route(method="POST", url=f"{case['base_url']}/responses")
+        upstream.mock(
+            side_effect=[
+                httpx.Response(
+                    200,
+                    content=_sse_body(_contradictory_terminal_turn1_events()),
+                    headers={"content-type": "text/event-stream"},
+                ),
+            ]
+        )
+
+        body = _full_body(stream=True)
+        body["model"] = case["public_model"]
+        response = await handle_response_create(
+            payload=_payload(body), authenticated_key=auth, settings=_settings()
+        )
+        joined = "".join([s async for s in response.body_iterator])
+        assert "response.failed" in joined
+        assert "response.completed" not in joined
+        assert "responses_stream_event_not_supported" in joined
+        assert upstream.calls.call_count == 1
+
+    await session.refresh(key)
+    # Mirrors the accepted failed-stream precedent: the failed turn is
+    # admitted as one request, the reservation is finalized at the
+    # admission estimate (513 input + 32_000 requested max output), and
+    # NO replay reference is persisted because the terminal was rejected.
+    assert key.requests_used_total == 10
+    assert key.tokens_reserved_total == 0
+    assert key.requests_reserved_total == 0
+    ledger = await _ledger_rows(session, key.id)
+    assert len(ledger) == 1
+    assert ledger[0].success is False
+    assert ledger[0].accounting_status == "estimated"
+    assert ledger[0].input_tokens == 513
+    assert ledger[0].input_tokens + ledger[0].output_tokens == ledger[0].total_tokens
+    assert key.tokens_used_total == 12_345 + ledger[0].total_tokens
+    assert len(await _ref_rows(session, key.id)) == 0
+    reservations = await _reservation_rows(session, key.id)
+    assert len(reservations) == 1
+    assert reservations[0].status == "finalized"
+    assert reservations[0].reserved_tokens == 32_513
+    assert reservations[0].finalized_at is not None

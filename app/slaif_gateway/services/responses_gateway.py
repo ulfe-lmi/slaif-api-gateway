@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import time
 import uuid
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from decimal import Decimal
 from types import SimpleNamespace
@@ -85,6 +86,7 @@ from slaif_gateway.modules.servers.local_coding.contract import (
 from slaif_gateway.modules.servers.upstream_llm.profiles import MODULE_ID as UPSTREAM_LLM_MODULE_ID
 from slaif_gateway.modules.servers.local_coding.identity import derive_request_identity
 from slaif_gateway.modules.servers.registry import (
+    OPENAI_COMPATIBLE_SERVER_MODULE_ID,
     ensure_client_module_has_server_pair,
     ensure_client_server_pair,
     resolve_server_module,
@@ -99,6 +101,7 @@ from slaif_gateway.providers.streaming import (
     CodexReplayStreamCandidate,
     ResponsesStreamEventValidator,
     ResponsesStreamValidationProfile,
+    format_sse_data,
     format_responses_error_event,
     is_output_limited_response,
 )
@@ -1888,6 +1891,29 @@ async def handle_response_create(
                 local_coding_server_context=local_coding_server_context,
             ),
         )
+    # Qualified native wire repair gate (228-c transport defect): only the
+    # selected OpenCode 1.19.3 Responses client paired with the registered
+    # openai-compatible server may have an ABSENT output_index assigned
+    # from unambiguous stream state.  Every older/default profile and the
+    # official openai pair retain strict denial; an unresolvable route
+    # descriptor never enables the repair.
+    native_repair_positions = False
+    if (
+        client_module.module_id == OPENCODE_1193_RESPONSES_CLIENT_MODULE_ID
+        and client_module.policy_spec is not None
+        and client_module.policy_spec.require_stream_output_indices
+    ):
+        try:
+            native_repair_positions = (
+                resolve_server_module(
+                    route.provider,
+                    getattr(route, "provider_kind", None),
+                    getattr(route, "capabilities", None),
+                ).module_id
+                == OPENAI_COMPATIBLE_SERVER_MODULE_ID
+            )
+        except ProviderConfigurationError:
+            native_repair_positions = False
     try:
         quota = await _reserve_responses_quota(
             authenticated_key=authenticated_key,
@@ -2024,6 +2050,13 @@ async def handle_response_create(
                             client_module.policy_spec is not None
                             and client_module.policy_spec.require_stream_output_indices
                         ),
+                        # Same pair, same wire: an absent output_index may
+                        # be assigned from unambiguous stream state ONLY
+                        # for the selected OpenCode 1.19.3 client paired
+                        # with the registered openai-compatible server
+                        # (see native_repair_positions).  Supplied indexes
+                        # and all other profiles keep strict behavior.
+                        repair_missing_output_indices=native_repair_positions,
                         # Selected native wire property: the captured
                         # OpenCode 1.19.3 visible reasoning lifecycle
                         # closes each summary part with
@@ -3464,6 +3497,20 @@ def _streaming_responses_response(
                         request_id=request_id,
                     )
                     return
+                repaired_payload = stream_event_validator.take_repaired_payload()
+                if repaired_payload is not None:
+                    # The validated copy is the wire truth: re-encode the
+                    # exact normalized JSON into the outgoing SSE bytes so
+                    # the client and any held replay tail never see the
+                    # broken producer event.  All other chunk fields
+                    # (usage, request id, terminal flags) are preserved.
+                    repaired_data = json.dumps(repaired_payload, separators=(",", ":"))
+                    chunk = replace(
+                        chunk,
+                        data=repaired_data,
+                        raw_sse_event=format_sse_data(repaired_data),
+                        json_body=repaired_payload,
+                    )
                 payload = chunk.json_body
                 if isinstance(payload, Mapping):
                     sequence = payload.get("sequence_number")

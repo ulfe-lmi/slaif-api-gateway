@@ -159,6 +159,14 @@ class ResponsesStreamValidationProfile:
     # Selected native profiles whose pinned SDK wire requires a valid
     # output_index on every response.output_item.added/done event.
     require_output_indices: bool = False
+    # Qualified native wire repair (selected OpenCode 1.19.3 profile paired
+    # with the registered openai-compatible server only): an ABSENT
+    # output_index on response.output_item added/done events is assigned
+    # from unambiguous contiguous added ordering (added) or the already
+    # validated same item ID's index (done).  Supplied indexes, every
+    # older/default profile, and all other validation checks retain their
+    # existing behavior; ambiguous positions fail closed.
+    repair_missing_output_indices: bool = False
     # Selected native profile (OpenCode 1.19.3): the captured visible
     # reasoning lifecycle closes each summary part with
     # ``response.reasoning_summary_part.done``.  Every other profile keeps
@@ -214,6 +222,13 @@ class ResponsesStreamEventValidator:
         # Populated only for require_output_indices profiles: every index
         # the pinned SDK assigns stays occupied for the response lifetime.
         self._used_output_indices: set[int] = set()
+        # repair_missing_output_indices bookkeeping: whether any event on
+        # this stream received a repaired index, plus the exact repaired
+        # JSON of the most recent validated event so the wire path can
+        # encode the validated copy into the outgoing SSE bytes (consumed
+        # once per event; no translation facts are persisted).
+        self._repaired_output_indices: bool = False
+        self._last_repaired_payload: Mapping[str, Any] | None = None
         self._function_arguments_done: set[str] = set()
         self._function_output_done: set[str] = set()
         self._function_delta_seen: set[str] = set()
@@ -260,6 +275,21 @@ class ResponsesStreamEventValidator:
         self._replay_reference_candidates.clear()
         return candidates
 
+    @property
+    def repaired_output_indices(self) -> bool:
+        """Whether any event on this stream received a repaired output index."""
+        return self._repaired_output_indices
+
+    def take_repaired_payload(self) -> Mapping[str, Any] | None:
+        """Return the exact repaired JSON of the last validated event, once.
+
+        The wire path re-encodes this mapping into the outgoing SSE bytes so
+        the forwarded event is byte-identical to the validated copy.
+        """
+        repaired = self._last_repaired_payload
+        self._last_repaired_payload = None
+        return repaired
+
     def take_web_search_evidence(self) -> tuple[dict[str, object], ...]:
         """Return bounded content-free web-search lifecycle evidence."""
         evidence = tuple(self._web_search_evidence)
@@ -268,6 +298,24 @@ class ResponsesStreamEventValidator:
 
     def validate(self, payload: Mapping[str, Any] | None) -> bool:
         """Keep provider status intact while validating a bounded terminal."""
+        # A repaired payload is only ever the exact JSON of the most recent
+        # VALIDATED event; clear it on every entry so early returns and
+        # rejected candidates never leave a stale value behind.
+        self._last_repaired_payload = None
+        # Terminal order consistency for streams with derived indexes must
+        # run BEFORE the output-limit/incomplete early returns so a
+        # contradictory terminal is rejected on every path.  Both terminal
+        # representations are covered: response.completed and the
+        # response.incomplete output-limit terminal.  The original
+        # incomplete safety (no pending item completion) is preserved by
+        # the early return below.
+        if (
+            self._repaired_output_indices
+            and isinstance(payload, Mapping)
+            and payload.get("type") in {"response.completed", "response.incomplete"}
+            and not self._validate_repaired_terminal_output_order(payload)
+        ):
+            return False
         if self._output_limit_terminal_received:
             return False
         if is_output_limited_response(payload):
@@ -299,7 +347,23 @@ class ResponsesStreamEventValidator:
             if isinstance(item, Mapping) and item.get("status") == "incomplete":
                 payload = copy.deepcopy(dict(payload))
                 payload["item"]["status"] = "completed"
+        # Qualified native position repair is derived from the ORIGINAL
+        # provider copy so the repaired wire bytes preserve the provider
+        # item status; the private status-normalized copy above stays
+        # validation-only.  The repaired index is applied to the
+        # validation copy, and the original-status repaired payload is
+        # cached only after validation succeeds.
+        repaired = None
+        if self._profile.repair_missing_output_indices:
+            repaired = self._normalize_missing_output_index(original)
+            if repaired is not None:
+                validation_payload = dict(payload)
+                validation_payload["output_index"] = repaired["output_index"]
+                payload = validation_payload
         valid = self._validate_event(payload)
+        if valid and repaired is not None:
+            self._repaired_output_indices = True
+            self._last_repaired_payload = repaired
         if valid and isinstance(original, Mapping):
             if original.get("type") == "response.created":
                 response = original.get("response")
@@ -651,6 +715,86 @@ class ResponsesStreamEventValidator:
         if event_type in {"response.output_item.added", "response.output_item.done"}:
             return self._validate_output_item(payload, event_type)
         return False
+
+    def _validate_repaired_terminal_output_order(
+        self, payload: Mapping[str, Any]
+    ) -> bool:
+        """Terminal order consistency for streams with derived indexes.
+
+        Once any output index on this stream was derived by
+        ``repair_missing_output_indices``, the terminal ``output`` list
+        (both the ``response.completed`` and the ``response.incomplete``
+        output-limit terminal) must agree exactly with the registered
+        item ID -> index ordering: the same IDs, each at its registered
+        position, with no extras and no gaps.  A contradictory terminal
+        is rejected; output is never reordered to hide the
+        inconsistency and no pending item is completed.  Streams without
+        derived indexes keep the legacy terminal behavior unchanged.
+        """
+        response = payload.get("response")
+        if not isinstance(response, Mapping):
+            return False
+        output = response.get("output")
+        if not isinstance(output, list):
+            return False
+        if len(output) != len(self._function_output_indices):
+            return False
+        for index, item in enumerate(output):
+            if not isinstance(item, Mapping):
+                return False
+            item_id = item.get("id")
+            if not isinstance(item_id, str):
+                return False
+            if self._function_output_indices.get(item_id) != index:
+                return False
+        return True
+
+    def _normalize_missing_output_index(
+        self, payload: Mapping[str, Any] | None
+    ) -> Mapping[str, Any] | None:
+        """Assign an absent output_index from unambiguous stream state.
+
+        Used only for the qualified native wire (see
+        ``repair_missing_output_indices``).  A supplied index is never
+        overwritten.  A missing ``added`` position is assigned only when
+        every previously used index forms the contiguous block ``0..n-1``;
+        a missing ``done`` position reuses the already validated index of
+        the same item ID.  Any ambiguity (unknown/missing/invalid ID,
+        non-contiguous occupancy, duplicate item) returns ``None`` so the
+        original event fails closed at the required-index check.  No IDs or
+        call identities are invented and no validator state is modified.
+        """
+        if not isinstance(payload, Mapping):
+            return None
+        event_type = payload.get("type")
+        if event_type not in {"response.output_item.added", "response.output_item.done"}:
+            return None
+        if "output_index" in payload:
+            return None
+        item = payload.get("item")
+        if not isinstance(item, Mapping):
+            return None
+        item_id = item.get("id")
+        if not isinstance(item_id, str) or not item_id:
+            return None
+        if event_type == "response.output_item.done":
+            # Reuse the index registered by the validated added event for
+            # this same item ID; an unregistered ID is an orphan/duplicate
+            # and stays rejected.
+            index = self._function_output_indices.get(item_id)
+            if index is None:
+                return None
+        else:
+            if item_id in self._seen_item_ids:
+                return None
+            if self._used_output_indices != set(range(len(self._used_output_indices))):
+                # A gap means the producer's ordering is ambiguous; do not
+                # hide it by inventing a position.
+                return None
+            index = len(self._used_output_indices)
+        repaired = dict(payload)
+        repaired["output_index"] = index
+        return repaired
 
     def _validate_output_item(self, payload: Mapping[str, Any], event_type: str) -> bool:
         if not _only_fields(payload, {"type", "output_index", "item", "sequence_number"}):

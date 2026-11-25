@@ -974,7 +974,13 @@ max_output_tokens, model, reasoning, store, stream, tool_choice, tools}`,
 with `stream` `true` (denied `opencode_1193_field_shape` otherwise),
 `store` `false`, `tool_choice` `"auto"`, `include` limited to
 `reasoning.encrypted_content`, `developer`/`user` input roles sent without
-a type field, and the flat strict nine-name tool declaration list. The
+a type field, and the flat strict nine-name tool declaration list (each
+declaration carrying a preserved `strict` boolean). The 9-field set is
+the main first-turn shape only; the qualified auto-title auxiliary and
+compaction summary requests use the 7-field streamed tool-less variant,
+and continuation turns replay assistant text and reasoning as typeless
+input items (six-case evidence in
+[responses-compatibility.md](responses-compatibility.md)). The
 normalized body is forwarded unchanged under the ordinary client-trust
 model; no per-request relaxation or body rewriting exists, and unknown
 fields or types remain denied.
@@ -982,10 +988,13 @@ fields or types remain denied.
 Encrypted-reasoning replay uses the owned ciphertext-derived v3 reference
 path (domain-separated digest, HMAC-only reference, immediate-memory-only
 ciphertext, persisted only after successful finalized output) alongside
-the existing function-call digest path. References are resolved only for
-the same key and the same route/provider/model; missing, altered, foreign,
-stale, oversized, duplicated, or mismatched references are denied before
-forwarding. Present invalid item IDs keep their existing denials, and the
+the existing function-call digest path. The binding differs by kind:
+function-call references are portable same-key references (same key, item
+kind, call, and tool name; not route-bound), while reasoning v3
+references are bound to the same key and route/provider/model. Missing,
+altered, foreign, stale, oversized, duplicated, or mismatched references
+are denied before forwarding. Present invalid item IDs keep their
+existing denials, and the
 legacy Codex and default presets, including the legacy digest bytes, are
 unchanged.
 

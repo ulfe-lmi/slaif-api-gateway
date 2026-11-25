@@ -1213,7 +1213,16 @@ id-present reasoning carrying a ciphertext, altered, foreign, or stale
 references, and route/provider/model mismatch are all denied. Present
 invalid IDs and any issued-ID/ciphertext association keep their existing
 denials, and the legacy Codex and default presets, including the legacy
-digest bytes, are unchanged.
+digest bytes, are unchanged. The visible reasoning lifecycle is distinct
+and carries no opaque authority: the observed absent, null, and empty
+cipher states are accepted as bounded visible output on the selected
+profile (absent and null dropped by the pinned SDK, empty string kept
+verbatim), issue no v3 alias, and grant no opaque HMAC reference — only
+the non-empty bounded ciphertext follows the HMAC reference path above.
+All six 228-c loopback cases, including the three visible variants,
+passed through the actual task Gateway and real PostgreSQL against the
+separate loopback mock upstream, as recorded in the consolidated
+verification record.
 
 The gateway strict zero-retry forwarding rule is a gateway policy, not a
 native client guarantee. The pinned OpenCode session hardcodes a bounded
