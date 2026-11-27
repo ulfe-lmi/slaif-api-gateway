@@ -496,29 +496,48 @@ def test_create_form_help_and_provider_tri_state(chromium, keypolicy_env) -> Non
         page.wait_for_selector("form[action='/admin/keys/create']")  # type: ignore[attr-defined]
 
         # --- req 5: field-specific help wired through aria-describedby
+        # (229-c: the limits and rate groups carry per-field help ids;
+        # group-level ids remain where one paragraph still covers the group)
         for help_id in (
             "create-validity-help",
-            "create-limits-help",
+            "create-help-cost_limit_eur",
+            "create-help-token_limit_total",
+            "create-help-request_limit_total",
             "create-policy-source-help",
             "create-reason-help",
-            "create-rate-limit-help",
+            "create-help-rate_limit_requests_per_minute",
+            "create-help-rate_limit_window_seconds",
             "create-policy-provider-mode-help",
         ):
             help_el = page.locator(f"#{help_id}")
             assert help_el.count() == 1, help_id
-            assert help_el.first.inner_text().strip() != "", help_id
+        # The rate-limit group is collapsed by default; open it so the
+        # per-field help text is rendered for the non-empty check.
+        page.locator("#create-adv-rate-limit-heading").click()  # type: ignore[attr-defined]
+        for help_id in (
+            "create-validity-help",
+            "create-help-cost_limit_eur",
+            "create-help-token_limit_total",
+            "create-help-request_limit_total",
+            "create-policy-source-help",
+            "create-reason-help",
+            "create-help-rate_limit_requests_per_minute",
+            "create-help-rate_limit_window_seconds",
+            "create-policy-provider-mode-help",
+        ):
+            assert page.locator(f"#{help_id}").first.inner_text().strip() != "", help_id  # type: ignore[attr-defined]
         assert (
             page.locator('input[name="valid_from"]').get_attribute("aria-describedby")
-            == "create-validity-help"
+            == "create-help-valid_from create-validity-help"
         )
         assert (
             page.locator('input[name="cost_limit_eur"]').get_attribute("aria-describedby")
-            == "create-limits-help"
+            == "create-help-cost_limit_eur"
         )
         assert (
             page.locator('input[name="rate_limit_requests_per_minute"]')
             .get_attribute("aria-describedby")
-            == "create-rate-limit-help"
+            == "create-help-rate_limit_requests_per_minute"
         )
         assert (
             page.locator('input[name="reason"]').get_attribute("aria-describedby")

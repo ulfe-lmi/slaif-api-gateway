@@ -64,6 +64,20 @@ declaration-history lifecycle (see
 finite compatibility data; it does not grant an endpoint, model, route,
 provider, capability, pricing mode, hosted tool, or key permission.
 
+`modules/clients/registry.py` exposes the active identity through one
+accessor, `active_client_module_facts(module_id)` (responses registry
+first, then the agent-chat registry; `.pin` is the exact
+`{id, version, fixture_sha256}` triple). The admin GUI key-create
+client-use choices and the compatibility dashboard read the active
+snapshot through that accessor to build and annotate NEW key pins
+(229-a); frozen qualification constants remain evidence only and are
+never a runtime version gate. Since 229-b the client-use create path also
+runs a shared local readiness check that resolves the selected
+models/providers through the live route resolver (enabled providers and
+routes, streaming requirement, registered client/server pair, active
+pricing) and fails closed before any key, email, or audit effect; one key
+may combine one Chat client and one Responses client.
+
 ## Static registration
 
 Module IDs, versions, descriptors, factories, and client/server pairings are

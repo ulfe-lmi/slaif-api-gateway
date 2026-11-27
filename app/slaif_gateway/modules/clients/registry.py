@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from dataclasses import dataclass
 from types import MappingProxyType
 
 from slaif_gateway.modules.clients.base import ClientModule
@@ -188,3 +189,98 @@ def client_module_metadata(module: ClientModule) -> dict[str, str]:
         "version": module.module_version,
         "fixture_sha256": fixture_sha256,
     }
+
+
+@dataclass(frozen=True, slots=True)
+class ActiveClientModuleFacts:
+    """Identity and provenance of the ACTIVE module installed in this process.
+
+    The distinct concepts are kept separate: ``module_id`` is the stable
+    executable identifier; ``module_version`` and ``fixture_sha256`` are the
+    current compatibility DATA revision and canonical digest; the provenance
+    fields describe the CLI/source that produced that DATA.  Frozen
+    qualification profile evidence (the revision a route was qualified
+    against) is deliberately not part of this active state.
+    """
+
+    module_id: str
+    module_version: str
+    fixture_sha256: str
+    cli_version: str | None = None
+    source_tag: str | None = None
+    source_commit: str | None = None
+
+    @property
+    def pin(self) -> dict[str, str]:
+        """The exact (id, version, fixture_sha256) pin for new key metadata."""
+        return {
+            "id": self.module_id,
+            "version": self.module_version,
+            "fixture_sha256": self.fixture_sha256,
+        }
+
+
+def active_client_module_facts(module_id: str) -> ActiveClientModuleFacts:
+    """Resolve ACTIVE module facts from the installed registry snapshot.
+
+    Reads only the concrete registry module bound at process bootstrap
+    (packaged default or the operator's validated profile file); it never
+    re-reads profile files per call and never falls back to a historical
+    frozen identity.  Responses-family modules resolve from the Responses
+    registry; Chat-family modules resolve from the separate static Chat
+    registry.  Provenance fields are populated only when the bound module
+    exposes a reviewed DATA snapshot.
+    """
+    try:
+        module = get_client_module(module_id)
+    except ModuleSelectionError:
+        # Deferred import: agent_chat does not import this registry module.
+        from slaif_gateway.modules.clients.agent_chat import (
+            get_agent_chat_client_module,
+        )
+
+        module = get_agent_chat_client_module(module_id)
+    metadata = client_module_metadata(module)
+    cli_version: str | None = None
+    source_tag: str | None = None
+    source_commit: str | None = None
+    profile = getattr(module, "profile", None)
+    if profile is not None:
+        for attribute, target in (
+            ("cli_version", "cli_version"),
+            ("source_tag", "source_tag"),
+            ("source_commit", "source_commit"),
+        ):
+            value = getattr(profile, attribute, None)
+            if isinstance(value, str) and value:
+                if target == "cli_version":
+                    cli_version = value
+                elif target == "source_tag":
+                    source_tag = value
+                else:
+                    source_commit = value
+    if cli_version is None:
+        spec = getattr(module, "policy_spec", None)
+        provenance = getattr(spec, "provenance", None) if spec is not None else None
+        if provenance is not None:
+            for attribute, target in (
+                ("distribution_version", "cli_version"),
+                ("source_tag", "source_tag"),
+                ("source_commit", "source_commit"),
+            ):
+                value = getattr(provenance, attribute, None)
+                if isinstance(value, str) and value:
+                    if target == "cli_version" and cli_version is None:
+                        cli_version = value
+                    elif target == "source_tag" and source_tag is None:
+                        source_tag = value
+                    elif target == "source_commit" and source_commit is None:
+                        source_commit = value
+    return ActiveClientModuleFacts(
+        module_id=metadata["id"],
+        module_version=metadata["version"],
+        fixture_sha256=metadata["fixture_sha256"],
+        cli_version=cli_version,
+        source_tag=source_tag,
+        source_commit=source_commit,
+    )

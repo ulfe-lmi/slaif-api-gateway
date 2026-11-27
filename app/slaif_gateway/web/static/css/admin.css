@@ -1939,6 +1939,33 @@ td.col-subject {
   line-height: 1.35;
 }
 
+.field-help-details {
+  margin: 0.35rem 0 0.9rem;
+}
+
+.field-help-details summary {
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 0.82rem;
+  font-weight: 600;
+}
+
+.field-help-details[open] summary {
+  margin-bottom: 0.35rem;
+}
+
+.advanced-codex-modes {
+  margin: 0 0 1rem;
+  border: 1px dashed var(--border);
+  border-radius: 0.5rem;
+  padding: 0.5rem 0.9rem;
+}
+
+.advanced-codex-modes > summary {
+  cursor: pointer;
+  font-weight: 700;
+}
+
 .config-json {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 0.8rem;
@@ -1989,4 +2016,46 @@ td.col-subject {
   .rate-editor-grid {
     grid-template-columns: 1fr;
   }
+}
+
+/* --- 229-b: safe-error summary, field anchors, and access summary ---------- */
+#create-error-summary {
+  scroll-margin-top: 1rem;
+}
+
+#create-error-summary .create-error-issues {
+  margin: 0.5rem 0 0;
+  padding-left: 1.25rem;
+}
+
+#create-error-summary .create-error-issues li {
+  margin-top: 0.25rem;
+}
+
+#create-error-summary .create-error-link {
+  font-weight: 650;
+  text-decoration: underline;
+}
+
+#create-error-summary .create-error-remedy {
+  display: inline-block;
+  margin-left: 0.5rem;
+}
+
+.create-error-field {
+  outline: 2px solid var(--danger);
+  outline-offset: 1px;
+  border-color: var(--danger) !important;
+}
+
+.access-summary {
+  margin-bottom: 0.5rem;
+}
+
+.access-summary dt {
+  margin-top: 0.35rem;
+}
+
+.access-summary dd {
+  margin: 0 0 0.25rem;
 }

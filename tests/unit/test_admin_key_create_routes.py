@@ -367,7 +367,8 @@ def test_authenticated_create_form_renders_safe_fields(monkeypatch) -> None:
     assert 'data-codex-qualification-state="not_declared"' in response.text
     assert 'data-codex-protocol-ready="false"' in response.text
     assert "Email delivery mode" in response.text
-    assert "Send-now and enqueue suppress browser plaintext display" in response.text
+    assert "Send-now and enqueue use the owner email as the delivery channel" in response.text
+    assert "suppress the browser plaintext" in response.text
     assert "token_hash" not in response.text
     assert "encrypted_payload" not in response.text
     assert "nonce" not in response.text
@@ -447,7 +448,7 @@ def test_create_requires_owner_before_service_call(monkeypatch) -> None:
     )
 
     assert response.status_code == 400
-    assert "owner_id is required" in response.text
+    assert "Select an owner before creating the key." in response.text
     assert called is False
 
 
@@ -477,7 +478,7 @@ def test_create_rejects_invalid_owner_uuid_before_service_call(monkeypatch) -> N
     )
 
     assert response.status_code == 400
-    assert "owner_id must be a valid UUID" in response.text
+    assert "The selected owner is not available on this deployment." in response.text
     assert called is False
 
 
@@ -539,6 +540,56 @@ def test_create_rejects_nonpositive_limits_before_service_call(monkeypatch) -> N
 
     assert response.status_code == 400
     assert "Enter valid positive quota and rate-limit values." in response.text
+    assert called is False
+
+
+def test_create_numeric_error_flags_only_the_invalid_control(monkeypatch) -> None:
+    """Pinpoint correction: ONE invalid speed control flags ONLY itself.
+
+    The valid blank neighbours keep their deployment-default meaning and
+    are not marked; the flagged field carries its own units/default remedy.
+    """
+    _patch_options(monkeypatch)
+    called = False
+
+    async def create_gateway_key(self, payload):
+        nonlocal called
+        called = True
+
+    monkeypatch.setattr(
+        "slaif_gateway.services.key_service.KeyService.create_gateway_key",
+        create_gateway_key,
+    )
+    client = TestClient(_app())
+    _login_for_actions(monkeypatch, client)
+
+    response = client.post(
+        "/admin/keys/create",
+        data={
+            "csrf_token": "dashboard-csrf",
+            "owner_id": str(uuid.uuid4()),
+            "valid_days": "30",
+            "rate_limit_requests_per_minute": "abc",
+            "reason": "workshop",
+        },
+    )
+
+    assert response.status_code == 400
+    assert "Enter valid positive quota and rate-limit values." in response.text
+    # The invalid control is anchored and marked...
+    assert 'id="create-field-rate_limit_requests_per_minute"' in response.text
+    assert "aria-invalid" in response.text
+    # ...while its valid blank neighbours are NOT flagged.
+    for name in (
+        "rate_limit_tokens_per_minute",
+        "rate_limit_concurrent_requests",
+        "rate_limit_window_seconds",
+    ):
+        assert f'id="create-field-{name}"' not in response.text
+    # Field-specific remedy with the real blank behavior (not the generic
+    # "blank means no limit" claim).
+    remedy_text = response.text.replace("&#39;", "'")
+    assert "leave blank to use this installation's default" in remedy_text
     assert called is False
 
 

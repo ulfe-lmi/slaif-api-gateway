@@ -1988,3 +1988,149 @@ in the 219-a final head:
   UUID under the non-credential key instead of silently dropping the
   scope. The canonical JSON payload/filter shape, the alias checks, and
   the actor/count facts are unchanged.
+
+## 21. Client-use key choices and active profile pins (229-a)
+
+### 21.1 The "Who will use this key?" section
+
+The guided key-create form adds a "Who will use this key?" section with
+four checkboxes, each with an inline "What is this for?" disclosure:
+
+- **This key is for Codex** — the confirmation for the existing Qwen Codex
+  policy path. The server gates on the STABLE Codex module ID plus the
+  currently installed (active) compatibility DATA and route readiness;
+  the created key is pinned to the ACTIVE snapshot (module ID, revision,
+  digest), while the frozen qualification revision stays evidence only.
+- **This key is for OpenCode (Chat)** / **This key is for Hermes** — one
+  Chat client binding; the key is pinned to the active chat client module
+  (`opencode-1.19.3-chat-v1` / `hermes-0.22.5-chat-v1`) and must allow
+  `/v1/chat/completions`.
+- **This key is for OpenCode (Responses)** — requires explicit models and
+  providers (no allow-all), the `/v1/responses` endpoint, and an enabled
+  exact route with all four OpenCode Responses gates for every selected
+  model × provider pair; fail closed otherwise.
+
+Checking a client preselects its unambiguous endpoint(s) and shows a
+summary line; the server rechecks every grant before creating the key.
+One key may carry one Chat client (OpenCode Chat or Hermes) and one
+Responses client (Codex or OpenCode Responses) together: each enabled
+client's required endpoints are present in the composed policy and the
+shared readiness check validates the combination. The historical Codex
+sections (protocol pilot, Qwen 0.162 authoring) sit in one "Advanced:
+historical Codex key modes" disclosure and cannot be combined with
+client-use choices.
+
+### 21.2 Conflict rules and error recovery
+
+Server-enforced (field-labeled, fail closed): client-use + advanced
+configuration document, client-use + trusted calibration, two Chat-family
+bindings, two Responses-family bindings, advanced historical Codex +
+client-use. On refusal the form re-renders with a `role="alert"` summary,
+a diagnostic reference ID, and every entered value preserved for
+correction.
+
+### 21.3 Result page and dashboard
+
+The create-result page lists the pinned client module(s) per key
+("Responses client module" / "Chat client module" with ID, revision, and
+digest). The compatibility dashboard's Codex module column shows
+`<module> v<active> (qualified v<frozen>)`, keeping the active runtime
+identity distinct from the frozen qualification evidence.
+
+### 21.4 No-JS, keyboard, and upgrade note
+
+- No-JS: the owner/cohort record choices degrade to plain inputs and the
+  manual policy strings panel is the primary policy editor; the form still
+  creates keys server-side (browser-qualified).
+- Keyboard: all four checkboxes are focusable and toggle with Space.
+- Deploying a NEW compatibility profile (e.g. a promoted
+  `CODEX_COMPATIBILITY_PROFILE_FILE`) requires an application
+  **restart/recreate** so the new DATA binds; there is NO existing-key
+  migration — explicit pins stay explicit, and a pin that no longer
+  matches the installed DATA fails closed at request time. Operators
+  migrate deliberately through the audited CLI workflow. Key templates
+  intentionally keep their frozen 0.147 pin and have no client-use
+  choices (documented gap, not a defect).
+
+### 21.5 229-b: form organization, preset switching, and safe errors
+
+- **Main flow vs advanced** — the form leads with the operator's main
+  decisions (owner, intended client, chosen provider and models,
+  validity and lifetime budgets, delivery) and collapses the advanced
+  categories by default: "Provider-run tools and their cost risk",
+  "Request speed controls", "Stopping long responses early", "Trusted
+  calibration key", and "Advanced: historical Codex key modes". Every
+  advanced editable field has adjacent plain-language help stating what it
+  controls, when to change it, what leaving it blank or zero does, and an
+  example where useful. Units and unlimited/inherited semantics are
+  precise, and a cost limit is never described as an exact
+  provider-invoice ceiling: the gateway stops admitting NEW requests when
+  the used cost approaches the limit, but an already-started request may
+  finish, so the final provider bill can slightly exceed it.
+- **Access summary** — before creation the form shows a compact
+  plain-language summary of the actual effect: client setup, models,
+  providers, endpoints, lifetime limits, and what happens after creation.
+- **Preset switching** — checking a client preselects its required
+  endpoint(s); unchecking it removes only the endpoint the preset itself
+  added, keeps every explicit operator selection intact, and is stable
+  under repeated toggling. If a checked client's required endpoint is
+  missing from the operator's explicit list, the pre-submit warning states
+  the true server behavior: the server applies the client preset
+  ADD-ONLY — the operator's explicit endpoints are kept and the missing
+  required endpoint is added — and the confirmation page shows the key's
+  final endpoint list. The server never refuses on a missing preset
+  endpoint; refusals are reserved for genuine incompatibilities
+  (conflicts, readiness, invalid values).
+- **Readiness before effects** — a client create resolves the selected
+  models/providers against the live route resolver locally (selected
+  enabled providers and routes, actual route selection, streaming
+  requirement, registered client/server pair, active pricing) and fails
+  with a field-labeled explanation BEFORE any key, email, or audit side
+  effect.
+- **Safe structured errors** — a refused create renders a `role="alert"`
+  summary with the operator sentence, a clickable anchor per affected
+  field, `aria-invalid` plus highlight on the flagged controls, focus
+  moved to the summary, and the containing collapsed group opened. Entered
+  NONSECRET values are preserved; the reference ID enables support lookup;
+  validation refusals create nothing (verified from the database side).
+
+### 21.6 229-c: live summary, delivery truth, pinpoint errors, per-field help
+
+- **Live access summary** — the summary before creation recomputes from the
+  CURRENT visible choices on every relevant change (client setup, models,
+  providers, endpoints including the effective preset union, lifetime
+  limits, validity, delivery effect), so it never shows the initial
+  defaults as if current. The primary widget path is covered too: Add/
+  Remove selections in the policy selector's available/selected lists and
+  server-side search choices update the summary immediately through a
+  shared post-mutation notification. It is client-side information only;
+  the server's validation remains authoritative. With scripts disabled the
+  live summary is withheld with an explanation that the entered fields
+  govern, instead of displaying stale defaults; the no-JS create path and
+  final result are unchanged.
+- **One-time secret and delivery truth** — with no email the row states the
+  real behavior: the key is shown in the browser ONCE, copy it before
+  leaving, it cannot be retrieved later, and the warning is displayed for
+  that mode. Send-now and enqueue use the owner email as the delivery
+  channel and suppress the browser plaintext; the wording never promises
+  successful delivery before it happens. For a failed or queued email the
+  guidance states the real recovery law: check the Email delivery result,
+  use the existing retry action only when sendability permits it (sent,
+  sending, ambiguous, consumed, or expired secrets are never retried), and
+  rotate or reissue the key if delivery is ambiguous or the secret is
+  unavailable.
+- **Pinpoint numeric errors** — an invalid numeric value flags ONLY the
+  control that failed (valid blank fields are never marked), preserves the
+  entered nonsecret value, opens the containing group, focuses the field,
+  and gives the field's real units plus its exact blank/zero/default
+  behavior: blank lifetime quota means no total ceiling, blank speed values
+  use the shown deployment defaults, blank queue bounds use the shown
+  defaults, and zero is invalid for positive limits but valid for the
+  existing safety-margin controls. Unknown failures get an honest safe
+  fallback with a reference ID, never raw exception text.
+- **Per-control plain-language help** — every editable advanced control has
+  its own adjacent help with an accessible `aria-describedby` relationship
+  stating what it controls, its units, what blank/zero do, and an example
+  where useful; raw Redis/null/schema/fence/capability-ID vocabulary and
+  source names sit in optional Technical details, and all advanced
+  functions remain available.

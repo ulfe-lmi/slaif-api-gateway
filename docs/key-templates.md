@@ -303,3 +303,16 @@ Template previews should show safe summaries only:
 - template revision IDs.
 - sanitized stateless local Responses policy summaries.
 - Chat streaming live-burn policy values/counters rather than streamed content.
+
+## Codex client module pin (frozen)
+
+Key templates that carry a Codex Responses policy intentionally keep the
+frozen 0.147 qualification pin (`codex-0.147-responses-v1`, the recorded
+revision/digest the template was qualified against). Templates do NOT offer
+the GUI key-create client-use choices and do NOT re-pin to the active
+compatibility DATA snapshot when a deployment promotes a newer preset —
+that is a deliberate historical freeze, documented as a known
+GUI/template gap (229-a), not a defect. Keys created interactively with
+client-use choices are pinned to the ACTIVE snapshot instead; see
+`docs/admin-usability.md` (section 21) and
+`docs/client-compatibility-presets.md`.

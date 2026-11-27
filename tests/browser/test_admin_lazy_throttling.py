@@ -405,16 +405,19 @@ def test_admin_lazy_throttling_wait_create_update_and_reject(owned_pg_url: str) 
             # --- create with wait + NON-DEFAULT bounds (JS active) ---
             page.goto("/admin/keys/create")
             create_html = page.content()
-            assert (
-                "may not exceed the operator ceilings: 120s maximum wait, "
-                "16 waiting per key" in create_html
-            )
+            # 229-c: the combined ceiling sentence moved to per-field help
+            # that renders the configured numeric ceilings.
+            assert "the operator ceiling of 120 seconds" in create_html
+            assert "the operator ceiling of 16" in create_html
             assert "Redis rate limiting is currently disabled" in create_html
             assert page.locator(
                 f'{CREATE_FORM} input[name="lazy_throttling_mode"][value="reject"]'
             ).is_checked()
-            # JS hides the wait bounds until wait is selected.
+            # JS hides the wait bounds until wait is selected; the native
+            # "Request speed controls" disclosure is closed by default and
+            # must be opened before the group can be observed or filled.
             group = page.locator(f"{CREATE_FORM} [data-lazy-throttling-field-group]")
+            page.click("#create-adv-rate-limit-heading")
             group.wait_for(state="hidden", timeout=10000)
             page.check(f'{CREATE_FORM} input[name="lazy_throttling_mode"][value="wait"]')
             group.wait_for(state="visible", timeout=10000)
@@ -515,8 +518,12 @@ def test_admin_lazy_throttling_no_js_create_and_escaped_redisplay(
         try:
             _login(page, data)
             page.goto("/admin/keys/create")
-            # Without JS the server-rendered wait bounds are usable even
-            # while reject is selected (JS may hide/disable only after init).
+            # Without JS the native <details> "Request speed controls"
+            # disclosure is still opened by clicking its summary (a browser
+            # built-in, not a script); the server-rendered wait bounds are
+            # then usable even while reject is selected (JS may hide/disable
+            # only after init).
+            page.click("#create-adv-rate-limit-heading")
             group = page.locator(f"{CREATE_FORM} [data-lazy-throttling-field-group]")
             assert group.is_visible()
             wait_input = page.locator(

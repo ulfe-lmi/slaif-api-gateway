@@ -133,3 +133,13 @@ configuration) is delivered by PR 361; see
   reviewed field set only; no generic patch language.
 - Usage/reservation/hold state: accounting is service-owned; CLI resets go
   through the dedicated commands with their confirmations.
+- Client-use key presets (229-a): the guided key-CREATE form's "Who will
+  use this key?" choices (Codex / OpenCode Chat / Hermes / OpenCode
+  Responses) are a GUI surface. The CLI creates keys through the reviewed
+  typed key-policy configuration, where the operator writes the exact
+  `responses_policy` / `chat_client_module` pins directly; batch import and
+  clone carry the raw policy metadata without the presets. Both remain
+  server-validated; the presets only prefill the same reviewed fields.
+  Since 229-b one key may combine one Chat client and one Responses client;
+  the GUI presets apply their required endpoints add-only and the same
+  server-side policy/readiness validation covers every surface.

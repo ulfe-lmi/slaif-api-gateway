@@ -61,6 +61,8 @@ from slaif_gateway.db.repositories.pricing import PricingRulesRepository
 from slaif_gateway.db.repositories.provider_configs import ProviderConfigsRepository
 from slaif_gateway.db.repositories.routing import ModelRoutesRepository
 from slaif_gateway.db.session import get_sessionmaker_from_app
+from slaif_gateway.modules.clients.codex_0162 import CODEX_0162_CLIENT_MODULE_ID
+from slaif_gateway.modules.clients.registry import active_client_module_facts
 from slaif_gateway.modules.codex_profile_data import (
     CodexProfileDataError,
     list_codex_presets,
@@ -311,11 +313,24 @@ async def compatibility_index(request: Request) -> Response:
                 # A withheld route ID drops the links; the fixed note says
                 # why instead of an unexplained placeholder.
                 artifacts_note = "Withheld: route ID matches a known credential value."
-            module_text = (
-                f"{result.client_module_id} v{result.client_module_version}"
-                if result.client_module_id
-                else "—"
-            )
+            if result.client_module_id == CODEX_0162_CLIENT_MODULE_ID:
+                # The 0.162 module is data-driven: a key created for this
+                # route binds the ACTIVE installed snapshot, while the
+                # profile column keeps the frozen qualification evidence
+                # (the revision the route was qualified against).
+                active_module = active_client_module_facts(
+                    CODEX_0162_CLIENT_MODULE_ID
+                )
+                module_text = (
+                    f"{active_module.module_id} v{active_module.module_version} "
+                    f"(qualified v{result.client_module_version})"
+                )
+            elif result.client_module_id:
+                module_text = (
+                    f"{result.client_module_id} v{result.client_module_version}"
+                )
+            else:
+                module_text = "—"
             reasons_text = (
                 ", ".join(result.reason_codes)
                 if result.reason_codes

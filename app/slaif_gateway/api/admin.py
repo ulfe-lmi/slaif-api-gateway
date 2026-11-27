@@ -45,7 +45,25 @@ from slaif_gateway.db.repositories.usage_profiles import UsageProfilesRepository
 from slaif_gateway.db.session import get_sessionmaker_from_app
 from slaif_gateway.services.admin_record_choices import RecordChoice, load_choices
 from slaif_gateway.modules.clients.codex_0162 import CODEX_0162_CLIENT_MODULE_ID
-from slaif_gateway.modules.clients.registry import client_module_metadata, get_client_module
+from slaif_gateway.modules.clients.hermes_0225_chat import (
+    HERMES_0225_CHAT_CLIENT_MODULE_ID,
+)
+from slaif_gateway.modules.clients.opencode_1193_chat import (
+    OPENCODE_1193_CHAT_CLIENT_MODULE_ID,
+)
+from slaif_gateway.modules.clients.opencode_1193_responses import (
+    OPENCODE_1193_RESPONSES_CLIENT_MODULE_ID,
+)
+from slaif_gateway.modules.clients.registry import (
+    active_client_module_facts,
+    client_module_metadata,
+    get_client_module,
+)
+from slaif_gateway.modules.contracts import ModuleSelectionError
+from slaif_gateway.modules.servers.registry import (
+    ensure_client_server_pair,
+    resolve_server_module,
+)
 from slaif_gateway.services.admin_activity_dashboard import (
     AdminActivityDashboardService,
     AdminActivityNotFoundError,
@@ -70,6 +88,18 @@ from slaif_gateway.services.codex_profile_registry import (
     QWEN38_240K_CODEX_PROFILE_ID,
     QWEN38_256K_CODEX_PROFILE_ID,
     QWEN38_100K_VISION_CODEX_PROFILE_ID,
+)
+from slaif_gateway.providers.errors import ProviderConfigurationError
+from slaif_gateway.schemas.auth import AuthenticatedGatewayKey
+from slaif_gateway.schemas.routing import RouteResolutionResult
+from slaif_gateway.services.route_resolution import RouteResolutionService
+from slaif_gateway.services.routing_errors import (
+    AmbiguousRouteError,
+    ModelNotFoundError,
+    ModelRouteDisabledError,
+    ProviderDisabledError,
+    ProviderNotAllowedForKeyError,
+    RouteResolutionError,
 )
 from slaif_gateway.services.admin_export_service import AdminCsvExportResult, AdminCsvExportService
 from slaif_gateway.schemas.admin_keys import LazyThrottlingOperatorCeilings
@@ -1246,6 +1276,10 @@ async def create_admin_key(
     confirm_codex_protocol_pilot: str = Form(""),
     qwen_codex: str = Form(""),
     confirm_qwen_codex: str = Form(""),
+    client_use_codex: str = Form(""),
+    client_use_opencode_chat: str = Form(""),
+    client_use_opencode_responses: str = Form(""),
+    client_use_hermes: str = Form(""),
     external_tool_mode: str = Form(STRICT_BOUNDED),
     external_tool_capabilities: list[str] = Form([]),
     external_tool_destination_ids: str = Form(""),
@@ -1297,6 +1331,10 @@ async def create_admin_key(
         "confirm_codex_protocol_pilot": confirm_codex_protocol_pilot,
         "qwen_codex": qwen_codex,
         "confirm_qwen_codex": confirm_qwen_codex,
+        "client_use_codex": client_use_codex,
+        "client_use_opencode_chat": client_use_opencode_chat,
+        "client_use_opencode_responses": client_use_opencode_responses,
+        "client_use_hermes": client_use_hermes,
         "external_tool_mode": external_tool_mode,
         "external_tool_capabilities": "\n".join(external_tool_capabilities),
         "external_tool_destination_ids": external_tool_destination_ids,
@@ -1311,10 +1349,15 @@ async def create_admin_key(
     try:
         policy_source_mode = (policy_source or "guided").strip().lower()
         if policy_source_mode not in {"guided", "configuration"}:
-            raise ValueError(
+            raise KeyCreateFieldError(
                 "Select a valid policy source: guided fields or advanced "
-                "configuration document."
+                "configuration document.",
+                fields=("policy_source",),
             )
+        use_codex = _is_checked(client_use_codex)
+        use_opencode_chat = _is_checked(client_use_opencode_chat)
+        use_opencode_responses = _is_checked(client_use_opencode_responses)
+        use_hermes = _is_checked(client_use_hermes)
         if policy_source_mode == "configuration":
             parsed_input = _parse_key_create_configuration_form(
                 form,
@@ -1323,7 +1366,10 @@ async def create_admin_key(
             )
             for model in parsed_input.allowed_models:
                 if _admin_value_contains_credential_shape(model, settings):
-                    raise ValueError(_ADMIN_MODEL_CREDENTIAL_SHAPE_MESSAGE)
+                    raise KeyCreateFieldError(
+                        _ADMIN_MODEL_CREDENTIAL_SHAPE_MESSAGE,
+                        fields=("allowed_models",),
+                    )
         else:
             parsed_input = _parse_key_create_form(
                 form,
@@ -1335,7 +1381,17 @@ async def create_admin_key(
             )
             for model in parsed_input.allowed_models:
                 if _admin_value_contains_credential_shape(model, settings):
-                    raise ValueError(_ADMIN_MODEL_CREDENTIAL_SHAPE_MESSAGE)
+                    raise KeyCreateFieldError(
+                        _ADMIN_MODEL_CREDENTIAL_SHAPE_MESSAGE,
+                        fields=("allowed_models",),
+                    )
+            parsed_input = _apply_admin_client_preset_endpoints(
+                parsed_input,
+                use_codex=use_codex,
+                use_opencode_chat=use_opencode_chat,
+                use_opencode_responses=use_opencode_responses,
+                use_hermes=use_hermes,
+            )
             validated_request_policy = await _validate_admin_request_policy(
                 request,
                 allowed_models=parsed_input.allowed_models,
@@ -1350,17 +1406,45 @@ async def create_admin_key(
                 allow_all_models=validated_request_policy.allow_all_models,
                 allow_all_endpoints=validated_request_policy.allow_all_endpoints,
             )
+        _validate_admin_client_use_selection(
+            client_use_selected=use_codex
+            or use_opencode_chat
+            or use_opencode_responses
+            or use_hermes,
+            use_codex=use_codex,
+            use_opencode_chat=use_opencode_chat,
+            use_opencode_responses=use_opencode_responses,
+            use_hermes=use_hermes,
+            advanced_codex_selected=_is_checked(codex_protocol_pilot)
+            or _is_checked(qwen_codex),
+            document_mode=policy_source_mode == "configuration",
+            trusted_calibration_selected=_is_checked(trusted_calibration),
+        )
         if _is_checked(codex_protocol_pilot) and _is_checked(qwen_codex):
-            raise ValueError("Select only one Codex key mode.")
+            raise KeyCreateFieldError(
+                "Select only one Codex key mode.",
+                fields=("codex_protocol_pilot", "qwen_codex"),
+            )
         if _is_checked(codex_protocol_pilot):
-            validate_codex_pilot_key_input(
-                parsed_input,
-                confirmed=_is_checked(confirm_codex_protocol_pilot),
-            )
-            await _validate_admin_codex_protocol_pilot_readiness(
-                request,
-                provider=parsed_input.allowed_providers[0],
-            )
+            try:
+                validate_codex_pilot_key_input(
+                    parsed_input,
+                    confirmed=_is_checked(confirm_codex_protocol_pilot),
+                )
+                await _validate_admin_codex_protocol_pilot_readiness(
+                    request,
+                    provider=parsed_input.allowed_providers[0],
+                )
+            except (KeyManagementError, ValueError) as exc:
+                raise KeyCreateFieldError(
+                    str(exc),
+                    fields=(
+                        "codex_protocol_pilot",
+                        "confirm_codex_protocol_pilot",
+                        "allowed_providers",
+                    ),
+                    remedy="Enable/qualify the provider route first.",
+                ) from exc
             parsed_input = replace(
                 parsed_input,
                 responses_policy={
@@ -1374,23 +1458,65 @@ async def create_admin_key(
             )
         if _is_checked(qwen_codex):
             if not _is_checked(confirm_qwen_codex):
-                raise ValueError("Confirm Qwen Codex mode before creating this key.")
+                raise KeyCreateFieldError(
+                    "Confirm Qwen Codex mode before creating this key.",
+                    fields=("confirm_qwen_codex",),
+                )
             parsed_input = replace(
                 parsed_input,
                 responses_policy=await _validated_admin_qwen_codex_policy(request, parsed_input),
             )
-        parsed_email_delivery_mode = _parse_admin_email_delivery_mode(email_delivery_mode)
-        _validate_admin_email_delivery_preconditions(settings, parsed_email_delivery_mode)
+        if use_codex:
+            # The explicit client-use checkbox is the confirmation: it is the
+            # operator's deliberate choice, and the same validated Qwen
+            # policy/readiness path applies.
+            parsed_input = replace(
+                parsed_input,
+                responses_policy=await _validated_admin_qwen_codex_policy(
+                    request, parsed_input, endpoint_rule="contains"
+                ),
+            )
+        if use_hermes:
+            parsed_input = await _apply_admin_chat_client_preset(
+                request,
+                parsed_input,
+                module_id=HERMES_0225_CHAT_CLIENT_MODULE_ID,
+                client_label="Hermes",
+            )
+        elif use_opencode_chat:
+            parsed_input = await _apply_admin_chat_client_preset(
+                request,
+                parsed_input,
+                module_id=OPENCODE_1193_CHAT_CLIENT_MODULE_ID,
+                client_label="OpenCode Chat",
+            )
+        if use_opencode_responses:
+            parsed_input = replace(
+                parsed_input,
+                responses_policy=await _validated_admin_opencode_responses_policy(
+                    request, parsed_input
+                ),
+            )
+        try:
+            parsed_email_delivery_mode = _parse_admin_email_delivery_mode(email_delivery_mode)
+            _validate_admin_email_delivery_preconditions(settings, parsed_email_delivery_mode)
+        except (KeyManagementError, ValueError) as exc:
+            raise KeyCreateFieldError(
+                str(exc),
+                fields=("email_delivery_mode",),
+            ) from exc
         if (
             parsed_input.key_purpose == KEY_PURPOSE_TRUSTED_CALIBRATION
             and parsed_email_delivery_mode in {"send-now", "enqueue"}
         ):
-            raise ValueError(
-                "Trusted calibration keys may only use none or pending email delivery modes."
+            raise KeyCreateFieldError(
+                "Trusted calibration keys may only use none or pending email delivery modes.",
+                fields=("trusted_calibration", "email_delivery_mode"),
             )
     except (KeyManagementError, ValueError) as exc:
         form["configuration_json"] = ""
         diagnostic_id = _admin_diagnostic_id(request)
+        field_issues, field_error_fields = _admin_key_create_field_issues(exc, settings)
         _log_admin_action_failure(
             request,
             exc=exc,
@@ -1412,6 +1538,8 @@ async def create_admin_key(
                     ("cohort_id", "cohort", form.get("cohort_id")),
                 ),
             ),
+            field_issues=field_issues,
+            field_error_fields=field_error_fields,
             error=_admin_redact_key_form_value(str(exc), settings),
             diagnostic_id=diagnostic_id,
             status_code=400,
@@ -1442,6 +1570,14 @@ async def create_admin_key(
                         ),
                     ),
                     error="Select an existing owner before creating a key.",
+                    field_issues=[
+                        {
+                            "field": "owner_id",
+                            "message": "Select an existing owner before creating a key.",
+                            "remedy": "Choose an existing owner from the list above.",
+                        }
+                    ],
+                    field_error_fields=["owner_id"],
                     status_code=400,
                 )
             cohort = None
@@ -1463,6 +1599,14 @@ async def create_admin_key(
                             ),
                         ),
                         error="Select an existing cohort or leave cohort blank.",
+                        field_issues=[
+                            {
+                                "field": "cohort_id",
+                                "message": "Select an existing cohort or leave cohort blank.",
+                                "remedy": "Select an existing cohort or leave cohort blank.",
+                            }
+                        ],
+                        field_error_fields=["cohort_id"],
                         status_code=400,
                     )
             created = await service.create_gateway_key(parsed_input)
@@ -1477,6 +1621,7 @@ async def create_admin_key(
             )
     except (EmailError, KeyManagementError, ValueError) as exc:
         diagnostic_id = _admin_diagnostic_id(request)
+        field_issues, field_error_fields = _admin_key_create_field_issues(exc, settings)
         _log_admin_action_failure(
             request,
             exc=exc,
@@ -1506,6 +1651,8 @@ async def create_admin_key(
                         ("cohort_id", "cohort", form.get("cohort_id")),
                     ),
                 ),
+            field_issues=field_issues,
+            field_error_fields=field_error_fields,
             error=error_message,
             diagnostic_id=diagnostic_id,
             status_code=400,
@@ -1633,6 +1780,9 @@ async def create_admin_key(
             },
             "key_purpose": created.key_purpose,
             "capability_policy_mode": created.capability_policy_mode,
+            "client_module_pins": _safe_client_module_pins(
+                parsed_input.responses_policy, parsed_input.chat_client_module
+            ),
             "email_delivery_mode": parsed_email_delivery_mode,
             "delivery": delivery_result,
             "celery_task_id": celery_task_id,
@@ -2617,6 +2767,12 @@ async def create_admin_key_from_template_revision(
             },
             "key_purpose": result.created_key.key_purpose,
             "capability_policy_mode": result.created_key.capability_policy_mode,
+            "client_module_pins": _safe_client_module_pins(
+                (
+                    getattr(result.revision, "template_snapshot", None) or {}
+                ).get("responses_policy"),
+                None,
+            ),
             "template_provenance": {
                 "template_id": result.template.id,
                 "template_name": result.template.name,
@@ -10445,6 +10601,171 @@ def _render_owner_form(
     )
 
 
+CLIENT_USE_FACT_FIELDS: tuple[tuple[str, str, str], ...] = (
+    ("client_use_codex", "Codex", CODEX_0162_CLIENT_MODULE_ID),
+    ("client_use_opencode_chat", "OpenCode Chat", OPENCODE_1193_CHAT_CLIENT_MODULE_ID),
+    ("client_use_opencode_responses", "OpenCode Responses", OPENCODE_1193_RESPONSES_CLIENT_MODULE_ID),
+    ("client_use_hermes", "Hermes", HERMES_0225_CHAT_CLIENT_MODULE_ID),
+)
+
+
+def _key_create_client_facts() -> dict[str, dict[str, str]]:
+    """Per-client identity facts for the create-form access summary.
+
+    ``human`` is the operator-facing text: the installed CLI version from
+    the validated provenance, or an honest installed/absent state.
+    ``technical`` carries the stable executable ID, DATA revision, and
+    canonical digest for the secondary technical detail. Values come from
+    the installed registry snapshot only; nothing is granted or inferred.
+    """
+    facts: dict[str, dict[str, str]] = {}
+    for field, _label, module_id in CLIENT_USE_FACT_FIELDS:
+        try:
+            resolved = active_client_module_facts(module_id)
+        except ModuleSelectionError:
+            facts[field] = {"human": "not installed in this deployment", "technical": ""}
+            continue
+        if resolved.cli_version:
+            human = f"CLI {resolved.cli_version}"
+        else:
+            human = "installed in this deployment"
+        facts[field] = {
+            "human": human,
+            "technical": (
+                f"{resolved.module_id} / DATA revision {resolved.module_version} / "
+                f"digest {resolved.fixture_sha256}"
+            ),
+        }
+    return facts
+
+
+# One-time secret / delivery truth for the summary and form copy: what the
+# operator actually gets after creation, without promising delivery before
+# it happens.
+_KEY_CREATE_DELIVERY_SUMMARY_TEXTS: dict[str, str] = {
+    "none": (
+        "No email. The key is shown in the browser once after creation - "
+        "copy it before leaving; the saved record cannot recover it later."
+    ),
+    "pending": (
+        "No email sent now. The key is shown in the browser once after "
+        "creation - copy it before leaving. A delivery record is created; "
+        "email is sent only if you choose to send it later."
+    ),
+    "send-now": (
+        "No browser plaintext. The owner email is sent immediately after "
+        "creation; if the send fails, the result page says so. Check the "
+        "Email delivery result and use the existing retry action only "
+        "when it is permitted; if delivery is ambiguous or the secret is "
+        "unavailable, rotate or reissue the key."
+    ),
+    "enqueue": (
+        "No browser plaintext. The owner email is queued after creation "
+        "and sent in the background; if queueing or the send fails, the "
+        "failure is recorded. Check the Email delivery result and use the "
+        "existing retry action only when it is permitted; if delivery is "
+        "ambiguous or the secret is unavailable, rotate or reissue the "
+        "key."
+    ),
+}
+
+
+def _build_key_create_access_summary(form: Mapping[str, str]) -> list[dict[str, str]]:
+    """Compact plain-language summary of the access the key WOULD get.
+
+    Server-rendered (the browser never grants anything): it restates the
+    submitted guided choices — client presets with the ACTIVE installed
+    module identity, models, providers, effective endpoints including the
+    preset-added ones, lifetime limits, validity, and the email delivery
+    effect — in operator words. Values are only restated as submitted or
+    as registry-installed identities; nothing new is granted or validated.
+    """
+    rows: list[dict[str, str]] = []
+
+    facts = _key_create_client_facts()
+    clients: list[str] = []
+    for field, label, _module_id in CLIENT_USE_FACT_FIELDS:
+        if not _is_checked(form.get(field, "")):
+            continue
+        clients.append(f"{label}: {facts[field]['human']}")
+    rows.append(
+        {
+            "label": "Client setup",
+            "value": "; ".join(clients) if clients else "None - plain API key only",
+        }
+    )
+
+    if _is_checked(form.get("allow_all_models", "")):
+        model_text = "All models"
+    else:
+        model_list = _parse_admin_text_list(form.get("allowed_models"))
+        model_text = ", ".join(model_list) if model_list else "None yet"
+    rows.append({"label": "Models", "value": model_text})
+
+    if _is_checked(form.get("allow_all_providers", "")):
+        provider_text = "All enabled providers"
+    elif _is_checked(form.get("provider_deny_all", "")):
+        provider_text = "None (deny all)"
+    else:
+        provider_list = _parse_admin_text_list(form.get("allowed_providers"))
+        provider_text = ", ".join(provider_list) if provider_list else "None selected"
+    rows.append({"label": "Providers", "value": provider_text})
+
+    if _is_checked(form.get("allow_all_endpoints", "")):
+        endpoint_text = "All implemented endpoints"
+    else:
+        endpoints = list(_parse_admin_text_list(form.get("allowed_endpoints")))
+        for field in CLIENT_USE_PRESET_ENDPOINTS:
+            if _is_checked(form.get(field, "")):
+                for endpoint in CLIENT_USE_PRESET_ENDPOINTS[field]:
+                    if endpoint not in endpoints:
+                        endpoints.append(endpoint)
+        endpoint_text = ", ".join(sorted(endpoints)) if endpoints else "None yet"
+    rows.append({"label": "Endpoints", "value": endpoint_text})
+
+    cost = str(form.get("cost_limit_eur") or "").strip()
+    tokens = str(form.get("token_limit_total") or "").strip()
+    requests = str(form.get("request_limit_total") or "").strip()
+    rows.append(
+        {
+            "label": "Lifetime limits",
+            "value": (
+                f"cost {'unlimited' if not cost else cost + ' EUR'}, "
+                f"tokens {'unlimited' if not tokens else tokens}, "
+                f"requests {'unlimited' if not requests else requests}"
+            ),
+        }
+    )
+
+    valid_from = str(form.get("valid_from") or "").strip()
+    valid_until = str(form.get("valid_until") or "").strip()
+    valid_days = str(form.get("valid_days") or "").strip()
+    validity_parts: list[str] = []
+    if valid_from:
+        validity_parts.append(f"from {valid_from}")
+    if valid_days:
+        validity_parts.append(f"{valid_days} days")
+    elif valid_until:
+        validity_parts.append(f"until {valid_until}")
+    rows.append(
+        {
+            "label": "Validity",
+            "value": " ".join(validity_parts) if validity_parts else "starts now, no end date",
+        }
+    )
+
+    email_mode = str(form.get("email_delivery_mode") or "none").strip().lower()
+    rows.append(
+        {
+            "label": "After creation",
+            "value": _KEY_CREATE_DELIVERY_SUMMARY_TEXTS.get(
+                email_mode, _KEY_CREATE_DELIVERY_SUMMARY_TEXTS["none"]
+            ),
+        }
+    )
+    return rows
+
+
 def _render_key_create_form(
     request: Request,
     *,
@@ -10456,9 +10777,41 @@ def _render_key_create_form(
     diagnostic_id: str | None = None,
     status_code: int = 200,
     choices: Mapping[str, Sequence[RecordChoice]] | None = None,
+    field_issues: Sequence[Mapping[str, str]] | None = None,
+    field_error_fields: Sequence[str] = (),
 ) -> Response:
     settings = _settings(request)
     choices = dict(choices or {})
+    access_summary: list[dict[str, str]] = []
+    access_summary_data_json = ""
+    access_summary_technical: list[str] = []
+    if str(form.get("policy_source") or "guided").strip().lower() == "guided":
+        try:
+            access_summary = _build_key_create_access_summary(form)
+        except (KeyManagementError, ValueError):
+            access_summary = []
+        if access_summary:
+            client_facts = _key_create_client_facts()
+            access_summary_data = {
+                "clientFacts": {
+                    field: {"label": label, **client_facts[field]}
+                    for field, label, _module_id in CLIENT_USE_FACT_FIELDS
+                },
+                "deliveryTexts": dict(_KEY_CREATE_DELIVERY_SUMMARY_TEXTS),
+                "presetEndpoints": {
+                    field: list(endpoints)
+                    for field, endpoints in CLIENT_USE_PRESET_ENDPOINTS.items()
+                },
+                "noClient": "None - plain API key only",
+            }
+            access_summary_data_json = json.dumps(
+                access_summary_data, separators=(",", ":"), sort_keys=True
+            ).replace("</", "<\\/")
+            access_summary_technical = [
+                f"{label}: {client_facts[field]['technical']}"
+                for field, label, _module_id in CLIENT_USE_FACT_FIELDS
+                if _is_checked(form.get(field, "")) and client_facts[field]["technical"]
+            ]
     return templates.TemplateResponse(
         request,
         "keys/create.html",
@@ -10474,6 +10827,12 @@ def _render_key_create_form(
             ),
             "form": form,
             "error": error,
+            "field_issues": list(field_issues or ()),
+            "field_error_fields": list(field_error_fields),
+            "field_labels": KEY_CREATE_FIELD_LABELS,
+            "access_summary": access_summary,
+            "access_summary_data_json": access_summary_data_json,
+            "access_summary_technical": access_summary_technical,
             "diagnostic_id": diagnostic_id,
             "choices": choices,
             "choice_labels": _choice_selected_labels(
@@ -10596,6 +10955,10 @@ def _default_key_create_form() -> dict[str, str]:
         "confirm_codex_protocol_pilot": "",
         "qwen_codex": "",
         "confirm_qwen_codex": "",
+        "client_use_codex": "",
+        "client_use_opencode_chat": "",
+        "client_use_opencode_responses": "",
+        "client_use_hermes": "",
         "external_tool_mode": STRICT_BOUNDED,
         "external_tool_capabilities": "",
         "external_tool_destination_ids": "",
@@ -12548,13 +12911,38 @@ def _parse_key_create_configuration_form(
     policy controls and preset modes are mutually exclusive with a
     document and are refused, never merged.
     """
-    owner_id = _parse_required_admin_uuid(form.get("owner_id"), field_name="owner_id")
-    cohort_id = _parse_optional_admin_uuid(form.get("cohort_id"), field_name="cohort_id")
+    try:
+        owner_id = _parse_required_admin_uuid(form.get("owner_id"), field_name="owner_id")
+    except ValueError as exc:
+        if not str(form.get("owner_id") or "").strip():
+            owner_message = "Select an owner before creating the key."
+        else:
+            owner_message = (
+                "The selected owner is not available on this deployment. "
+                "Choose an existing owner from the list."
+            )
+        raise KeyCreateFieldError(
+            owner_message,
+            fields=("owner_id",),
+            remedy="Choose an existing owner from the list above.",
+        ) from exc
+    try:
+        cohort_id = _parse_optional_admin_uuid(form.get("cohort_id"), field_name="cohort_id")
+    except ValueError as exc:
+        raise KeyCreateFieldError(
+            "The selected cohort is not available on this deployment. "
+            "Choose an existing cohort or leave it blank.",
+            fields=("cohort_id",),
+            remedy="Select an existing cohort or leave cohort blank.",
+        ) from exc
     cleaned_reason, reason_error = _admin_bounded_reason(form.get("reason"))
     if reason_error is not None:
-        raise ValueError(reason_error)
+        raise KeyCreateFieldError(reason_error, fields=("reason",))
     if cleaned_reason is None:
-        raise ValueError("Enter an audit reason before creating a key.")
+        raise KeyCreateFieldError(
+            "Enter an audit reason before creating a key.",
+            fields=("reason",),
+        )
     # Credential protection applies to the stored audit note as well as
     # the re-rendered form; ordinary reasons pass through unchanged.
     cleaned_reason = (
@@ -12571,27 +12959,39 @@ def _parse_key_create_configuration_form(
             valid_days=form.get("valid_days"),
         )
     except ValueError as exc:
-        raise ValueError(
+        raise KeyCreateFieldError(
             "Enter a valid key validity window. Use UTC date and time "
-            "(YYYY-MM-DD HH:MM) or positive Valid days, not both."
+            "(YYYY-MM-DD HH:MM) or positive Valid days, not both.",
+            fields=("valid_from", "valid_until", "valid_days"),
         ) from exc
     if valid_until <= valid_from:
-        raise ValueError("Enter a valid key validity window.")
+        raise KeyCreateFieldError(
+            "Enter a valid key validity window.",
+            fields=("valid_from", "valid_until", "valid_days"),
+        )
 
     if (
         _is_checked(form.get("trusted_calibration"))
         or _is_checked(form.get("codex_protocol_pilot"))
         or _is_checked(form.get("qwen_codex"))
     ):
-        raise ValueError(
+        raise KeyCreateFieldError(
             "Advanced configuration documents cannot be combined with trusted "
-            "calibration or Codex preset modes."
+            "calibration or Codex preset modes.",
+            fields=(
+                "policy_source",
+                "configuration_json",
+                "trusted_calibration",
+                "codex_protocol_pilot",
+                "qwen_codex",
+            ),
         )
     if _guided_policy_fields_present(form):
-        raise ValueError(
+        raise KeyCreateFieldError(
             "Choose one policy source: the guided policy fields or the advanced "
             "configuration document, not both. Leave guided policy controls at "
-            "their defaults (uncheck allow-all and live-burn, blank numbers)."
+            "their defaults (uncheck allow-all and live-burn, blank numbers).",
+            fields=("policy_source",),
         )
     document_text = str(form.get("configuration_json") or "")
     if not document_text.strip():
@@ -12610,6 +13010,163 @@ def _parse_key_create_configuration_form(
     )
 
 
+# Field-specific correction texts for the numeric create controls: the real
+# units and the EXACT blank behavior of each control (never the generic
+# "blank means no limit for that control", which is false for the speed
+# controls whose blank values use the installation defaults).
+KEY_CREATE_NUMERIC_FIELD_REMEDIES: dict[str, str] = {
+    "cost_limit_eur": (
+        "Enter a positive amount in EUR, or leave blank for no total spending limit."
+    ),
+    "token_limit_total": (
+        "Enter a positive whole token count, or leave blank for no total token limit."
+    ),
+    "request_limit_total": (
+        "Enter a positive whole request count, or leave blank for no total request limit."
+    ),
+    "rate_limit_requests_per_minute": (
+        "Enter a positive whole number of requests per window, or leave blank "
+        "to use this installation's default."
+    ),
+    "rate_limit_tokens_per_minute": (
+        "Enter a positive whole number of tokens per window, or leave blank "
+        "to use this installation's default."
+    ),
+    "rate_limit_concurrent_requests": (
+        "Enter a positive whole number, or leave blank to use this "
+        "installation's default."
+    ),
+    "rate_limit_window_seconds": (
+        "Enter a positive whole number of seconds, or leave blank to use the "
+        "60-second default window."
+    ),
+    "lazy_throttling_mode": "Choose reject or wait.",
+    "lazy_throttling_max_wait_seconds": (
+        "Enter a positive whole number of seconds up to the shown ceiling, or "
+        "leave blank to use the shown default."
+    ),
+    "lazy_throttling_max_waiting_requests": (
+        "Enter a positive whole number up to the shown ceiling, or leave blank "
+        "to use the shown default."
+    ),
+    "chat_streaming_live_burn_cost_margin_eur": (
+        "Enter a finite decimal EUR margin (negative allowed) within the "
+        "shown ceiling, or leave blank for zero."
+    ),
+    "chat_streaming_live_burn_token_margin": (
+        "Enter a whole-number token margin (negative allowed) within the "
+        "shown ceiling, or leave blank for zero."
+    ),
+}
+
+
+def _locate_key_create_numeric_failures(
+    form: Mapping[str, str], settings: Settings | None
+) -> tuple[list[str], dict[str, str]]:
+    """Pinpoint the exact numeric controls that fail their OWN typed parse.
+
+    Each control is re-checked with the same parser the submit path uses,
+    so valid blank neighbours (no lifetime ceiling; deployment defaults for
+    the speed controls; shown defaults for the queue bounds) are never
+    flagged. Returns the failing field names in form order plus their
+    field-specific remedy texts.
+    """
+    failing: list[str] = []
+    try:
+        _parse_optional_admin_decimal(form.get("cost_limit_eur"))
+    except ValueError:
+        failing.append("cost_limit_eur")
+    for name in (
+        "token_limit_total",
+        "request_limit_total",
+        "rate_limit_requests_per_minute",
+        "rate_limit_tokens_per_minute",
+        "rate_limit_concurrent_requests",
+        "rate_limit_window_seconds",
+    ):
+        try:
+            _parse_optional_admin_int(form.get(name))
+        except ValueError:
+            failing.append(name)
+
+    mode = str(form.get("lazy_throttling_mode") or "reject").strip()
+    if mode not in ("reject", "wait"):
+        failing.append("lazy_throttling_mode")
+    elif mode == "wait":
+        if settings is not None:
+            max_wait_ceiling = settings.LAZY_THROTTLING_MAX_WAIT_SECONDS
+            max_waiting_ceiling = settings.LAZY_THROTTLING_MAX_WAITING_PER_KEY
+        else:
+            max_wait_ceiling, max_waiting_ceiling = 120, 16
+        for name, label, default, ceiling in (
+            (
+                "lazy_throttling_max_wait_seconds",
+                "Maximum waiting time",
+                30,
+                max_wait_ceiling,
+            ),
+            (
+                "lazy_throttling_max_waiting_requests",
+                "Maximum waiting requests",
+                2,
+                max_waiting_ceiling,
+            ),
+        ):
+            try:
+                _parse_admin_lazy_throttling_bound(
+                    form.get(name), label=label, default=default, ceiling=ceiling
+                )
+            except ValueError:
+                failing.append(name)
+
+    # Live-burn margins: only non-blank values can fail, so probe each one
+    # with its own parser while the other margin is the always-valid "0".
+    max_abs_cost = (
+        settings.CHAT_STREAMING_LIVE_BURN_MAX_ABS_COST_MARGIN_EUR
+        if settings is not None
+        else Decimal("1000000")
+    )
+    max_abs_token = (
+        settings.CHAT_STREAMING_LIVE_BURN_MAX_ABS_TOKEN_MARGIN
+        if settings is not None
+        else 1000000000
+    )
+    burn_enabled = _is_checked(form.get("chat_streaming_live_burn_enabled", ""))
+    cost_margin = form.get("chat_streaming_live_burn_cost_margin_eur")
+    if cost_margin is not None and str(cost_margin).strip():
+        try:
+            parse_streaming_live_burn_surface_form_policy(
+                CHAT_STREAMING_LIVE_BURN_SURFACE,
+                enabled=burn_enabled,
+                cost_margin_eur=cost_margin,
+                token_margin="0",
+                max_abs_cost_margin_eur=max_abs_cost,
+                max_abs_token_margin=max_abs_token,
+            )
+        except ValueError:
+            failing.append("chat_streaming_live_burn_cost_margin_eur")
+    token_margin = form.get("chat_streaming_live_burn_token_margin")
+    if token_margin is not None and str(token_margin).strip():
+        try:
+            parse_streaming_live_burn_surface_form_policy(
+                CHAT_STREAMING_LIVE_BURN_SURFACE,
+                enabled=burn_enabled,
+                cost_margin_eur="0",
+                token_margin=token_margin,
+                max_abs_cost_margin_eur=max_abs_cost,
+                max_abs_token_margin=max_abs_token,
+            )
+        except ValueError:
+            failing.append("chat_streaming_live_burn_token_margin")
+
+    remedies = {
+        name: remedy
+        for name, remedy in KEY_CREATE_NUMERIC_FIELD_REMEDIES.items()
+        if name in failing
+    }
+    return failing, remedies
+
+
 def _parse_key_create_form(
     form: dict[str, str],
     *,
@@ -12617,13 +13174,38 @@ def _parse_key_create_form(
     settings: Settings | None = None,
     available_provider_values: Sequence[str] = (),
 ) -> CreateGatewayKeyInput:
-    owner_id = _parse_required_admin_uuid(form.get("owner_id"), field_name="owner_id")
-    cohort_id = _parse_optional_admin_uuid(form.get("cohort_id"), field_name="cohort_id")
+    try:
+        owner_id = _parse_required_admin_uuid(form.get("owner_id"), field_name="owner_id")
+    except ValueError as exc:
+        if not str(form.get("owner_id") or "").strip():
+            owner_message = "Select an owner before creating the key."
+        else:
+            owner_message = (
+                "The selected owner is not available on this deployment. "
+                "Choose an existing owner from the list."
+            )
+        raise KeyCreateFieldError(
+            owner_message,
+            fields=("owner_id",),
+            remedy="Choose an existing owner from the list above.",
+        ) from exc
+    try:
+        cohort_id = _parse_optional_admin_uuid(form.get("cohort_id"), field_name="cohort_id")
+    except ValueError as exc:
+        raise KeyCreateFieldError(
+            "The selected cohort is not available on this deployment. "
+            "Choose an existing cohort or leave it blank.",
+            fields=("cohort_id",),
+            remedy="Select an existing cohort or leave cohort blank.",
+        ) from exc
     cleaned_reason, reason_error = _admin_bounded_reason(form.get("reason"))
     if reason_error is not None:
-        raise ValueError(reason_error)
+        raise KeyCreateFieldError(reason_error, fields=("reason",))
     if cleaned_reason is None:
-        raise ValueError("Enter an audit reason before creating a key.")
+        raise KeyCreateFieldError(
+            "Enter an audit reason before creating a key.",
+            fields=("reason",),
+        )
     # Credential protection applies to the stored audit note as well as
     # the re-rendered form; ordinary reasons pass through unchanged.
     cleaned_reason = (
@@ -12640,12 +13222,16 @@ def _parse_key_create_form(
             valid_days=form.get("valid_days"),
         )
     except ValueError as exc:
-        raise ValueError(
+        raise KeyCreateFieldError(
             "Enter a valid key validity window. Use UTC date and time "
-            "(YYYY-MM-DD HH:MM) or positive Valid days, not both."
+            "(YYYY-MM-DD HH:MM) or positive Valid days, not both.",
+            fields=("valid_from", "valid_until", "valid_days"),
         ) from exc
     if valid_until <= valid_from:
-        raise ValueError("Enter a valid key validity window.")
+        raise KeyCreateFieldError(
+            "Enter a valid key validity window.",
+            fields=("valid_from", "valid_until", "valid_days"),
+        )
 
     try:
         _, cost_limit_eur = _parse_optional_admin_decimal(form.get("cost_limit_eur"))
@@ -12670,13 +13256,24 @@ def _parse_key_create_form(
             ),
         )
     except ValueError as exc:
-        raise ValueError("Enter valid positive quota and rate-limit values.") from exc
+        # Pinpoint the exact failing controls: each group is re-checked with
+        # its own typed parser, so valid blank neighbours stay unflagged and
+        # every flagged field carries its own units/default remedy.
+        failing_fields, failing_remedies = _locate_key_create_numeric_failures(
+            form, settings
+        )
+        raise KeyCreateFieldError(
+            "Enter valid positive quota and rate-limit values.",
+            fields=failing_fields,
+            field_remedies=failing_remedies,
+        ) from exc
 
     trusted_calibration = _is_checked(form.get("trusted_calibration"))
     if trusted_calibration and _is_checked(form.get("provider_deny_all")):
-        raise ValueError(
+        raise KeyCreateFieldError(
             "Trusted calibration keys use unrestricted provider discovery; "
-            "deny-all is not compatible."
+            "deny-all is not compatible.",
+            fields=("trusted_calibration", "provider_deny_all"),
         )
     request_policy = validate_gateway_key_policy_values(
         GatewayKeyPolicy(
@@ -12698,17 +13295,32 @@ def _parse_key_create_form(
     calibration_metadata: dict[str, object] = {}
     if trusted_calibration:
         if settings is not None and not settings.CALIBRATION_KEYS_ENABLED:
-            raise ValueError("Trusted calibration keys are disabled by configuration.")
+            raise KeyCreateFieldError(
+                "Trusted calibration keys are disabled by configuration.",
+                fields=("trusted_calibration", "confirm_trusted_calibration"),
+            )
         if not _is_checked(form.get("confirm_trusted_calibration")):
-            raise ValueError("Confirm trusted calibration mode before creating this key.")
+            raise KeyCreateFieldError(
+                "Confirm trusted calibration mode before creating this key.",
+                fields=("trusted_calibration", "confirm_trusted_calibration"),
+            )
         if request_limit_total is None:
-            raise ValueError("Trusted calibration keys require request_limit_total.")
+            raise KeyCreateFieldError(
+                "Trusted calibration keys require request_limit_total.",
+                fields=("trusted_calibration", "confirm_trusted_calibration"),
+            )
         if settings is not None and request_limit_total > settings.TRUSTED_CALIBRATION_MAX_REQUESTS:
-            raise ValueError("Trusted calibration request limit exceeds the configured maximum.")
+            raise KeyCreateFieldError(
+                "Trusted calibration request limit exceeds the configured maximum.",
+                fields=("trusted_calibration", "confirm_trusted_calibration"),
+            )
         if settings is not None and valid_until - valid_from > timedelta(
             days=settings.TRUSTED_CALIBRATION_MAX_VALID_DAYS
         ):
-            raise ValueError("Trusted calibration validity exceeds the configured maximum.")
+            raise KeyCreateFieldError(
+                "Trusted calibration validity exceeds the configured maximum.",
+                fields=("trusted_calibration", "confirm_trusted_calibration"),
+            )
         key_purpose = KEY_PURPOSE_TRUSTED_CALIBRATION
         capability_policy_mode = CAPABILITY_POLICY_MODE_TRUSTED_CALIBRATION_DISCOVERY
         calibration_metadata = {
@@ -12804,13 +13416,801 @@ async def _validate_admin_codex_protocol_pilot_readiness(
         ).ready_responses_profile(provider=provider)
 
 
-async def _validated_admin_qwen_codex_policy(
+# Closed vocabulary of key-create form controls that a safe error may
+# point at. Anything outside it renders as a form-level issue instead of
+# an anchor (fail-closed: an unknown field never highlights a control).
+KEY_CREATE_ERROR_FIELDS: frozenset[str] = frozenset(
+    {
+        "owner_id",
+        "cohort_id",
+        "reason",
+        "valid_from",
+        "valid_until",
+        "valid_days",
+        "cost_limit_eur",
+        "token_limit_total",
+        "request_limit_total",
+        "allowed_providers",
+        "allowed_models",
+        "allowed_endpoints",
+        "allow_all_providers",
+        "provider_deny_all",
+        "allow_all_models",
+        "allow_all_endpoints",
+        "policy_source",
+        "configuration_json",
+        "rate_limit_requests_per_minute",
+        "rate_limit_tokens_per_minute",
+        "rate_limit_concurrent_requests",
+        "rate_limit_window_seconds",
+        "lazy_throttling_mode",
+        "lazy_throttling_max_wait_seconds",
+        "lazy_throttling_max_waiting_requests",
+        "chat_streaming_live_burn_enabled",
+        "chat_streaming_live_burn_cost_margin_eur",
+        "chat_streaming_live_burn_token_margin",
+        "trusted_calibration",
+        "confirm_trusted_calibration",
+        "codex_protocol_pilot",
+        "confirm_codex_protocol_pilot",
+        "qwen_codex",
+        "confirm_qwen_codex",
+        "client_use_codex",
+        "client_use_opencode_chat",
+        "client_use_opencode_responses",
+        "client_use_hermes",
+        "external_tool_mode",
+        "external_tool_capabilities",
+        "external_tool_destination_ids",
+        "external_tool_max_calls",
+        "external_tool_overrun_acknowledged",
+        "confirm_external_tool_fenced",
+        "email_delivery_mode",
+    }
+)
+
+# Human labels for the safe-error anchor links (no raw field names shown).
+KEY_CREATE_FIELD_LABELS: dict[str, str] = {
+    "owner_id": "Owner",
+    "cohort_id": "Cohort",
+    "reason": "Audit reason",
+    "valid_from": "Valid from",
+    "valid_until": "Valid until",
+    "valid_days": "Valid days",
+    "cost_limit_eur": "Cost limit EUR",
+    "token_limit_total": "Token limit",
+    "request_limit_total": "Request limit",
+    "allowed_providers": "Providers",
+    "allowed_models": "Models",
+    "allowed_endpoints": "Endpoints",
+    "allow_all_providers": "Allow all providers",
+    "provider_deny_all": "Deny all providers",
+    "allow_all_models": "Allow all models",
+    "allow_all_endpoints": "Allow all endpoints",
+    "policy_source": "Policy source",
+    "configuration_json": "Configuration document",
+    "rate_limit_requests_per_minute": "Requests per minute",
+    "rate_limit_tokens_per_minute": "Tokens per minute",
+    "rate_limit_concurrent_requests": "Concurrent requests",
+    "rate_limit_window_seconds": "Window seconds",
+    "lazy_throttling_mode": "When a rate limit is reached",
+    "lazy_throttling_max_wait_seconds": "Maximum waiting time",
+    "lazy_throttling_max_waiting_requests": "Maximum waiting requests",
+    "chat_streaming_live_burn_enabled": "Live-burn monitoring",
+    "chat_streaming_live_burn_cost_margin_eur": "Cost margin EUR",
+    "chat_streaming_live_burn_token_margin": "Output token margin",
+    "trusted_calibration": "Trusted calibration",
+    "confirm_trusted_calibration": "Trusted calibration confirmation",
+    "codex_protocol_pilot": "Codex protocol pilot",
+    "confirm_codex_protocol_pilot": "Codex pilot confirmation",
+    "qwen_codex": "Qwen Codex",
+    "confirm_qwen_codex": "Qwen Codex confirmation",
+    "client_use_codex": "Codex client use",
+    "client_use_opencode_chat": "OpenCode Chat client use",
+    "client_use_opencode_responses": "OpenCode Responses client use",
+    "client_use_hermes": "Hermes client use",
+    "external_tool_mode": "Provider-run tool mode",
+    "external_tool_capabilities": "Reviewed capability IDs",
+    "external_tool_destination_ids": "Reviewed destination IDs",
+    "external_tool_max_calls": "Maximum provider tool calls",
+    "external_tool_overrun_acknowledged": "Overrun acknowledgement",
+    "confirm_external_tool_fenced": "Fenced external-tool confirmation",
+    "email_delivery_mode": "Email delivery mode",
+}
+
+
+class KeyCreateFieldError(ValueError):
+    """Safe, structured key-creation validation failure.
+
+    ``fields`` names the affected form controls (restricted to the closed
+    ``KEY_CREATE_ERROR_FIELDS`` vocabulary); ``remedy`` is the specific
+    correction or administrator setup action; ``details`` optionally splits
+    one failure into several operator sentences (e.g. one per unusable
+    model). Messages stay fixed and safe: no form values, schema, or
+    arbitrary exception text is echoed.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        fields: Sequence[str] = (),
+        remedy: str | None = None,
+        details: Sequence[str] = (),
+        field_remedies: Mapping[str, str] | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.fields = tuple(name for name in fields if name in KEY_CREATE_ERROR_FIELDS)
+        self.remedy = remedy
+        self.details = tuple(details)
+        self.field_remedies = {
+            name: str(remedy_text)
+            for name, remedy_text in dict(field_remedies or {}).items()
+            if name in KEY_CREATE_ERROR_FIELDS
+        }
+
+
+def _admin_key_create_field_issues(
+    exc: BaseException,
+    settings: Settings | None = None,
+) -> tuple[list[dict[str, str]], list[str]]:
+    """Convert one caught create failure into safe structured issues.
+
+    Returns ``(issues, field_names)``: each issue is ``{"field", "message",
+    "remedy"}`` where ``field`` is empty for form-level failures, and
+    ``field_names`` drives the aria-invalid highlights. Uses only the
+    existing stable error types/codes (KeyCreateFieldError,
+    KeyConfigurationError, KeyManagementError.param); there is no
+    string matching on arbitrary messages.
+    """
+    def _redact(value: str) -> str:
+        return (
+            _admin_redact_key_form_value(value, settings)
+            if settings is not None
+            else redact_text(value)
+        )
+
+    message: str
+    fields: tuple[str, ...] = ()
+    remedy: str | None = None
+    details: tuple[str, ...] = ()
+    field_remedies: dict[str, str] = {}
+    if isinstance(exc, KeyCreateFieldError):
+        message = str(exc)
+        fields = exc.fields
+        remedy = exc.remedy
+        details = exc.details
+        field_remedies = dict(exc.field_remedies)
+    elif isinstance(exc, KeyConfigurationError):
+        message = str(exc)
+        fields = ("configuration_json",)
+        remedy = "Fix the flagged field in the configuration document and submit again."
+    elif isinstance(exc, KeyManagementError):
+        message = str(exc)
+        param = getattr(exc, "param", None)
+        if isinstance(param, str) and param in KEY_CREATE_ERROR_FIELDS:
+            fields = (param,)
+        remedy = "Adjust the affected value to a valid one and submit again."
+    else:
+        summary = " ".join(str(exc).split())
+        message = summary[:297] + "..." if len(summary) > 300 else (summary or "Key creation was refused.")
+    # Credential redaction on every rendered path: operator texts are fixed
+    # and safe, but service exceptions may carry credential-shaped values.
+    message = _redact(message)
+    details = tuple(_redact(item) for item in details)
+    field_remedies = {name: _redact(text) for name, text in field_remedies.items()}
+    field_names = list(fields)
+    if details:
+        anchor = fields[0] if len(fields) == 1 else ""
+        issues = [
+            {"field": anchor, "message": detail, "remedy": remedy or ""}
+            for detail in details[:8]
+        ]
+    elif fields:
+        issues = [
+            {
+                "field": name,
+                "message": message,
+                "remedy": field_remedies.get(name, remedy or ""),
+            }
+            for name in fields
+        ]
+    else:
+        issues = [{"field": "", "message": message, "remedy": remedy or ""}]
+    return issues, field_names
+
+
+OPENCODE_RESPONSES_PRESET_GATES = (
+    "codex_request_envelope",
+    "codex_client_tools",
+    "codex_streaming_tool_events",
+    "codex_encrypted_reasoning_replay",
+)
+
+
+def _validate_admin_client_use_selection(
+    *,
+    client_use_selected: bool,
+    use_codex: bool,
+    use_opencode_chat: bool,
+    use_opencode_responses: bool,
+    use_hermes: bool,
+    advanced_codex_selected: bool,
+    document_mode: bool,
+    trusted_calibration_selected: bool,
+) -> None:
+    """Fail closed on client-use selections that would define a key twice.
+
+    A key carries at most one Chat client binding and one Responses client
+    binding. The rules name the conflicting selections and the remedy so the
+    operator can correct the form; they never widen a grant.
+    """
+    checked_client_use = tuple(
+        name
+        for name, flag in (
+            ("client_use_codex", use_codex),
+            ("client_use_opencode_chat", use_opencode_chat),
+            ("client_use_opencode_responses", use_opencode_responses),
+            ("client_use_hermes", use_hermes),
+        )
+        if flag
+    )
+    if client_use_selected and document_mode:
+        raise KeyCreateFieldError(
+            "Client use: the client-use choices are guided-mode only. In "
+            "document mode the configuration document defines the key's "
+            "client policy; switch the policy source back to guided fields "
+            "or define the client policy in the document.",
+            fields=checked_client_use + ("policy_source",),
+        )
+    if client_use_selected and trusted_calibration_selected:
+        raise KeyCreateFieldError(
+            "Client use: client-use presets create ordinary standard keys. "
+            "Trusted calibration keys use discovery policy instead; use one "
+            "or the other.",
+            fields=checked_client_use + ("trusted_calibration",),
+        )
+    if use_opencode_chat and use_hermes:
+        raise KeyCreateFieldError(
+            "Client use: OpenCode Chat and Hermes both need this key's "
+            "single Chat client binding. Create one key per client, or keep "
+            "only one of the two choices.",
+            fields=("client_use_opencode_chat", "client_use_hermes"),
+        )
+    if use_codex and use_opencode_responses:
+        raise KeyCreateFieldError(
+            "Client use: Codex and OpenCode Responses both need this key's "
+            "single Responses client binding. Create one key per client, or "
+            "use a different wire.",
+            fields=("client_use_codex", "client_use_opencode_responses"),
+        )
+    if advanced_codex_selected and client_use_selected:
+        raise KeyCreateFieldError(
+            "Client use: the advanced Codex sections and the client-use "
+            "choices both define the same Codex/Responses client policy. "
+            "Use one of them, not both.",
+            fields=checked_client_use + ("codex_protocol_pilot", "qwen_codex"),
+        )
+
+
+def _admin_key_uses_endpoint(key_input: CreateGatewayKeyInput, endpoint: str) -> bool:
+    return bool(key_input.allow_all_endpoints) or endpoint in key_input.allowed_endpoints
+
+
+# Endpoints each client-use preset requires on the key. The SAME mapping
+# drives the guided form's JS convenience and the server-side add-only
+# application below, so no-JavaScript submissions receive the same working
+# policy (never an invisible browser-side grant: the server re-derives it).
+CLIENT_USE_PRESET_ENDPOINTS: dict[str, tuple[str, ...]] = {
+    "client_use_codex": ("/v1/models", "/v1/responses"),
+    "client_use_opencode_chat": ("/v1/chat/completions",),
+    "client_use_opencode_responses": ("/v1/responses",),
+    "client_use_hermes": ("/v1/chat/completions",),
+}
+
+
+def _apply_admin_client_preset_endpoints(
+    key_input: CreateGatewayKeyInput,
+    *,
+    use_codex: bool,
+    use_opencode_chat: bool,
+    use_opencode_responses: bool,
+    use_hermes: bool,
+) -> CreateGatewayKeyInput:
+    """Add (never remove or overwrite) the endpoints checked client presets need.
+
+    The operator's explicit endpoint entries are preserved as-is; allow-all
+    endpoint keys are untouched. This is the server-side half of preset
+    switching: unchecking a preset later removes only what the preset
+    itself added, which the guided form tracks client-side and which the
+    server re-derives on every submit.
+    """
+    if key_input.allow_all_endpoints:
+        return key_input
+    checked = (
+        ("client_use_codex", use_codex),
+        ("client_use_opencode_chat", use_opencode_chat),
+        ("client_use_opencode_responses", use_opencode_responses),
+        ("client_use_hermes", use_hermes),
+    )
+    required = {
+        endpoint
+        for name, is_checked in checked
+        if is_checked
+        for endpoint in CLIENT_USE_PRESET_ENDPOINTS[name]
+    }
+    if not required:
+        return key_input
+    existing = list(key_input.allowed_endpoints)
+    missing = [endpoint for endpoint in sorted(required) if endpoint not in existing]
+    if not missing:
+        return key_input
+    return replace(key_input, allowed_endpoints=existing + missing)
+
+
+# Bounded local inspection for allow-all-models readiness: a key that
+# allows every model could span the whole route table; the check covers
+# this many distinct models and asks for explicit models beyond it.
+_READINESS_MAX_MODELS = 50
+_READINESS_MAX_ROUTES = 100
+
+
+def _proposed_authenticated_key_view(
+    key_input: CreateGatewayKeyInput,
+) -> AuthenticatedGatewayKey:
+    """The runtime view of the key as it would be right after creation.
+
+    Readiness inspection resolves routes exactly the way the live gateway
+    would for this key (same model/endpoint/provider restrictions, same
+    provider filter); it is local, contacts no provider, and modifies no
+    state.
+    """
+    return AuthenticatedGatewayKey(
+        gateway_key_id=uuid.UUID(int=0),
+        owner_id=key_input.owner_id,
+        cohort_id=key_input.cohort_id,
+        public_key_id="pending",
+        status="active",
+        valid_from=key_input.valid_from,
+        valid_until=key_input.valid_until,
+        allow_all_models=key_input.allow_all_models,
+        allowed_models=tuple(key_input.allowed_models),
+        allow_all_endpoints=key_input.allow_all_endpoints,
+        allowed_endpoints=tuple(key_input.allowed_endpoints),
+        allowed_providers=(
+            tuple(key_input.allowed_providers)
+            if key_input.allowed_providers is not None
+            else None
+        ),
+        cost_limit_eur=key_input.cost_limit_eur,
+        token_limit_total=key_input.token_limit_total,
+        request_limit_total=key_input.request_limit_total,
+        rate_limit_policy={},
+    )
+
+
+def _route_readiness_resolution_issue(
+    model: str,
+    endpoint: str,
+    exc: RouteResolutionError,
+) -> str:
+    """Operator text for a model the runtime resolver cannot serve."""
+    if isinstance(exc, ModelRouteDisabledError):
+        return (
+            f"Routes: the matching route for model {model!r} on {endpoint} is "
+            "disabled. Enable the route or choose another model."
+        )
+    if isinstance(exc, ProviderDisabledError):
+        return (
+            f"Routes: every route for model {model!r} on {endpoint} points at "
+            "a disabled provider. Enable the provider or choose another one."
+        )
+    if isinstance(exc, ProviderNotAllowedForKeyError):
+        return (
+            f"Routes: the route for model {model!r} on {endpoint} uses a "
+            "provider this key does not allow. Add that provider to the key "
+            "or choose another model."
+        )
+    if isinstance(exc, AmbiguousRouteError):
+        return (
+            f"Routes: model {model!r} on {endpoint} has multiple routes with "
+            "identical precedence. Fix the route priorities under /admin/routes "
+            "before creating this key."
+        )
+    if isinstance(exc, ModelNotFoundError):
+        return (
+            f"Routes: no enabled route serves model {model!r} on {endpoint}. "
+            "Add or enable a matching model route, or choose a model that is "
+            "already routed."
+        )
+    return (
+        f"Routes: model {model!r} on {endpoint} cannot be resolved safely. "
+        "Check the model routes under /admin/routes and try again."
+    )
+
+
+def _resolved_route_client_issue(
+    result: RouteResolutionResult,
+    *,
+    endpoint: str,
+    client_module_id: str,
+    client_label: str,
+    require_streaming: bool,
+    responses_gates: Sequence[str],
+    pricing_rule: object | None,
+) -> str | None:
+    """Why the route the runtime WOULD select cannot serve this client, if any.
+
+    Reuses the existing static module laws (server-module resolution and
+    the reviewed client/server pair registry) plus active pricing; a route
+    row with flags alone never counts as ready.
+    """
+    try:
+        server = resolve_server_module(
+            result.provider,
+            result.provider_kind,
+            result.capabilities,
+        )
+    except ProviderConfigurationError:
+        return (
+            f"Routes: the provider for model {result.requested_model!r} on "
+            f"{endpoint} ({result.provider}) is not a registered server module "
+            f"for the {client_label} client. Choose a provider whose server "
+            "module is registered."
+        )
+    try:
+        ensure_client_server_pair(client_module_id, server.module_id)
+    except ProviderConfigurationError:
+        return (
+            f"Routes: model {result.requested_model!r} on {endpoint} resolves "
+            f"to server module {server.module_id}, which has no reviewed pair "
+            f"with the {client_label} client. Choose a provider whose server "
+            "module pairs with this client."
+        )
+    if require_streaming and not result.supports_streaming:
+        return (
+            f"Routes: the route for model {result.requested_model!r} on "
+            f"{endpoint} does not support streaming, which this client "
+            "requires. Enable streaming on the route or choose another model."
+        )
+    if responses_gates:
+        capabilities = result.capabilities or {}
+        responses = capabilities.get("responses")
+        missing = [
+            gate
+            for gate in responses_gates
+            if not (isinstance(responses, Mapping) and responses.get(gate) is True)
+        ]
+        if missing:
+            gates_text = (
+                "four OpenCode Responses gates"
+                if len(responses_gates) == 4
+                else f"{len(responses_gates)} required gates"
+            )
+            return (
+                f"Routes: the route for model {result.requested_model!r} on "
+                f"{endpoint} is missing the {gates_text} "
+                f"({', '.join(missing)}). Qualify that route first; the key "
+                "was not created."
+            )
+    if pricing_rule is None:
+        return (
+            f"Pricing: no active pricing rule covers model "
+            f"{result.requested_model!r} on {endpoint} for provider "
+            f"{result.provider}. Add or enable a pricing rule for that "
+            "provider, upstream model, and endpoint."
+        )
+    return None
+
+
+async def _admin_readiness_candidate_models(
+    request: Request,
+    key_input: CreateGatewayKeyInput,
+    endpoint: str,
+) -> list[str]:
+    """Distinct models the key could request on this endpoint (bounded).
+
+    Only enabled routes on enabled providers inside the key's provider
+    restriction count; inspection covers at most ``_READINESS_MAX_MODELS``
+    distinct models and otherwise asks for explicit models (fail-closed).
+    """
+    async_session_factory = get_sessionmaker_from_app(request)
+    async with async_session_factory() as session:
+        routes = await ModelRoutesRepository(session).list_model_routes(
+            endpoint=endpoint, limit=_READINESS_MAX_ROUTES
+        )
+        providers = await ProviderConfigsRepository(session).list_provider_configs()
+    enabled_providers = {config.provider for config in providers if config.enabled}
+    key_providers = (
+        set(key_input.allowed_providers)
+        if key_input.allowed_providers is not None
+        else None
+    )
+    models: list[str] = []
+    seen: set[str] = set()
+    for route in routes:
+        if not route.enabled or route.provider not in enabled_providers:
+            continue
+        if key_providers is not None and route.provider not in key_providers:
+            continue
+        if route.requested_model not in seen:
+            seen.add(route.requested_model)
+            models.append(route.requested_model)
+    if len(models) > _READINESS_MAX_MODELS:
+        raise KeyCreateFieldError(
+            "Models: this key allows all models, which covers more than "
+            f"{_READINESS_MAX_MODELS} routed models on {endpoint}. Choose the "
+            "explicit models this key should use so each can be checked "
+            "against a ready route.",
+            fields=("allowed_models", "allow_all_models"),
+        )
+    return models
+
+
+async def _admin_validate_client_readiness(
+    request: Request,
+    *,
+    key_input: CreateGatewayKeyInput,
+    client_module_id: str,
+    client_label: str,
+    endpoint: str,
+    require_streaming: bool,
+    responses_gates: Sequence[str] = (),
+) -> None:
+    """Fail closed, before any key/email effect, when the runtime cannot serve
+    the selected client.
+
+    One core-owned check shared by the client presets: for every model the
+    key allows (or the bounded candidate set under allow-all models), the
+    route the LIVE resolver would pick must come from an enabled provider,
+    pair with the selected client's registered server module(s), stream
+    when the client requires it, carry the preset gates, and have active
+    pricing.
+    """
+    if key_input.allow_all_models:
+        models = await _admin_readiness_candidate_models(request, key_input, endpoint)
+    else:
+        models = list(dict.fromkeys(key_input.allowed_models))
+        if not models:
+            raise KeyCreateFieldError(
+                f"Models: {client_label} keys need at least one allowed model "
+                f"so every model can be checked against a ready route on "
+                f"{endpoint}.",
+                fields=("allowed_models",),
+            )
+    if not models:
+        raise KeyCreateFieldError(
+            f"Routes: no enabled route serves any model on {endpoint} within "
+            "this key's providers. Add or enable model routes, or adjust the "
+            "provider selection.",
+            fields=("allowed_models", "allowed_providers"),
+        )
+    proposed = _proposed_authenticated_key_view(key_input)
+    now = datetime.now(UTC)
+    issues: list[str] = []
+    async_session_factory = get_sessionmaker_from_app(request)
+    async with async_session_factory() as session:
+        resolver = RouteResolutionService(
+            model_routes_repository=ModelRoutesRepository(session),
+            provider_configs_repository=ProviderConfigsRepository(session),
+        )
+        pricing = PricingRulesRepository(session)
+        for model in models:
+            try:
+                result = await resolver.resolve_model(
+                    model, proposed, endpoint=endpoint
+                )
+            except RouteResolutionError as exc:
+                issues.append(
+                    _route_readiness_resolution_issue(model, endpoint, exc)
+                )
+                continue
+            pricing_rule = await pricing.find_active_pricing_rule(
+                provider=result.provider,
+                upstream_model=result.resolved_model,
+                endpoint=endpoint,
+                at_time=now,
+            )
+            issue = _resolved_route_client_issue(
+                result,
+                endpoint=endpoint,
+                client_module_id=client_module_id,
+                client_label=client_label,
+                require_streaming=require_streaming,
+                responses_gates=responses_gates,
+                pricing_rule=pricing_rule,
+            )
+            if issue is not None:
+                issues.append(issue)
+    if issues:
+        raise KeyCreateFieldError(
+            " ".join(issues[:5]),
+            fields=("allowed_models", "allowed_providers"),
+            remedy=(
+                "Fix the named route, provider, or pricing setup under "
+                "/admin/routes and /admin/pricing, or adjust the key's "
+                "models and providers."
+            ),
+            details=tuple(issues[:5]),
+        )
+
+
+async def _apply_admin_chat_client_preset(
+    request: Request,
+    key_input: CreateGatewayKeyInput,
+    *,
+    module_id: str,
+    client_label: str,
+) -> CreateGatewayKeyInput:
+    """Pin the key's single Chat binding to the ACTIVE registered module.
+
+    The pin is built from the module snapshot installed for this process
+    (active DATA revision and canonical digest), so a deployment that
+    promoted a newer Chat client profile pins new keys to that snapshot;
+    existing stored pins are never touched. Before pinning, the shared
+    readiness check proves the selected models/providers can actually
+    serve Chat through a registered server pair with active pricing.
+    """
+    if not _admin_key_uses_endpoint(key_input, "/v1/chat/completions"):
+        raise KeyCreateFieldError(
+            "Endpoints: add /v1/chat/completions to the allowed endpoints - "
+            f"{client_label} keys cannot work without the Chat endpoint.",
+            fields=("allowed_endpoints",),
+            remedy=(
+                "Add the Chat endpoint to the allowed endpoints (the "
+                "preset normally preselects it) or uncheck this client."
+            ),
+        )
+    await _admin_validate_client_readiness(
+        request,
+        key_input=key_input,
+        client_module_id=module_id,
+        client_label=client_label,
+        endpoint="/v1/chat/completions",
+        require_streaming=False,
+    )
+    active = active_client_module_facts(module_id)
+    return replace(key_input, chat_client_module=active.pin)
+
+
+def _route_supports_opencode_responses_gates(route: object) -> bool:
+    capabilities = getattr(route, "capabilities", None)
+    if not isinstance(capabilities, Mapping):
+        return False
+    responses = capabilities.get("responses")
+    if not isinstance(responses, Mapping):
+        return False
+    return all(responses.get(gate) is True for gate in OPENCODE_RESPONSES_PRESET_GATES)
+
+
+async def _validated_admin_opencode_responses_policy(
     request: Request,
     key_input: CreateGatewayKeyInput,
 ) -> dict[str, object]:
-    """Grant only selected, currently ready Qwen routes under the loaded 0.162 module."""
+    """Grant the OpenCode Responses wire under the ACTIVE registered module.
+
+    The preset pins the key to the active OpenCode Responses client module
+    snapshot and requires, for every selected model, that the route the
+    LIVE resolver would pick is enabled, streaming, carries the four
+    OpenCode Responses gates, pairs with the OpenCode Responses client,
+    and has active pricing. Missing setup is reported as an
+    operator-side route problem, never widened into a permissive grant.
+    """
     models = set(key_input.allowed_models)
     providers = set(key_input.allowed_providers or ())
+    if key_input.allow_all_models or not models:
+        raise KeyCreateFieldError(
+            "Models: OpenCode Responses keys need explicit models (no "
+            "allow-all) so every model/provider pair can be checked against "
+            "a qualifying route.",
+            fields=("allowed_models", "allow_all_models"),
+        )
+    if not providers:
+        raise KeyCreateFieldError(
+            "Providers: choose the explicit providers that serve the "
+            "selected models; do not use allow-all for this preset.",
+            fields=("allowed_providers", "allow_all_providers"),
+        )
+    if not _admin_key_uses_endpoint(key_input, "/v1/responses"):
+        raise KeyCreateFieldError(
+            "Endpoints: add /v1/responses to the allowed endpoints for this "
+            "OpenCode Responses key.",
+            fields=("allowed_endpoints",),
+        )
+    await _admin_validate_client_readiness(
+        request,
+        key_input=key_input,
+        client_module_id=OPENCODE_1193_RESPONSES_CLIENT_MODULE_ID,
+        client_label="OpenCode Responses",
+        endpoint="/v1/responses",
+        require_streaming=True,
+        responses_gates=OPENCODE_RESPONSES_PRESET_GATES,
+    )
+    active = active_client_module_facts(OPENCODE_1193_RESPONSES_CLIENT_MODULE_ID)
+    return {
+        "version": 1,
+        "allowed_capabilities": list(OPENCODE_RESPONSES_PRESET_GATES),
+        "allowed_local_tool_types": ["function", "custom"],
+        "client_module": active.pin,
+    }
+
+
+def _safe_client_module_pins(
+    responses_policy: object,
+    chat_client_module: object,
+) -> dict[str, dict[str, str]]:
+    """Reviewed client-module pins only, for the one-time result page.
+
+    Pins are displayed only when the creation path already validated them
+    against the registered modules (fail-closed); nothing here re-validates
+    or rewrites stored policy.
+    """
+    pins: dict[str, dict[str, str]] = {}
+
+    def _as_pin(raw: object) -> dict[str, str] | None:
+        if (
+            isinstance(raw, Mapping)
+            and set(raw) == {"id", "version", "fixture_sha256"}
+            and all(
+                isinstance(raw[field], str) and raw[field]
+                for field in ("id", "version", "fixture_sha256")
+            )
+        ):
+            return {field: str(raw[field]) for field in ("id", "version", "fixture_sha256")}
+        return None
+
+    if isinstance(responses_policy, Mapping):
+        responses_pin = _as_pin(responses_policy.get("client_module"))
+        if responses_pin is not None:
+            pins["responses"] = responses_pin
+    chat_pin = _as_pin(chat_client_module)
+    if chat_pin is not None:
+        pins["chat"] = chat_pin
+    return pins
+
+
+async def _validated_admin_qwen_codex_policy(
+    request: Request,
+    key_input: CreateGatewayKeyInput,
+    *,
+    endpoint_rule: str = "exact",
+) -> dict[str, object]:
+    """Grant only selected, currently ready Qwen routes under the stable Codex module.
+
+    The selected qualification profiles are frozen evidence: their recorded
+    client-module revision (the DATA snapshot the route was qualified
+    against) is evidence, not a runtime equality gate.  The runtime check
+    is the stable executable module ID; the new key pin is built from the
+    ACTIVE DATA snapshot installed for this process, so a deployment that
+    promoted a newer compatibility preset pins new keys to that preset.
+
+    ``endpoint_rule`` selects the endpoint law: ``"exact"`` (the legacy
+    qwen_codex checkbox) requires the allowed endpoints to be exactly the
+    two Qwen endpoints; ``"contains"`` (the Codex client-use preset)
+    requires them to include the two Qwen endpoints, leaving room for the
+    operator's other explicit endpoints. Allow-all endpoints are refused
+    under both rules.
+    """
+    models = set(key_input.allowed_models)
+    providers = set(key_input.allowed_providers or ())
+    if endpoint_rule == "contains":
+        endpoint_ok = {"/v1/models", "/v1/responses"}.issubset(
+            set(key_input.allowed_endpoints)
+        )
+        endpoint_message = (
+            "Qwen Codex requires explicit Qwen models and providers, and the "
+            "allowed endpoints must include /v1/models and /v1/responses; do "
+            "not use allow-all settings."
+        )
+    else:
+        endpoint_ok = set(key_input.allowed_endpoints) == {
+            "/v1/models",
+            "/v1/responses",
+        }
+        endpoint_message = (
+            "Qwen Codex requires explicit Qwen models and providers, and exactly "
+            "/v1/models and /v1/responses; do not use allow-all settings."
+        )
     if (
         key_input.key_purpose != "standard"
         or key_input.allow_all_models
@@ -12818,21 +14218,22 @@ async def _validated_admin_qwen_codex_policy(
         or not models
         or not providers
         or not models.issubset(_QWEN_CODEX_PROFILES_BY_MODEL)
-        or set(key_input.allowed_endpoints) != {"/v1/models", "/v1/responses"}
+        or not endpoint_ok
     ):
-        raise ValueError(
-            "Qwen Codex requires explicit Qwen models and providers, and exactly "
-            "/v1/models and /v1/responses; do not use allow-all settings."
-        )
+        raise ValueError(endpoint_message)
 
-    module = get_client_module(CODEX_0162_CLIENT_MODULE_ID)
+    active = active_client_module_facts(CODEX_0162_CLIENT_MODULE_ID)
     selected_profiles = [_QWEN_CODEX_PROFILES_BY_MODEL[model] for model in sorted(models)]
-    if any(
-        profile.client_module_id != module.module_id
-        or profile.client_module_version != module.module_version
-        for profile in selected_profiles
-    ):
-        raise ValueError("The active Codex 0.162 module does not match the selected Qwen profile.")
+    for profile in selected_profiles:
+        if (
+            profile.client_module_id is None
+            or profile.client_module_id != active.module_id
+        ):
+            raise ValueError(
+                "Client use: the selected Qwen profile was not qualified for the "
+                "installed Codex module. Select different models, or restore the "
+                "Codex module the routes were qualified against."
+            )
 
     async_session_factory = get_sessionmaker_from_app(request)
     async with async_session_factory() as session:
@@ -12893,7 +14294,7 @@ async def _validated_admin_qwen_codex_policy(
             if gate in gates
         ],
         "allowed_local_tool_types": ["function", "custom"],
-        "client_module": client_module_metadata(module),
+        "client_module": active.pin,
     }
 
 
@@ -13051,18 +14452,16 @@ def _safe_codex_responses_policy_summary(
     ):
         return None
     if tuple(allowed_capabilities) != expected_capabilities:
-        qwen_gates = (
-            "codex_request_envelope",
-            "codex_client_tools",
-            "codex_streaming_tool_events",
-            "codex_encrypted_reasoning_replay",
-        )
+        qwen_gates = OPENCODE_RESPONSES_PRESET_GATES
+        acceptable_pins = [
+            client_module_metadata(get_client_module(CODEX_0162_CLIENT_MODULE_ID)),
+            active_client_module_facts(OPENCODE_1193_RESPONSES_CLIENT_MODULE_ID).pin,
+        ]
         if (
             policy.get("version") != 1
             or tuple(allowed_capabilities)
             not in {qwen_gates, (*qwen_gates, "image_input")}
-            or policy.get("client_module")
-            != client_module_metadata(get_client_module(CODEX_0162_CLIENT_MODULE_ID))
+            or policy.get("client_module") not in acceptable_pins
         ):
             return None
         expected_capabilities = tuple(allowed_capabilities)
@@ -13375,9 +14774,10 @@ def _parse_admin_allowed_providers(
     allow_all = _is_checked(form.get("allow_all_providers", ""))
     deny_all = _is_checked(form.get("provider_deny_all", ""))
     if allow_all and deny_all:
-        raise ValueError(
+        raise KeyCreateFieldError(
             "Select only one provider mode: allow all enabled providers, "
-            "selected providers, or deny all providers."
+            "selected providers, or deny all providers.",
+            fields=("allow_all_providers", "provider_deny_all"),
         )
     if deny_all:
         return []
@@ -13392,17 +14792,19 @@ def _parse_admin_allowed_providers(
         for value in _parse_admin_text_list(form.get("allowed_providers"))
     ]
     if not providers:
-        raise ValueError(
+        raise KeyCreateFieldError(
             "Provider selection is empty. Choose allow all enabled providers, "
             "select at least one provider, or explicitly deny all providers; "
-            "an empty selection never grants unrestricted access."
+            "an empty selection never grants unrestricted access.",
+            fields=("allowed_providers",),
         )
 
     invalid = [provider for provider in providers if provider not in available_provider_set]
     if invalid:
-        raise ValueError(
+        raise KeyCreateFieldError(
             "A selected provider is not available. Select only from enabled "
-            "local provider configs, or providers this key already stores."
+            "local provider configs, or providers this key already stores.",
+            fields=("allowed_providers",),
         )
     return providers
 

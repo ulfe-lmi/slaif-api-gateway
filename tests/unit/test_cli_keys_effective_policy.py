@@ -23,7 +23,11 @@ from slaif_gateway.services.key_policy_inspection import (
     KeyPolicyInspectionContext,
 )
 
-NOW = datetime(2026, 10, 28, 12, 0, 0, tzinfo=UTC)
+# Wall-clock relative: the fixture key is created shortly before the
+# test runs and expires 30 days after test start, so the active/no
+# status_note expectation stays valid as calendar time advances (the
+# inspection code checks against the same wall clock).
+NOW = datetime.now(UTC)
 KEY_ID = uuid.UUID("44444444-4444-4444-8444-444444444444")
 OWNER_ID = uuid.UUID("11111111-1111-4111-8111-111111111111")
 PUBLIC_ID = "publicid1234567890abcdefghijkl"

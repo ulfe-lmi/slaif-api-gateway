@@ -109,6 +109,14 @@
         return;
       }
       manual.value = selectedValues(dimension).join("\n");
+      // Shared post-mutation notification: Add/Remove/search selections
+      // set the manual control programmatically (no input event fires),
+      // so form listeners such as the key-creation live access summary
+      // subscribe to this event to stay in step with the submitted
+      // values. Listeners only read form state, so this cannot recurse.
+      manual.dispatchEvent(
+        new CustomEvent("slaif:policy-manual-synced", { bubbles: true })
+      );
     };
 
     const syncSelectedFromManual = (dimension) => {

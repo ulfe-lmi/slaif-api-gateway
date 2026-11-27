@@ -43,6 +43,34 @@ no revision-number conditionals remain in the decoder. New operator policy
 belongs in schema 2. Legacy files and frozen migration selectors remain usable
 for deliberate rollback.
 
+## Key creation pins the active snapshot (229-a)
+
+The admin GUI key-create form and the CLI both build a NEW key's Codex pin
+from the ACTIVE bound snapshot (module ID, revision, canonical digest, CLI
+provenance) — never from the frozen qualification constants, which record
+only the DATA revision a route was qualified against. The runtime gate is
+the stable module ID; promoting a newer preset through
+`CODEX_COMPATIBILITY_PROFILE_FILE` and restarting the deployment changes
+which identity NEW keys are pinned to. Existing keys keep their explicit
+pins: a pin that no longer matches the installed DATA fails closed at
+request time and is migrated deliberately under audit, never rewritten
+silently. Key templates remain an intentional exception (frozen 0.147 pin,
+see `docs/key-templates.md`). The compatibility dashboard displays the two
+concepts side by side: `<module> v<active> (qualified v<frozen>)`.
+
+## Combined client bindings and preset endpoints (229-b)
+
+One key may carry one Chat client (OpenCode Chat or Hermes) and one
+Responses client (Codex or OpenCode Responses) together. Each enabled
+client's required endpoints must be present in the composed key policy;
+the server applies the client presets ADD-ONLY on submit (the operator's
+explicit endpoint lists are kept, missing required endpoints are added,
+allow-all keys are untouched), and a shared local readiness check proves
+the selected models/providers can actually serve each client (route
+selection, streaming, registered client/server pair, active pricing)
+BEFORE any key/email effect. Refusals are field-labeled and create
+nothing.
+
 ## Schema-2 dialect rules
 
 The editor schema ships at
