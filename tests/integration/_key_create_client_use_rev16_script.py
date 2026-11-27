@@ -23,10 +23,14 @@ from pathlib import Path
 REPO_ROOT = str(Path(__file__).resolve().parents[2])
 
 def main(argv: list[str]) -> int:
-    if len(argv) != 2:
-        print(json.dumps({"error": "usage: db_url profile_path"}))
+    if len(argv) not in (2, 3):
+        print(json.dumps({"error": "usage: db_url profile_path [combo]"}))
         return 2
-    database_url, profile_path = argv
+    database_url, profile_path = argv[0], argv[1]
+    combo = argv[2] if len(argv) == 3 else None
+    if combo is not None and combo not in ("hermes", "opencode_chat"):
+        print(json.dumps({"error": "combo must be hermes or opencode_chat"}))
+        return 2
     sys.path.insert(0, REPO_ROOT)
 
     from fastapi.testclient import TestClient
@@ -145,6 +149,38 @@ def main(argv: list[str]) -> int:
                             },
                         )
                     )
+                    if combo is not None:
+                        # Combo mode: the SAME provider/model also serves
+                        # Chat, so the server-side preset can add the Chat
+                        # endpoint to a Codex-checked form.
+                        session.add(
+                            ModelRoute(
+                                requested_model=profile.public_model,
+                                provider=provider.provider,
+                                upstream_model=profile.upstream_model,
+                                match_type="exact",
+                                endpoint="/v1/chat/completions",
+                                priority=1,
+                                enabled=True,
+                                visible_in_models=True,
+                                supports_streaming=True,
+                            )
+                        )
+                        session.add(
+                            PricingRule(
+                                provider=provider.provider,
+                                upstream_model=profile.upstream_model,
+                                endpoint="/v1/chat/completions",
+                                input_price_per_1m=Decimal("1.000000000"),
+                                cached_input_price_per_1m=Decimal("0.250000000"),
+                                output_price_per_1m=Decimal("1.000000000"),
+                                reasoning_price_per_1m=Decimal("2.000000000"),
+                                request_price=Decimal("0.000000000"),
+                                currency="EUR",
+                                valid_from=now - timedelta(days=1),
+                                enabled=True,
+                            )
+                        )
                     return {
                         "admin_email": admin.email,
                         "owner_id": owner.id,
@@ -156,7 +192,7 @@ def main(argv: list[str]) -> int:
 
     data = asyncio.run(seed())
 
-    async def inspect_key() -> tuple[int, dict[str, object] | None]:
+    async def inspect_key() -> tuple[int, dict[str, object] | None, dict[str, object] | None, list[str]]:
         engine = create_async_engine(database_url, future=True)
         session_factory = async_sessionmaker(engine, expire_on_commit=False)
         try:
@@ -182,7 +218,13 @@ def main(argv: list[str]) -> int:
                     .all()
                 )
                 policy = rows[-1].metadata_json.get("responses_policy") if rows else None
-                return count, policy
+                chat_pin = (
+                    rows[-1].metadata_json.get("chat_client_module") if rows else None
+                )
+                endpoints = (
+                    list(rows[-1].allowed_endpoints) if rows else []
+                )
+                return count, policy, chat_pin, endpoints
         finally:
             await engine.dispose()
 
@@ -197,7 +239,13 @@ def main(argv: list[str]) -> int:
         CODEX_COMPATIBILITY_PROFILE_FILE=profile_path,
     )
     app = create_app(settings)
-    outcome: dict[str, object] = {"status": None, "key_count": 0, "responses_policy": None}
+    outcome: dict[str, object] = {
+        "status": None,
+        "key_count": 0,
+        "responses_policy": None,
+        "chat_client_module": None,
+        "allowed_endpoints": [],
+    }
     try:
         with TestClient(app) as client:
             login_page = client.get("/admin/login")
@@ -229,15 +277,20 @@ def main(argv: list[str]) -> int:
                     "rate_limit_concurrent_requests": "4",
                     "rate_limit_window_seconds": "30",
                     "client_use_codex": "true",
+                    **(
+                        {"client_use_" + combo: "true"} if combo is not None else {}
+                    ),
                     "allowed_providers": str(data["provider"]),
                     "allowed_models": profile.public_model,
                     "allowed_endpoints": "/v1/models\n/v1/responses",
                 },
             )
             outcome["status"] = response.status_code
-            count, policy = asyncio.run(inspect_key())
+            count, policy, chat_pin, endpoints = asyncio.run(inspect_key())
             outcome["key_count"] = count
             outcome["responses_policy"] = policy
+            outcome["chat_client_module"] = chat_pin
+            outcome["allowed_endpoints"] = endpoints
             if response.status_code != 200:
                 flash = re.search(
                     r'admin-flash-error[^>]*>(.*?)</div>', response.text, re.S

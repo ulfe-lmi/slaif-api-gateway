@@ -71,7 +71,12 @@ first, then the agent-chat registry; `.pin` is the exact
 client-use choices and the compatibility dashboard read the active
 snapshot through that accessor to build and annotate NEW key pins
 (229-a); frozen qualification constants remain evidence only and are
-never a runtime version gate.
+never a runtime version gate. Since 229-b the client-use create path also
+runs a shared local readiness check that resolves the selected
+models/providers through the live route resolver (enabled providers and
+routes, streaming requirement, registered client/server pair, active
+pricing) and fails closed before any key, email, or audit effect; one key
+may combine one Chat client and one Responses client.
 
 ## Static registration
 

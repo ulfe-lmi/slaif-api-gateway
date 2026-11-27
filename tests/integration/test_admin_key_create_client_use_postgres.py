@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import pytest
 import re
 import subprocess
 import sys
@@ -106,6 +107,10 @@ async def _seed_admin_and_routes(
     *,
     with_codex_route: bool = False,
     with_gateless_responses_route: bool = False,
+    with_chat_pricing: bool = True,
+    chat_provider_enabled: bool = True,
+    chat_provider_kind: str = "openai_compatible",
+    responses_route_supports_streaming: bool = True,
 ) -> dict[str, object]:
     engine = create_async_engine(database_url, future=True)
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
@@ -142,10 +147,10 @@ async def _seed_admin_and_routes(
                     ProviderConfig(
                         provider=chat_provider,
                         display_name="Chat 229 Provider",
-                        kind="openai_compatible",
+                        kind=chat_provider_kind,
                         base_url=f"https://chat229-{suffix}.example/v1",
                         api_key_env_var=f"GUI229_CHAT_{suffix.upper()}_KEY",
-                        enabled=True,
+                        enabled=chat_provider_enabled,
                     )
                 )
                 await session.flush()
@@ -158,6 +163,22 @@ async def _seed_admin_and_routes(
                         enabled=True,
                     )
                 )
+                if with_chat_pricing:
+                    session.add(
+                        PricingRule(
+                            provider=chat_provider,
+                            upstream_model="gpt-test",
+                            endpoint="/v1/chat/completions",
+                            input_price_per_1m=Decimal("1.000000000"),
+                            cached_input_price_per_1m=Decimal("0.250000000"),
+                            output_price_per_1m=Decimal("1.000000000"),
+                            reasoning_price_per_1m=Decimal("2.000000000"),
+                            request_price=Decimal("0.000000000"),
+                            currency="EUR",
+                            valid_from=now - timedelta(days=1),
+                            enabled=True,
+                        )
+                    )
                 codex_provider = f"syn229-{suffix}"
                 session.add(
                     ProviderConfig(
@@ -181,7 +202,7 @@ async def _seed_admin_and_routes(
                             priority=1,
                             enabled=True,
                             visible_in_models=True,
-                            supports_streaming=True,
+                            supports_streaming=responses_route_supports_streaming,
                             capabilities={
                                 "responses": {
                                     "text": True,
@@ -521,15 +542,18 @@ def test_gui_create_opencode_responses_gateless_route_fails_closed(
 
 
 def _run_rev_create_subprocess(
-    migrated_postgres_url: str, profile_path: Path
+    migrated_postgres_url: str,
+    profile_path: Path,
+    combo: str | None = None,
 ) -> dict[str, object]:
     script = Path(__file__).with_name("_key_create_client_use_rev16_script.py")
+    args = [str(script), migrated_postgres_url, str(profile_path)]
+    if combo is not None:
+        args.append(combo)
     completed = subprocess.run(
         [
             sys.executable,
-            str(script),
-            migrated_postgres_url,
-            str(profile_path),
+            *args,
         ],
         capture_output=True,
         text=True,
@@ -588,3 +612,172 @@ def test_gui_create_codex_under_synthetic_later_revision(
     assert outcome["key_count"] == 1
     assert outcome["responses_policy"] is not None
     assert outcome["responses_policy"]["client_module"] == expected
+
+
+# ---------------------------------------------------------------------------
+# 229-b: working Codex + Chat-client combinations and readiness negatives
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("combo", ["hermes", "opencode_chat"])
+def test_gui_create_codex_plus_chat_combo_under_active_rev16_profile(
+    migrated_postgres_url: str, tmp_path: Path, combo: str
+) -> None:
+    """Codex plus one Chat client on one key: the server adds the Chat
+    preset endpoint (the POST lists only the Codex endpoints) and pins BOTH
+    client profiles (active rev16 Codex + the active Chat module)."""
+    rev16 = tmp_path / "codex-0.167.1.json"
+    rev16.write_bytes(_PACKAGED_01671.read_bytes())
+    expected_codex = _expected_pin_for_profile_file(rev16)
+    chat_module_id = (
+        HERMES_0225_CHAT_CLIENT_MODULE_ID
+        if combo == "hermes"
+        else OPENCODE_1193_CHAT_CLIENT_MODULE_ID
+    )
+    expected_chat = active_client_module_facts(chat_module_id).pin
+
+    outcome = _run_rev_create_subprocess(migrated_postgres_url, rev16, combo)
+    assert outcome["status"] == 200, outcome
+    assert outcome["key_count"] == 1
+    policy = outcome["responses_policy"]
+    assert policy is not None
+    assert policy["client_module"] == expected_codex
+    assert outcome["chat_client_module"] == expected_chat
+    assert set(outcome["allowed_endpoints"]) == {
+        "/v1/models",
+        "/v1/responses",
+        "/v1/chat/completions",
+    }
+
+
+def test_gui_create_hermes_without_chat_pricing_fails_before_effects(
+    migrated_postgres_url: str,
+) -> None:
+    data = asyncio.run(
+        _seed_admin_and_routes(
+            migrated_postgres_url, with_chat_pricing=False
+        )
+    )
+    owner_id = data["owner_id"]
+    assert isinstance(owner_id, uuid.UUID)
+    emails_before = _count(migrated_postgres_url, EmailDelivery)
+    audits_before = _created_audit_count(migrated_postgres_url)
+    app = create_app(_settings(migrated_postgres_url))
+    with TestClient(app) as client:
+        csrf = _login(client, data["admin_email"])
+        response = client.post(
+            "/admin/keys/create",
+            data={
+                **_base_form(csrf, data),
+                "client_use_hermes": "true",
+                "allowed_providers": data["chat_provider"],
+                "allowed_models": "gpt-test",
+                "allowed_endpoints": "/v1/chat/completions",
+            },
+        )
+        assert response.status_code == 400
+        assert "Pricing: no active pricing rule" in _flash_error(response.text)
+    assert _key_rows(migrated_postgres_url, owner_id) == []
+    assert _count(migrated_postgres_url, EmailDelivery) == emails_before
+    assert _created_audit_count(migrated_postgres_url) == audits_before
+
+
+def test_gui_create_hermes_with_disabled_provider_fails_before_effects(
+    migrated_postgres_url: str,
+) -> None:
+    data = asyncio.run(
+        _seed_admin_and_routes(
+            migrated_postgres_url, chat_provider_enabled=False
+        )
+    )
+    owner_id = data["owner_id"]
+    assert isinstance(owner_id, uuid.UUID)
+    emails_before = _count(migrated_postgres_url, EmailDelivery)
+    audits_before = _created_audit_count(migrated_postgres_url)
+    app = create_app(_settings(migrated_postgres_url))
+    with TestClient(app) as client:
+        csrf = _login(client, data["admin_email"])
+        response = client.post(
+            "/admin/keys/create",
+            data={
+                **_base_form(csrf, data),
+                "client_use_hermes": "true",
+                "allowed_providers": data["chat_provider"],
+                "allowed_models": "gpt-test",
+                "allowed_endpoints": "/v1/chat/completions",
+            },
+        )
+        assert response.status_code == 400
+        # The existing provider tri-state parser is the first line of
+        # defense for a disabled provider (it only offers enabled
+        # configs); it fails the create before any key/email/audit effect.
+        assert "A selected provider is not available" in _flash_error(response.text)
+    assert _key_rows(migrated_postgres_url, owner_id) == []
+    assert _count(migrated_postgres_url, EmailDelivery) == emails_before
+    assert _created_audit_count(migrated_postgres_url) == audits_before
+
+
+def test_gui_create_hermes_with_unregistered_module_provider_fails_before_effects(
+    migrated_postgres_url: str,
+) -> None:
+    data = asyncio.run(
+        _seed_admin_and_routes(
+            migrated_postgres_url, chat_provider_kind="module"
+        )
+    )
+    owner_id = data["owner_id"]
+    assert isinstance(owner_id, uuid.UUID)
+    emails_before = _count(migrated_postgres_url, EmailDelivery)
+    audits_before = _created_audit_count(migrated_postgres_url)
+    app = create_app(_settings(migrated_postgres_url))
+    with TestClient(app) as client:
+        csrf = _login(client, data["admin_email"])
+        response = client.post(
+            "/admin/keys/create",
+            data={
+                **_base_form(csrf, data),
+                "client_use_hermes": "true",
+                "allowed_providers": data["chat_provider"],
+                "allowed_models": "gpt-test",
+                "allowed_endpoints": "/v1/chat/completions",
+            },
+        )
+        assert response.status_code == 400
+        assert "not a registered server module" in _flash_error(response.text)
+    assert _key_rows(migrated_postgres_url, owner_id) == []
+    assert _count(migrated_postgres_url, EmailDelivery) == emails_before
+    assert _created_audit_count(migrated_postgres_url) == audits_before
+
+
+def test_gui_create_opencode_responses_non_streaming_route_fails_before_effects(
+    migrated_postgres_url: str,
+) -> None:
+    data = asyncio.run(
+        _seed_admin_and_routes(
+            migrated_postgres_url,
+            with_codex_route=True,
+            responses_route_supports_streaming=False,
+        )
+    )
+    owner_id = data["owner_id"]
+    assert isinstance(owner_id, uuid.UUID)
+    emails_before = _count(migrated_postgres_url, EmailDelivery)
+    audits_before = _created_audit_count(migrated_postgres_url)
+    app = create_app(_settings(migrated_postgres_url))
+    with TestClient(app) as client:
+        csrf = _login(client, data["admin_email"])
+        response = client.post(
+            "/admin/keys/create",
+            data={
+                **_base_form(csrf, data),
+                "client_use_opencode_responses": "true",
+                "allowed_providers": data["codex_provider"],
+                "allowed_models": data["qwen_model"],
+                "allowed_endpoints": "/v1/responses",
+            },
+        )
+        assert response.status_code == 400
+        assert "does not support streaming" in _flash_error(response.text)
+    assert _key_rows(migrated_postgres_url, owner_id) == []
+    assert _count(migrated_postgres_url, EmailDelivery) == emails_before
+    assert _created_audit_count(migrated_postgres_url) == audits_before

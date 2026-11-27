@@ -35,10 +35,20 @@ from slaif_gateway.modules.clients.registry import (
     active_client_module_facts,
 )
 from slaif_gateway.modules.contracts import ModuleSelectionError
+from slaif_gateway.providers.errors import ProviderConfigurationError
 from slaif_gateway.schemas.keys import CreateGatewayKeyInput
+from slaif_gateway.schemas.key_configuration import KeyConfigurationError
 from slaif_gateway.services.codex_profile_registry import (
     QWEN38_CODEX_PROFILE_ID,
     get_codex_profile,
+)
+from slaif_gateway.services.key_errors import KeyManagementError
+from slaif_gateway.services.routing_errors import (
+    AmbiguousRouteError,
+    ModelNotFoundError,
+    ModelRouteDisabledError,
+    ProviderDisabledError,
+    ProviderNotAllowedForKeyError,
 )
 
 
@@ -185,19 +195,35 @@ def test_client_use_conflicts_advanced_codex() -> None:
 def test_chat_preset_requires_chat_endpoint() -> None:
     key_input = _key_input(allowed_endpoints=["/v1/responses"])
     with pytest.raises(ValueError, match="/v1/chat/completions"):
-        admin_api._apply_admin_chat_client_preset(
-            key_input,
-            module_id=OPENCODE_1193_CHAT_CLIENT_MODULE_ID,
-            client_label="OpenCode Chat",
+        asyncio.run(
+            admin_api._apply_admin_chat_client_preset(
+                SimpleNamespace(),
+                key_input,
+                module_id=OPENCODE_1193_CHAT_CLIENT_MODULE_ID,
+                client_label="OpenCode Chat",
+            )
         )
 
 
-def test_chat_preset_pins_active_module_and_keeps_fields() -> None:
+def _no_readiness(*args, **kwargs):
+    async def _inner(*_args, **_kwargs) -> None:
+        return None
+
+    return _inner
+
+
+def test_chat_preset_pins_active_module_and_keeps_fields(monkeypatch) -> None:
+    monkeypatch.setattr(
+        admin_api, "_admin_validate_client_readiness", _no_readiness()
+    )
     key_input = _key_input()
-    preset = admin_api._apply_admin_chat_client_preset(
-        key_input,
-        module_id=HERMES_0225_CHAT_CLIENT_MODULE_ID,
-        client_label="Hermes",
+    preset = asyncio.run(
+        admin_api._apply_admin_chat_client_preset(
+            SimpleNamespace(),
+            key_input,
+            module_id=HERMES_0225_CHAT_CLIENT_MODULE_ID,
+            client_label="Hermes",
+        )
     )
     active = active_client_module_facts(HERMES_0225_CHAT_CLIENT_MODULE_ID)
     assert preset.chat_client_module == active.pin
@@ -206,12 +232,18 @@ def test_chat_preset_pins_active_module_and_keeps_fields() -> None:
     assert preset.responses_policy is None
 
 
-def test_chat_preset_allow_all_endpoints_satisfies_endpoint_rule() -> None:
+def test_chat_preset_allow_all_endpoints_satisfies_endpoint_rule(monkeypatch) -> None:
+    monkeypatch.setattr(
+        admin_api, "_admin_validate_client_readiness", _no_readiness()
+    )
     key_input = _key_input(allow_all_endpoints=True, allowed_endpoints=[])
-    preset = admin_api._apply_admin_chat_client_preset(
-        key_input,
-        module_id=OPENCODE_1193_CHAT_CLIENT_MODULE_ID,
-        client_label="OpenCode Chat",
+    preset = asyncio.run(
+        admin_api._apply_admin_chat_client_preset(
+            SimpleNamespace(),
+            key_input,
+            module_id=OPENCODE_1193_CHAT_CLIENT_MODULE_ID,
+            client_label="OpenCode Chat",
+        )
     )
     assert preset.chat_client_module is not None
 
@@ -480,3 +512,407 @@ def test_qwen_policy_rejects_allow_all_models(monkeypatch: pytest.MonkeyPatch) -
         asyncio.run(
             admin_api._validated_admin_qwen_codex_policy(SimpleNamespace(), key_input)
         )
+
+
+# --- 229-b: Qwen contains rule ---------------------------------------------
+
+
+def test_qwen_policy_contains_rule_allows_extra_endpoints(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _stub_qualification(monkeypatch, ready=True)
+    profile = get_codex_profile(QWEN38_CODEX_PROFILE_ID)
+    assert profile is not None
+    key_input = _key_input(
+        allowed_models=[profile.public_model],
+        allowed_providers=["syn-provider"],
+        allowed_endpoints=["/v1/models", "/v1/responses", "/v1/chat/completions"],
+    )
+    policy = asyncio.run(
+        admin_api._validated_admin_qwen_codex_policy(
+            SimpleNamespace(), key_input, endpoint_rule="contains"
+        )
+    )
+    assert policy["client_module"] == active_client_module_facts(
+        admin_api.CODEX_0162_CLIENT_MODULE_ID
+    ).pin
+
+
+def test_qwen_policy_contains_rule_requires_both_qwen_endpoints(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _stub_qualification(monkeypatch, ready=True)
+    profile = get_codex_profile(QWEN38_CODEX_PROFILE_ID)
+    assert profile is not None
+    key_input = _key_input(
+        allowed_models=[profile.public_model],
+        allowed_providers=["syn-provider"],
+        allowed_endpoints=["/v1/responses", "/v1/chat/completions"],
+    )
+    with pytest.raises(ValueError, match="must include /v1/models and /v1/responses"):
+        asyncio.run(
+            admin_api._validated_admin_qwen_codex_policy(
+                SimpleNamespace(), key_input, endpoint_rule="contains"
+            )
+        )
+
+
+# --- 229-b: preset endpoint application --------------------------------------
+
+
+def test_preset_endpoints_add_only_and_idempotent() -> None:
+    key_input = _key_input(allowed_endpoints=["/v1/chat/completions"])
+    out = admin_api._apply_admin_client_preset_endpoints(
+        key_input,
+        use_codex=True,
+        use_opencode_chat=False,
+        use_opencode_responses=False,
+        use_hermes=False,
+    )
+    assert out.allowed_endpoints == [
+        "/v1/chat/completions",
+        "/v1/models",
+        "/v1/responses",
+    ]
+    again = admin_api._apply_admin_client_preset_endpoints(
+        out,
+        use_codex=True,
+        use_opencode_chat=False,
+        use_opencode_responses=False,
+        use_hermes=False,
+    )
+    assert again.allowed_endpoints == out.allowed_endpoints
+
+
+def test_preset_endpoints_never_remove_explicit_entries() -> None:
+    key_input = _key_input(
+        allowed_endpoints=["/v1/models", "/v1/responses", "/v1/chat/completions"]
+    )
+    out = admin_api._apply_admin_client_preset_endpoints(
+        key_input,
+        use_codex=False,
+        use_opencode_chat=False,
+        use_opencode_responses=False,
+        use_hermes=True,
+    )
+    assert out.allowed_endpoints == [
+        "/v1/models",
+        "/v1/responses",
+        "/v1/chat/completions",
+    ]
+
+
+def test_preset_endpoints_allow_all_is_noop() -> None:
+    key_input = _key_input(allow_all_endpoints=True, allowed_endpoints=[])
+    out = admin_api._apply_admin_client_preset_endpoints(
+        key_input,
+        use_codex=True,
+        use_opencode_chat=False,
+        use_opencode_responses=False,
+        use_hermes=False,
+    )
+    assert out is key_input
+
+
+def test_preset_endpoints_no_checked_presets_is_noop() -> None:
+    key_input = _key_input(allowed_endpoints=["/v1/chat/completions"])
+    out = admin_api._apply_admin_client_preset_endpoints(
+        key_input,
+        use_codex=False,
+        use_opencode_chat=False,
+        use_opencode_responses=False,
+        use_hermes=False,
+    )
+    assert out is key_input
+
+
+# --- 229-b: shared readiness core --------------------------------------------
+
+
+def _ready_result(**overrides) -> SimpleNamespace:
+    values = dict(
+        requested_model="gpt-test",
+        resolved_model="gpt-test",
+        provider="syn-provider",
+        provider_kind="openai_compatible",
+        supports_streaming=True,
+        capabilities=None,
+    )
+    values.update(overrides)
+    return SimpleNamespace(**values)
+
+
+def _stub_readiness(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    result: object | None = None,
+    resolution_error: type[Exception] | None = None,
+    server_error: bool = False,
+    pair_error: bool = False,
+    pricing_rule: object = "pricing",
+) -> None:
+    resolved = result or _ready_result()
+
+    class _FakeResolver:
+        def __init__(self, **_kwargs: object) -> None:
+            pass
+
+        async def resolve_model(self, _model, _key, *, endpoint=None):
+            if resolution_error is not None:
+                raise resolution_error()
+            return resolved
+
+    class _FakePricing:
+        def __init__(self, _session: object) -> None:
+            pass
+
+        async def find_active_pricing_rule(self, **_kwargs: object):
+            return pricing_rule
+
+    class _FakeRoutesRepo:
+        def __init__(self, _session: object) -> None:
+            pass
+
+    class _FakeProvidersRepo:
+        def __init__(self, _session: object) -> None:
+            pass
+
+    if server_error:
+        def _resolve_server(*_args: object, **_kwargs: object):
+            raise ProviderConfigurationError("unsupported provider configuration")
+
+        monkeypatch.setattr(admin_api, "resolve_server_module", _resolve_server)
+    else:
+        monkeypatch.setattr(
+            admin_api,
+            "resolve_server_module",
+            lambda *args, **kwargs: SimpleNamespace(module_id="openai-compatible"),
+        )
+    if pair_error:
+        def _ensure_pair(*_args: object, **_kwargs: object):
+            raise ProviderConfigurationError("unsupported client/server pair")
+
+        monkeypatch.setattr(admin_api, "ensure_client_server_pair", _ensure_pair)
+    else:
+        monkeypatch.setattr(
+            admin_api, "ensure_client_server_pair", lambda *a, **k: None
+        )
+
+    monkeypatch.setattr(admin_api, "RouteResolutionService", _FakeResolver)
+    monkeypatch.setattr(admin_api, "PricingRulesRepository", _FakePricing)
+    monkeypatch.setattr(admin_api, "ModelRoutesRepository", _FakeRoutesRepo)
+    monkeypatch.setattr(admin_api, "ProviderConfigsRepository", _FakeProvidersRepo)
+    monkeypatch.setattr(
+        admin_api, "get_sessionmaker_from_app", lambda _req: _fake_session_factory()
+    )
+
+
+def _run_readiness(**overrides) -> None:
+    values = dict(
+        key_input=_key_input(allowed_endpoints=["/v1/chat/completions"]),
+        client_module_id=HERMES_0225_CHAT_CLIENT_MODULE_ID,
+        client_label="Hermes",
+        endpoint="/v1/chat/completions",
+        require_streaming=False,
+    )
+    values.update(overrides)
+    asyncio.run(admin_api._admin_validate_client_readiness(SimpleNamespace(), **values))
+
+
+def test_readiness_accepts_ready_route(monkeypatch: pytest.MonkeyPatch) -> None:
+    _stub_readiness(monkeypatch, result=_ready_result())
+    _run_readiness()
+
+
+def test_readiness_rejects_missing_pricing(monkeypatch: pytest.MonkeyPatch) -> None:
+    _stub_readiness(monkeypatch, result=_ready_result(), pricing_rule=None)
+    with pytest.raises(admin_api.KeyCreateFieldError, match="Pricing: no active pricing rule"):
+        _run_readiness()
+
+
+def test_readiness_rejects_unregistered_server_module(monkeypatch: pytest.MonkeyPatch) -> None:
+    _stub_readiness(monkeypatch, result=_ready_result(), server_error=True)
+    with pytest.raises(admin_api.KeyCreateFieldError, match="not a registered server module"):
+        _run_readiness()
+
+
+def test_readiness_rejects_unpaired_server(monkeypatch: pytest.MonkeyPatch) -> None:
+    _stub_readiness(monkeypatch, result=_ready_result(), pair_error=True)
+    with pytest.raises(admin_api.KeyCreateFieldError, match="no reviewed pair"):
+        _run_readiness()
+
+
+def test_readiness_rejects_non_streaming_for_streaming_client(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _stub_readiness(monkeypatch, result=_ready_result(supports_streaming=False))
+    with pytest.raises(admin_api.KeyCreateFieldError, match="does not support streaming"):
+        _run_readiness(
+            key_input=_key_input(allowed_endpoints=["/v1/responses"]),
+            client_module_id=OPENCODE_1193_RESPONSES_CLIENT_MODULE_ID,
+            client_label="OpenCode Responses",
+            endpoint="/v1/responses",
+            require_streaming=True,
+        )
+
+
+def test_readiness_requires_all_four_responses_gates(monkeypatch: pytest.MonkeyPatch) -> None:
+    gates = admin_api.OPENCODE_RESPONSES_PRESET_GATES
+    assert len(gates) == 4
+    capabilities = {
+        "responses": {gate: index != 2 for index, gate in enumerate(gates)}
+    }
+    _stub_readiness(monkeypatch, result=_ready_result(capabilities=capabilities))
+    with pytest.raises(admin_api.KeyCreateFieldError, match="four OpenCode Responses gates"):
+        _run_readiness(
+            key_input=_key_input(allowed_endpoints=["/v1/responses"]),
+            client_module_id=OPENCODE_1193_RESPONSES_CLIENT_MODULE_ID,
+            client_label="OpenCode Responses",
+            endpoint="/v1/responses",
+            require_streaming=True,
+            responses_gates=gates,
+        )
+
+
+@pytest.mark.parametrize(
+    ("error", "expected"),
+    [
+        (ModelNotFoundError, "no enabled route serves model"),
+        (ModelRouteDisabledError, "is disabled"),
+        (ProviderDisabledError, "points at a disabled provider"),
+        (ProviderNotAllowedForKeyError, "provider this key does not allow"),
+        # The live resolver's ambiguous branch is effectively unreachable
+        # (its sort key includes the route UUID); the operator mapping for
+        # it is still covered here.
+        (AmbiguousRouteError, "identical precedence"),
+    ],
+)
+def test_readiness_maps_resolution_errors(
+    monkeypatch: pytest.MonkeyPatch,
+    error: type[Exception],
+    expected: str,
+) -> None:
+    _stub_readiness(monkeypatch, resolution_error=error)
+    with pytest.raises(admin_api.KeyCreateFieldError, match=expected):
+        _run_readiness()
+
+
+def test_readiness_requires_at_least_one_explicit_model(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _stub_readiness(monkeypatch, result=_ready_result())
+    with pytest.raises(admin_api.KeyCreateFieldError, match="need at least one allowed model"):
+        _run_readiness(key_input=_key_input(allowed_models=[]))
+
+
+def _stub_route_lists(monkeypatch: pytest.MonkeyPatch, routes: list[object]) -> None:
+    providers = [SimpleNamespace(provider="syn-provider", enabled=True)]
+
+    class _FakeRoutesRepo:
+        def __init__(self, _session: object) -> None:
+            pass
+
+        async def list_model_routes(self, *, endpoint: str, limit: int):
+            return routes
+
+    class _FakeProvidersRepo:
+        def __init__(self, _session: object) -> None:
+            pass
+
+        async def list_provider_configs(self):
+            return providers
+
+    monkeypatch.setattr(admin_api, "ModelRoutesRepository", _FakeRoutesRepo)
+    monkeypatch.setattr(admin_api, "ProviderConfigsRepository", _FakeProvidersRepo)
+    monkeypatch.setattr(
+        admin_api, "get_sessionmaker_from_app", lambda _req: _fake_session_factory()
+    )
+
+
+def test_readiness_candidate_models_bounded(monkeypatch: pytest.MonkeyPatch) -> None:
+    routes = [
+        SimpleNamespace(enabled=True, provider="syn-provider", requested_model=f"model-{i}")
+        for i in range(51)
+    ]
+    _stub_route_lists(monkeypatch, routes)
+    key_input = _key_input(allow_all_models=True, allowed_models=[])
+    with pytest.raises(admin_api.KeyCreateFieldError, match="more than 50 routed models"):
+        asyncio.run(
+            admin_api._admin_readiness_candidate_models(
+                SimpleNamespace(), key_input, "/v1/chat/completions"
+            )
+        )
+
+
+def test_readiness_candidate_models_filters_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    routes = [
+        SimpleNamespace(enabled=True, provider="syn-provider", requested_model="m1"),
+        SimpleNamespace(enabled=False, provider="syn-provider", requested_model="m2"),
+        SimpleNamespace(enabled=True, provider="off-provider", requested_model="m3"),
+    ]
+    _stub_route_lists(monkeypatch, routes)
+    key_input = _key_input(allow_all_models=True, allowed_models=[])
+    assert (
+        asyncio.run(
+            admin_api._admin_readiness_candidate_models(
+                SimpleNamespace(), key_input, "/v1/chat/completions"
+            )
+        )
+        == ["m1"]
+    )
+
+
+# --- 229-b: structured safe-error converter -----------------------------------
+
+
+def test_field_issues_from_field_error() -> None:
+    exc = admin_api.KeyCreateFieldError(
+        "Bad value", fields=("cost_limit_eur", "not-a-field"), remedy="Fix it."
+    )
+    issues, fields = admin_api._admin_key_create_field_issues(exc)
+    assert fields == ["cost_limit_eur"]
+    assert issues == [
+        {"field": "cost_limit_eur", "message": "Bad value", "remedy": "Fix it."}
+    ]
+
+
+def test_field_issues_from_field_error_details() -> None:
+    exc = admin_api.KeyCreateFieldError(
+        "combined",
+        fields=("allowed_models",),
+        details=("detail one", "detail two"),
+    )
+    issues, fields = admin_api._admin_key_create_field_issues(exc)
+    assert fields == ["allowed_models"]
+    assert [item["message"] for item in issues] == ["detail one", "detail two"]
+    assert all(item["field"] == "" for item in issues)
+
+
+def test_field_issues_from_key_configuration_error() -> None:
+    exc = KeyConfigurationError("configuration_json: invalid document")
+    issues, fields = admin_api._admin_key_create_field_issues(exc)
+    assert fields == ["configuration_json"]
+    assert issues[0]["message"] == "configuration_json: invalid document"
+
+
+def test_field_issues_from_key_management_error_param() -> None:
+    exc = KeyManagementError("Invalid gateway key validity window", param="valid_until")
+    issues, fields = admin_api._admin_key_create_field_issues(exc)
+    assert fields == ["valid_until"]
+    assert issues[0]["field"] == "valid_until"
+
+    foreign = KeyManagementError("boom", param="not-a-form-field")
+    _issues, foreign_fields = admin_api._admin_key_create_field_issues(foreign)
+    assert foreign_fields == []
+
+
+def test_field_issues_generic_is_bounded() -> None:
+    exc = RuntimeError("x" * 400)
+    issues, fields = admin_api._admin_key_create_field_issues(exc)
+    assert fields == []
+    assert len(issues) == 1
+    assert issues[0]["field"] == ""
+    assert issues[0]["message"].endswith("...")
+    assert len(issues[0]["message"]) <= 300

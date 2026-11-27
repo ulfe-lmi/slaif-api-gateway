@@ -2012,9 +2012,13 @@ four checkboxes, each with an inline "What is this for?" disclosure:
 
 Checking a client preselects its unambiguous endpoint(s) and shows a
 summary line; the server rechecks every grant before creating the key.
-The historical Codex sections (protocol pilot, Qwen 0.162 authoring) sit
-in one "Advanced: historical Codex key modes" disclosure and cannot be
-combined with client-use choices.
+One key may carry one Chat client (OpenCode Chat or Hermes) and one
+Responses client (Codex or OpenCode Responses) together: each enabled
+client's required endpoints are present in the composed policy and the
+shared readiness check validates the combination. The historical Codex
+sections (protocol pilot, Qwen 0.162 authoring) sit in one "Advanced:
+historical Codex key modes" disclosure and cannot be combined with
+client-use choices.
 
 ### 21.2 Conflict rules and error recovery
 
@@ -2047,3 +2051,45 @@ identity distinct from the frozen qualification evidence.
   migrate deliberately through the audited CLI workflow. Key templates
   intentionally keep their frozen 0.147 pin and have no client-use
   choices (documented gap, not a defect).
+
+### 21.5 229-b: form organization, preset switching, and safe errors
+
+- **Main flow vs advanced** — the form leads with the operator's main
+  decisions (owner, intended client, chosen provider and models,
+  validity and lifetime budgets, delivery) and collapses the advanced
+  categories by default: "Provider-run tools and their cost risk",
+  "Request speed controls", "Stopping long responses early", "Trusted
+  calibration key", and "Advanced: historical Codex key modes". Every
+  advanced editable field has adjacent plain-language help stating what it
+  controls, when to change it, what leaving it blank or zero does, and an
+  example where useful. Units and unlimited/inherited semantics are
+  precise, and a cost limit is never described as an exact
+  provider-invoice ceiling: the gateway stops admitting NEW requests when
+  the used cost approaches the limit, but an already-started request may
+  finish, so the final provider bill can slightly exceed it.
+- **Access summary** — before creation the form shows a compact
+  plain-language summary of the actual effect: client setup, models,
+  providers, endpoints, lifetime limits, and what happens after creation.
+- **Preset switching** — checking a client preselects its required
+  endpoint(s); unchecking it removes only the endpoint the preset itself
+  added, keeps every explicit operator selection intact, and is stable
+  under repeated toggling. If a checked client's required endpoint is
+  missing from the operator's explicit list, the pre-submit warning states
+  the true server behavior: the server applies the client preset
+  ADD-ONLY — the operator's explicit endpoints are kept and the missing
+  required endpoint is added — and the confirmation page shows the key's
+  final endpoint list. The server never refuses on a missing preset
+  endpoint; refusals are reserved for genuine incompatibilities
+  (conflicts, readiness, invalid values).
+- **Readiness before effects** — a client create resolves the selected
+  models/providers against the live route resolver locally (selected
+  enabled providers and routes, actual route selection, streaming
+  requirement, registered client/server pair, active pricing) and fails
+  with a field-labeled explanation BEFORE any key, email, or audit side
+  effect.
+- **Safe structured errors** — a refused create renders a `role="alert"`
+  summary with the operator sentence, a clickable anchor per affected
+  field, `aria-invalid` plus highlight on the flagged controls, focus
+  moved to the summary, and the containing collapsed group opened. Entered
+  NONSECRET values are preserved; the reference ID enables support lookup;
+  validation refusals create nothing (verified from the database side).

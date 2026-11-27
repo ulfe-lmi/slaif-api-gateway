@@ -140,3 +140,6 @@ configuration) is delivered by PR 361; see
   `responses_policy` / `chat_client_module` pins directly; batch import and
   clone carry the raw policy metadata without the presets. Both remain
   server-validated; the presets only prefill the same reviewed fields.
+  Since 229-b one key may combine one Chat client and one Responses client;
+  the GUI presets apply their required endpoints add-only and the same
+  server-side policy/readiness validation covers every surface.

@@ -19,9 +19,13 @@ NOT create a Codex key at all:
   `module.module_version` and failed the request whenever the deployment had
   promoted a newer revision, even though the stable executable module ID
   had not changed.
-- The new key's `responses_policy` pin was built from the same frozen
-  constants, so even when the equality gate was satisfied the pin described
-  the qualification snapshot, not the DATA the gateway actually runs.
+- Correction (229-b, after ROOT source verification of the pre-229-a
+  code): the ORIGINAL helper already built the pin from the ACTIVE
+  installed module metadata — `client_module_metadata(module)` reads the
+  snapshot bound into this process at bootstrap — so the defect was ONLY
+  the frozen-revision equality gate above, not the pin source. The 229-a
+  fix replaces the gate with a stable module-ID check and routes the pin
+  through the shared `active_client_module_facts` accessor.
 
 The frozen qualification revision is EVIDENCE (the DATA snapshot a route was
 qualified against), not a runtime equality gate. The runtime gate is the
@@ -94,7 +98,7 @@ stable executable module ID; the pin must come from the active snapshot.
 
 | # | Location / caller | Classification | Disposition |
 |---|-------------------|----------------|-------------|
-| 1 | `api/admin.py` `_validated_admin_qwen_codex_policy` (frozen `client_module_version != module.module_version` gate; frozen pin inputs inherited from `services/codex_profile_registry.py` `QWEN38_CODEX_PROFILE` via `_qwen_capacity_profile`) | CONFIRMED_RUNTIME_DEFECT | FIXED: stable-ID check only; pin from active snapshot |
+| 1 | `api/admin.py` `_validated_admin_qwen_codex_policy` (frozen `profile.client_module_version != module.module_version` equality gate against the active installed module) | CONFIRMED_RUNTIME_DEFECT | FIXED: stable-ID check only; the pin was already built from active module metadata (229-b correction of the earlier "frozen pin inputs" overclaim) |
 | 2 | `api/admin_compatibility.py`, `api/demo_admin_compatibility.py` module column (frozen revision displayed as the current module) | CONFIRMED (misleading current label) | FIXED: "active vN (qualified vM)" |
 | 3 | `api/admin.py` codex-protocol-pilot branch; `services/codex_profile_registry.py` frozen 0.147 `OPENAI_CODEX_PROFILE` | INTENTIONAL_HISTORICAL_FROZEN | PRESERVED: the pilot and 0.147 records remain frozen qualification evidence; the historical section is labeled as such in the GUI |
 | 4 | `services/key_template_service.py` (hardcoded frozen `CODEX_0147_CLIENT_MODULE` pin check) | INTENTIONAL_HISTORICAL_FROZEN | PRESERVED + DOCUMENTED: key templates intentionally pin the 0.147 qualification; templates do not offer the client-use choices, so this is a known GUI/template gap, not a defect |
@@ -192,3 +196,102 @@ mail, no production `DATABASE_URL`.
 - Historical records (including 228-c OpenCode Responses qualification and
   the accepted 227 Hermes/OpenCode Chat native loops) are preserved as
   dated evidence and are not relabeled current by this change.
+
+## 229-b continuation (2026-11-27, same PR #403)
+
+### What 229-a's "all seven requirements executed" did not cover
+
+The 229-a report's "all seven requirements executed" described scope
+execution, not acceptance. ROOT's independent review reproduced blocking
+defects in the advertised end state; 229-b completes them:
+
+1. **Broken advertised combinations** — the Qwen Codex helper accepted
+   only the exact endpoint pair `/v1/models` + `/v1/responses`, so the
+   advertised Codex+Hermes and Codex+OpenCode-Chat combined keys could not
+   be created. Now each enabled client's required endpoints are present in
+   the composed policy (the operator's explicit lists plus the preset
+   union, extras governed by the deliberate requested policy) and the
+   shared readiness path validates the combination. Real PostgreSQL GUI
+   creates for BOTH combinations persist the exact active pins with no
+   extra privileges; OpenCode Responses+Chat, same-family conflicts, and
+   ordinary/legacy behavior are retained.
+2. **Preset switching retained invisible endpoints** — unchecking a client
+   left its preset-owned endpoint in the selected pane (a duplicated-option
+   bug), so Hermes to Codex after unchecking Hermes failed over an
+   invisible Chat endpoint. The template now removes only what the preset
+   itself added, keeps explicit operator selections intact, and is stable
+   under repeated toggling (browser regressions).
+3. **Readiness that did not prove usability** — the Chat preset checked
+   endpoint presence only and the OpenCode Responses preset checked raw
+   gate booleans. A shared local readiness check now resolves the selected
+   models/providers the way the live resolver would (selected enabled
+   providers and routes, actual route selection, streaming requirement,
+   registered client/server pair, active pricing) and fails safely BEFORE
+   any key/email/audit effect.
+4. **Incomplete usability reorganization** — the form now leads with the
+   main flow (owner, intended client, chosen provider/models,
+   validity/budgets, delivery) and collapses the advanced categories by
+   default; every advanced editable field has adjacent plain-language help
+   (what it controls, when to change it, what blank/zero does, an example);
+   programmer jargon is out of the primary labels (Redis to "Request speed
+   controls", fences to "Provider-run tools and their cost risk",
+   live-burn to "Stopping long responses early"); a compact plain-language
+   access summary (client setup, models, providers, endpoints, lifetime
+   limits, delivery effect) sits before creation.
+5. **Unstructured errors** — refusals render a structured safe summary:
+   the operator sentence, a clickable anchor per affected field,
+   `aria-invalid` plus highlight on the flagged controls, focus moved to
+   the summary, the containing collapsed group opened, entered NONSECRET
+   values preserved, and an honest reference-ID fallback for unknown
+   failures. Validation refusals (no key/email side effect) are
+   distinguished from post-creation delivery outcomes.
+
+Honesty notes: ROOT read the secondary read-only audit after the 229-a
+response; it was not relayed before publication. The root-cause overclaim
+in this file's first section is corrected above: the original helper
+already pinned from the active installed module metadata, and the
+frozen-revision equality guard was the sole defect.
+
+### 229-b evidence (exact)
+
+Environment: owned disposable PostgreSQL container `slaif229b-pg`
+(postgres:16, 127.0.0.1:54412, DB `slaif229b_test`), repo venv, Playwright
+Chromium against local uvicorn on a free loopback port. Providers and email
+are MOCKED; no real inference, no real mail, no production `DATABASE_URL`.
+
+- `tests/unit/test_key_create_client_use_presets.py` — **64 passed**
+  (extended in 229-b from 229-a's 39: combined-client composition,
+  readiness negatives, add-only endpoint application).
+- `tests/integration/test_admin_key_create_client_use_postgres.py` —
+  **13 passed** (extended in 229-b from 229-a's 7: real PG GUI
+  combined-client creates under active rev16, readiness failures with zero
+  key/email/audit side effects, disabled/unregistered provider negatives).
+- `tests/browser/test_admin_key_create_229b.py` (NEW, committed) —
+  **8 passed**: main flow visible with advanced categories collapsed and
+  the plain-language access summary (desktop and narrow viewport); preset
+  switching endpoint ownership with repeated-toggle stability; a missing
+  preset endpoint's truthful pre-submit warning plus the server's add-only
+  application with the final endpoint list shown on the confirmation page;
+  a genuine refusal (invalid quota value) leaving no key/email/audit side
+  effects; document-mode disabling (not hiding) of client choices with
+  deliberate guided return; an ACTUAL no-JS Hermes create with the
+  server-applied preset and the exact active pin; and the safe error state
+  (anchors, `aria-invalid`, focus, collapsed group opened). Screenshots in
+  the owned task directory: `229b-create-ordinary-desktop.png`,
+  `229b-create-ordinary-narrow.png`, `229b-create-client-presets.png`,
+  `229b-create-doc-mode.png`, `229b-create-nojs-client-form.png`,
+  `229b-create-error-state.png`, `229b-create-advanced-open.png`.
+- Reused unchanged suites re-run once after the template-JS change, the
+  eight-file GUI/unit suite: **620 passed** (`test_admin_key_create_routes`,
+  `test_key_create_client_use_presets`, `test_admin_key_policy_207`,
+  `test_admin_key_create_email_delivery_routes`,
+  `test_admin_key_create_templates`, `test_admin_gui_completion_219`,
+  `test_demo_web`, `test_admin_usability_inventory`).
+- Doc guards `test_documentation_inventory`,
+  `test_documentation_contract_drift`, `test_documentation_asof` —
+  **44 passed**; `ruff check` on all changed source/test files — all checks
+  passed; `git diff --check` — clean.
+- Not run: no real provider traffic, no real email, no production DB, no
+  full 128-worker harness. This continuation makes no live-provider
+  qualification claim; the qualified historical records remain the dated
+  evidence.

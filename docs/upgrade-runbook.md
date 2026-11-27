@@ -393,6 +393,13 @@ deliberately with the audited `codex migrate-key-profile` workflow above.
 The compatibility dashboard shows the distinction as
 `<module> v<active> (qualified v<frozen>)`.
 
+**229-b (same PR):** code and template-only changes (form organization,
+preset-switching script, structured error presentation, combined client
+bindings, shared readiness check). No schema or migration, no
+preset-file/DATA change, no existing-key migration, no behavior change for
+keys or requests created before the upgrade; rollback is the ordinary
+commit rollback with the same no-state-revert rules above.
+
 ## Hermes/OpenCode Chat client profile upgrade and rollback (227-a)
 
 Chat client profiles (`hermes-0.22.5-chat-v1`, `opencode-1.19.3-chat-v1`)

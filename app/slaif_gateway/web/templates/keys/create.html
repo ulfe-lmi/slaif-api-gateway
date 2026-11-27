@@ -2,6 +2,15 @@
 
 {% from "_record_choice.html" import record_choice %}
 
+{#- Safe-error anchor attributes: emitted ONLY for the fields named in
+    field_error_fields (server-validated vocabulary). with_id=false is for
+    controls that already carry their own id (live-burn controls). -#}
+{% macro field_error_attrs(name, with_id=true) -%}
+{%- if name in field_error_fields -%}
+{% if with_id %} id="create-field-{{ name }}"{% endif %} aria-invalid="true" class="create-error-field"
+{%- endif -%}
+{%- endmacro %}
+
 {% block title %}Create Gateway Key{% endblock %}
 
 {% block body %}
@@ -22,8 +31,21 @@
   </header>
 
   {% if error %}
-  <div class="admin-flash admin-flash-error" role="alert">
+  <div class="admin-flash admin-flash-error" id="create-error-summary" role="alert" tabindex="-1">
     <p>{{ error }}</p>
+    {% if field_issues %}
+    <ul class="create-error-issues">
+      {% for issue in field_issues %}
+      <li>
+        {% if issue.field %}
+        <a class="create-error-link" href="#create-field-{{ issue.field }}">{{ field_labels.get(issue.field, issue.field) }}</a>
+        {% endif %}
+        <span>{{ issue.message }}</span>
+        {% if issue.remedy %}<span class="small create-error-remedy">{{ issue.remedy }}</span>{% endif %}
+      </li>
+      {% endfor %}
+    </ul>
+    {% endif %}
     {% if diagnostic_id %}
     <p class="small">Reference ID: <code>{{ diagnostic_id }}</code></p>
     {% endif %}
@@ -48,6 +70,7 @@
             placeholder="Search owners",
             help="Existing owners only: search by name or email and select one. This form never creates a new owner.",
             help_id="create-owner-help",
+            control_id="create-field-owner_id",
         ) }}
         {{ record_choice(
             "cohort_id", "cohort", "Cohort",
@@ -60,6 +83,7 @@
             placeholder="Search cohorts",
             help="Optional existing cohort used for grouping; choose No cohort to leave the key ungrouped. This form never creates a new cohort.",
             help_id="create-cohort-help",
+            control_id="create-field-cohort_id",
         ) }}
       </div>
     </section>
@@ -69,22 +93,23 @@
       <p class="muted">Check the clients that will call the gateway with this key. Leave everything unchecked for an ordinary API key used by plain OpenAI-compatible code.</p>
       <div class="form-grid">
         <label class="checkbox-row">
-          <input type="checkbox" name="client_use_codex" value="true" {% if form.client_use_codex %}checked{% endif %} data-client-use-codex aria-describedby="create-client-use-help">
+          <input type="checkbox" name="client_use_codex" value="true" {% if form.client_use_codex %}checked{% endif %} data-client-use-codex aria-describedby="create-client-use-help" {{ field_error_attrs("client_use_codex") }}>
           This key is for Codex
         </label>
         <label class="checkbox-row">
-          <input type="checkbox" name="client_use_opencode_chat" value="true" {% if form.client_use_opencode_chat %}checked{% endif %} data-client-use-opencode-chat aria-describedby="create-client-use-help">
+          <input type="checkbox" name="client_use_opencode_chat" value="true" {% if form.client_use_opencode_chat %}checked{% endif %} data-client-use-opencode-chat aria-describedby="create-client-use-help" {{ field_error_attrs("client_use_opencode_chat") }}>
           This key is for OpenCode (Chat)
         </label>
         <label class="checkbox-row">
-          <input type="checkbox" name="client_use_opencode_responses" value="true" {% if form.client_use_opencode_responses %}checked{% endif %} data-client-use-opencode-responses aria-describedby="create-client-use-help">
+          <input type="checkbox" name="client_use_opencode_responses" value="true" {% if form.client_use_opencode_responses %}checked{% endif %} data-client-use-opencode-responses aria-describedby="create-client-use-help" {{ field_error_attrs("client_use_opencode_responses") }}>
           This key is for OpenCode (Responses)
         </label>
         <label class="checkbox-row">
-          <input type="checkbox" name="client_use_hermes" value="true" {% if form.client_use_hermes %}checked{% endif %} data-client-use-hermes aria-describedby="create-client-use-help">
+          <input type="checkbox" name="client_use_hermes" value="true" {% if form.client_use_hermes %}checked{% endif %} data-client-use-hermes aria-describedby="create-client-use-help" {{ field_error_attrs("client_use_hermes") }}>
           This key is for Hermes (Chat)
         </label>
       </div>
+      <p class="muted small" data-doc-mode-client-note hidden>Client choices are inactive while a configuration document is the policy source: the document cannot carry client profiles. Switch the policy source back to guided fields to use them; nothing is submitted while they are inactive.</p>
       <p class="muted small" id="create-client-use-help">
         One key can carry one Chat client (OpenCode Chat or Hermes) and one Responses client (Codex or OpenCode Responses) together; conflicting pairs are refused with an explanation.
         The gateway applies the matching reviewed client profile and rechecks the routes before the key is created.
@@ -103,63 +128,12 @@
       <p class="muted small" data-client-use-summary hidden></p>
     </section>
 
-    <section class="action-panel" aria-labelledby="create-validity-heading">
-      <h2 id="create-validity-heading">Validity</h2>
-      <p class="muted">Times are UTC. Use the date/time picker for Valid until or enter a positive Valid days value, not both. Blank Valid from starts now.</p>
-      <div class="form-grid">
-        <label>
-          Valid from (UTC)
-          <input type="datetime-local" name="valid_from" value="{{ form.valid_from|utc_datetime_local }}" step="60" autocomplete="off" aria-describedby="create-validity-help">
-        </label>
-        <label>
-          Valid until (UTC)
-          <input type="datetime-local" name="valid_until" value="{{ form.valid_until|utc_datetime_local }}" step="60" autocomplete="off" aria-describedby="create-validity-help">
-        </label>
-        <label>
-          Valid days
-          <input name="valid_days" value="{{ form.valid_days }}" inputmode="numeric" autocomplete="off" placeholder="30" aria-describedby="create-validity-help">
-        </label>
-      </div>
-      <p class="field-help" id="create-validity-help">
-        Key validity is an identity fact, stored on the key row: it is not part of the advanced configuration document and cannot be changed by one.
-      </p>
-    </section>
-
-    <section class="action-panel" aria-labelledby="create-limits-heading" data-guided-policy-section>
-      <h2 id="create-limits-heading">Hard Quota Limits</h2>
-      <p class="muted small" data-guided-compact-note hidden>Inactive in document mode: the configuration document defines these limits. The guided inputs are submitted at their blank (unlimited) defaults.</p>
-      <div data-guided-policy-body>
-      <p class="muted">These are PostgreSQL-backed lifetime limits. Leave fields blank for no limit.</p>
-      <div class="form-grid">
-        <label>
-          Cost limit EUR
-          <input name="cost_limit_eur" value="{{ form.cost_limit_eur }}" inputmode="decimal" autocomplete="off" aria-describedby="create-limits-help">
-        </label>
-        <label>
-          Token limit
-          <input name="token_limit_total" value="{{ form.token_limit_total }}" inputmode="numeric" autocomplete="off" aria-describedby="create-limits-help">
-        </label>
-        <label>
-          Request limit
-          <input name="request_limit_total" value="{{ form.request_limit_total }}" inputmode="numeric" autocomplete="off" aria-describedby="create-limits-help">
-        </label>
-      </div>
-      <p class="field-help" id="create-limits-help">
-        Blank means UNLIMITED for that lifetime quota (stored null, never zero). In a configuration document the same null/omission law applies.
-      </p>
-      <details class="field-help-details">
-        <summary>What is this for?</summary>
-        <p class="muted small">These are the key's lifetime budget: the most this key may spend, use, and call across its whole validity. Leaving one blank means no ceiling for that measure over the key's lifetime. They are separate from the per-minute speed limits lower on this page: a key can exhaust its lifetime budget even while every single request is allowed. Example: a 500 EUR cost limit with no token limit means "stop when the bill reaches 500 EUR", whatever the token count is.</p>
-      </details>
-      </div>
-    </section>
-
     <section class="action-panel" aria-labelledby="create-policy-source-heading">
-      <h2 id="create-policy-source-heading">Policy Source</h2>
-      <p class="muted">Choose where this key's POLICY fields come from: the guided controls on this page, or one advanced version-1 configuration document. Identity fields (owner, cohort, validity, delivery, reason) are always guided.</p>
+      <h2 id="create-policy-source-heading">Chosen provider and models</h2>
+      <p class="muted">Choose where this key's POLICY fields come from: the guided controls below, or one advanced version-1 configuration document. Identity fields (owner, cohort, validity, delivery, reason) are always guided.</p>
       <label>
         Policy source
-        <select name="policy_source" aria-describedby="create-policy-source-help">
+        <select name="policy_source" aria-describedby="create-policy-source-help" {{ field_error_attrs("policy_source") }}>
           <option value="guided" {% if form.policy_source != "configuration" %}selected{% endif %}>Guided fields (recommended)</option>
           <option value="configuration" {% if form.policy_source == "configuration" %}selected{% endif %}>Advanced configuration document (JSON)</option>
         </select>
@@ -178,7 +152,7 @@
       <div data-create-configuration-document-group>
         <label>
           Advanced configuration document
-          <textarea name="configuration_json" rows="8" class="config-json" spellcheck="false" autocomplete="off" data-create-configuration-document aria-describedby="create-policy-source-help">{% if form.configuration_json %}{{ form.configuration_json }}{% endif %}</textarea>
+          <textarea name="configuration_json" rows="8" class="config-json" spellcheck="false" autocomplete="off" data-create-configuration-document aria-describedby="create-policy-source-help" {{ field_error_attrs("configuration_json") }}>{% if form.configuration_json %}{{ form.configuration_json }}{% endif %}</textarea>
         </label>
         <p class="muted small">Required only when policy source is "Advanced configuration document". The document defines policy only; it never carries identity, secrets, owner/cohort, validity, or server settings.</p>
       </div>
@@ -197,6 +171,57 @@
       </div>
     </section>
 
+    <section class="action-panel" aria-labelledby="create-validity-heading">
+      <h2 id="create-validity-heading">Validity</h2>
+      <p class="muted">Times are UTC. Use the date/time picker for Valid until or enter a positive Valid days value, not both. Blank Valid from starts now.</p>
+      <div class="form-grid">
+        <label>
+          Valid from (UTC)
+          <input type="datetime-local" name="valid_from" value="{{ form.valid_from|utc_datetime_local }}" step="60" autocomplete="off" aria-describedby="create-validity-help" {{ field_error_attrs("valid_from") }}>
+        </label>
+        <label>
+          Valid until (UTC)
+          <input type="datetime-local" name="valid_until" value="{{ form.valid_until|utc_datetime_local }}" step="60" autocomplete="off" aria-describedby="create-validity-help" {{ field_error_attrs("valid_until") }}>
+        </label>
+        <label>
+          Valid days
+          <input name="valid_days" value="{{ form.valid_days }}" inputmode="numeric" autocomplete="off" placeholder="30" aria-describedby="create-validity-help" {{ field_error_attrs("valid_days") }}>
+        </label>
+      </div>
+      <p class="field-help" id="create-validity-help">
+        Key validity is an identity fact, stored on the key row: it is not part of the advanced configuration document and cannot be changed by one.
+      </p>
+    </section>
+
+    <section class="action-panel" aria-labelledby="create-limits-heading" data-guided-policy-section>
+      <h2 id="create-limits-heading">Hard Quota Limits</h2>
+      <p class="muted small" data-guided-compact-note hidden>Inactive in document mode: the configuration document defines these limits. The guided inputs are submitted at their blank (unlimited) defaults.</p>
+      <div data-guided-policy-body>
+      <p class="muted">These are PostgreSQL-backed lifetime limits. Leave fields blank for no limit.</p>
+      <div class="form-grid">
+        <label>
+          Cost limit EUR
+          <input name="cost_limit_eur" value="{{ form.cost_limit_eur }}" inputmode="decimal" autocomplete="off" aria-describedby="create-limits-help" {{ field_error_attrs("cost_limit_eur") }}>
+        </label>
+        <label>
+          Token limit
+          <input name="token_limit_total" value="{{ form.token_limit_total }}" inputmode="numeric" autocomplete="off" aria-describedby="create-limits-help" {{ field_error_attrs("token_limit_total") }}>
+        </label>
+        <label>
+          Request limit
+          <input name="request_limit_total" value="{{ form.request_limit_total }}" inputmode="numeric" autocomplete="off" aria-describedby="create-limits-help" {{ field_error_attrs("request_limit_total") }}>
+        </label>
+      </div>
+      <p class="field-help" id="create-limits-help">
+        Blank means UNLIMITED for that lifetime quota (stored null, never zero). In a configuration document the same null/omission law applies.
+      </p>
+      <details class="field-help-details">
+        <summary>What is this for?</summary>
+        <p class="muted small">These are the key's lifetime budget: the most this key may spend, use, and call across its whole validity. Leaving one blank means no ceiling for that measure over the key's lifetime. They are separate from the per-minute speed controls further down this page: a key can exhaust its lifetime budget even while every single request is admitted. Example: with a 500 EUR cost limit, the gateway stops admitting NEW requests once the used cost approaches 500 EUR; a request that already started may finish, so the final provider bill can slightly exceed the limit.</p>
+      </details>
+      </div>
+    </section>
+
     <details class="advanced-codex-modes" aria-labelledby="create-advanced-codex-heading">
       <summary id="create-advanced-codex-heading">Advanced: historical Codex key modes (protocol pilot, Qwen 0.162 authoring)</summary>
       <p class="muted">For normal Codex keys use "This key is for Codex" under Who will use this key? above. These checkboxes keep the earlier authoring flows; they cannot be combined with the client-use choices. They are historical because a newer compatibility DATA revision is installed, not because they are broken.</p>
@@ -206,11 +231,11 @@
       <div data-guided-policy-body>
       <p class="warning-text">This creates a standard, finite pilot key only after the selected route pair and current pricing qualify for Codex 0.147.0 with <code>gpt-5.6-sol</code>. This is local protocol qualification; real-provider E2E has not run.</p>
       <label class="checkbox-row">
-        <input type="checkbox" name="codex_protocol_pilot" value="true" {% if form.codex_protocol_pilot %}checked{% endif %} aria-describedby="create-codex-pilot-help">
+        <input type="checkbox" name="codex_protocol_pilot" value="true" {% if form.codex_protocol_pilot %}checked{% endif %} aria-describedby="create-codex-pilot-help" {{ field_error_attrs("codex_protocol_pilot") }}>
         Apply the bounded Codex protocol-pilot policy
       </label>
       <label class="checkbox-row">
-        <input type="checkbox" name="confirm_codex_protocol_pilot" value="true" {% if form.confirm_codex_protocol_pilot %}checked{% endif %} aria-describedby="create-codex-pilot-help">
+        <input type="checkbox" name="confirm_codex_protocol_pilot" value="true" {% if form.confirm_codex_protocol_pilot %}checked{% endif %} aria-describedby="create-codex-pilot-help" {{ field_error_attrs("confirm_codex_protocol_pilot") }}>
         I confirm this standard key is for the bounded Codex protocol pilot
       </label>
       <p class="muted small" id="create-codex-pilot-help">Select exactly one qualified provider, model <code>gpt-5.6-sol</code>, and endpoints <code>/v1/models</code>, <code>/v1/responses</code>, and <code>/v1/responses/compact</code>. Do not select any allow-all option. Positive finite request, token, and EUR cost limits plus an audit reason are required.</p>
@@ -224,11 +249,11 @@
       <div data-guided-policy-body>
       <p class="muted">For routes already qualified against the installed Codex 0.162 module. Select explicit Qwen models and their providers above, plus exactly <code>/v1/models</code> and <code>/v1/responses</code>. This grants only the Codex capabilities required by those selected profiles; image input is included only for profiles that declare it.</p>
       <label class="checkbox-row">
-        <input type="checkbox" name="qwen_codex" value="true" {% if form.qwen_codex %}checked{% endif %} aria-describedby="create-qwen-codex-help">
+        <input type="checkbox" name="qwen_codex" value="true" {% if form.qwen_codex %}checked{% endif %} aria-describedby="create-qwen-codex-help" {{ field_error_attrs("qwen_codex") }}>
         Enable Codex for the selected Qwen models
       </label>
       <label class="checkbox-row">
-        <input type="checkbox" name="confirm_qwen_codex" value="true" {% if form.confirm_qwen_codex %}checked{% endif %} aria-describedby="create-qwen-codex-help">
+        <input type="checkbox" name="confirm_qwen_codex" value="true" {% if form.confirm_qwen_codex %}checked{% endif %} aria-describedby="create-qwen-codex-help" {{ field_error_attrs("confirm_qwen_codex") }}>
         I confirm that these models and providers are intended for Codex access
       </label>
       <p class="muted small" id="create-qwen-codex-help">Do not select the older Codex Protocol Pilot above. Ordinary key validity and quota settings still apply. The server checks route qualification again before issuing the key.</p>
@@ -236,14 +261,16 @@
     </section>
     </details>
 
+    <details class="advanced-policy-details" aria-labelledby="create-adv-external-tools-heading">
+      <summary id="create-adv-external-tools-heading">Provider-run tools and their cost risk</summary>
     <section class="action-panel" aria-labelledby="create-external-tools-heading" data-guided-policy-section>
-      <h2 id="create-external-tools-heading">External-tool Policy</h2>
+      <h2 id="create-external-tools-heading">Provider-run tools and their cost risk</h2>
       <p class="muted small" data-guided-compact-note hidden>Inactive in document mode: the configuration document defines this key's external-tool policy. The guided controls are submitted at their strict-bounded defaults.</p>
       <div data-guided-policy-body>
       <p class="warning-text">Runtime permits only exact OpenAI Responses <code>web_search</code> when fenced key and route policy match. Remote MCP/connectors, provider URL authority, unknown authority, and every other hosted family remain denied.</p>
       <label>
         Mode
-        <select name="external_tool_mode" aria-describedby="create-ext-tool-help">
+        <select name="external_tool_mode" aria-describedby="create-ext-tool-help" {{ field_error_attrs("external_tool_mode") }}>
           <option value="strict_bounded" {% if form.external_tool_mode != "external_tool_fenced" %}selected{% endif %}>Strict bounded (default deny)</option>
           <option value="external_tool_fenced" {% if form.external_tool_mode == "external_tool_fenced" %}selected{% endif %}>External-tool fenced (web search only at runtime)</option>
         </select>
@@ -270,14 +297,15 @@
       ) }}
       <label>
         Maximum provider tool calls per request
-        <input name="external_tool_max_calls" value="{{ form.external_tool_max_calls or '0' }}" inputmode="numeric" autocomplete="off" aria-describedby="create-ext-tool-help">
+        <input name="external_tool_max_calls" value="{{ form.external_tool_max_calls or '0' }}" inputmode="numeric" autocomplete="off" aria-describedby="create-ext-tool-help" {{ field_error_attrs("external_tool_max_calls") }}>
       </label>
+      <p class="muted small">Whole number of provider tool calls allowed within ONE admitted request (per request). In strict-bounded mode no hosted tool runs, so this number never applies; in fenced mode it must be at least 1 and at most the ceiling above. Example: 2 means one request may trigger at most two web-search calls.</p>
       <label class="checkbox-row">
-        <input type="checkbox" name="external_tool_overrun_acknowledged" value="true" {% if form.external_tool_overrun_acknowledged %}checked{% endif %} aria-describedby="create-ext-tool-help">
+        <input type="checkbox" name="external_tool_overrun_acknowledged" value="true" {% if form.external_tool_overrun_acknowledged %}checked{% endif %} aria-describedby="create-ext-tool-help" {{ field_error_attrs("external_tool_overrun_acknowledged") }}>
         I acknowledge that one admitted fenced web-search request may overrun its remaining quota.
       </label>
       <label class="checkbox-row">
-        <input type="checkbox" name="confirm_external_tool_fenced" value="true" {% if form.confirm_external_tool_fenced %}checked{% endif %} aria-describedby="create-ext-tool-help">
+        <input type="checkbox" name="confirm_external_tool_fenced" value="true" {% if form.confirm_external_tool_fenced %}checked{% endif %} aria-describedby="create-ext-tool-help" {{ field_error_attrs("confirm_external_tool_fenced") }}>
         I separately confirm fenced external-tool policy for this standard key.
       </label>
       <p class="warning-text">For the implemented web-search contract, concurrent requests are fenced, later exhausted requests are blocked, and missing or ambiguous final cost is held. Fenced mode requires positive finite request, token, and EUR limits, an acknowledgement, this second confirmation, and the audit reason below.</p>
@@ -288,28 +316,31 @@
       </details>
       </div>
     </section>
+    </details>
 
+    <details class="advanced-policy-details" aria-labelledby="create-adv-rate-limit-heading">
+      <summary id="create-adv-rate-limit-heading">Request speed controls</summary>
     <section class="action-panel" aria-labelledby="create-rate-limit-heading" data-guided-policy-section>
-      <h2 id="create-rate-limit-heading">Redis Operational Rate Limits</h2>
+      <h2 id="create-rate-limit-heading">Request speed controls</h2>
       <p class="muted small" data-guided-compact-note hidden>Inactive in document mode: the configuration document defines this key's rate and lazy-throttling policy. The guided inputs are submitted blank (deployment defaults).</p>
       <div data-guided-policy-body>
       <p class="muted">These optional Redis counters are separate from PostgreSQL hard quota limits. Leave fields blank for default behavior.</p>
       <div class="form-grid">
         <label>
           Requests per minute
-          <input name="rate_limit_requests_per_minute" value="{{ form.rate_limit_requests_per_minute }}" inputmode="numeric" autocomplete="off" aria-describedby="create-rate-limit-help">
+          <input name="rate_limit_requests_per_minute" value="{{ form.rate_limit_requests_per_minute }}" inputmode="numeric" autocomplete="off" aria-describedby="create-rate-limit-help" {{ field_error_attrs("rate_limit_requests_per_minute") }}>
         </label>
         <label>
           Tokens per minute
-          <input name="rate_limit_tokens_per_minute" value="{{ form.rate_limit_tokens_per_minute }}" inputmode="numeric" autocomplete="off" aria-describedby="create-rate-limit-help">
+          <input name="rate_limit_tokens_per_minute" value="{{ form.rate_limit_tokens_per_minute }}" inputmode="numeric" autocomplete="off" aria-describedby="create-rate-limit-help" {{ field_error_attrs("rate_limit_tokens_per_minute") }}>
         </label>
         <label>
           Concurrent requests
-          <input name="rate_limit_concurrent_requests" value="{{ form.rate_limit_concurrent_requests }}" inputmode="numeric" autocomplete="off" aria-describedby="create-rate-limit-help">
+          <input name="rate_limit_concurrent_requests" value="{{ form.rate_limit_concurrent_requests }}" inputmode="numeric" autocomplete="off" aria-describedby="create-rate-limit-help" {{ field_error_attrs("rate_limit_concurrent_requests") }}>
         </label>
         <label>
           Window seconds
-          <input name="rate_limit_window_seconds" value="{{ form.rate_limit_window_seconds }}" inputmode="numeric" autocomplete="off" aria-describedby="create-rate-limit-help">
+          <input name="rate_limit_window_seconds" value="{{ form.rate_limit_window_seconds }}" inputmode="numeric" autocomplete="off" aria-describedby="create-rate-limit-help" {{ field_error_attrs("rate_limit_window_seconds") }}>
         </label>
       </div>
       <p class="field-help" id="create-rate-limit-help">
@@ -337,11 +368,11 @@
         <div class="form-grid" data-lazy-throttling-field-group>
           <label>
             Maximum waiting time (seconds)
-            <input name="lazy_throttling_max_wait_seconds" value="{{ form.lazy_throttling_max_wait_seconds or lazy_throttling_defaults.max_wait_seconds }}" inputmode="numeric" autocomplete="off" data-lazy-throttling-field aria-describedby="create-lazy-help">
+            <input name="lazy_throttling_max_wait_seconds" value="{{ form.lazy_throttling_max_wait_seconds or lazy_throttling_defaults.max_wait_seconds }}" inputmode="numeric" autocomplete="off" data-lazy-throttling-field aria-describedby="create-lazy-help" {{ field_error_attrs("lazy_throttling_max_wait_seconds") }}>
           </label>
           <label>
             Maximum waiting requests per key
-            <input name="lazy_throttling_max_waiting_requests" value="{{ form.lazy_throttling_max_waiting_requests or lazy_throttling_defaults.max_waiting_per_key }}" inputmode="numeric" autocomplete="off" data-lazy-throttling-field aria-describedby="create-lazy-help">
+            <input name="lazy_throttling_max_waiting_requests" value="{{ form.lazy_throttling_max_waiting_requests or lazy_throttling_defaults.max_waiting_per_key }}" inputmode="numeric" autocomplete="off" data-lazy-throttling-field aria-describedby="create-lazy-help" {{ field_error_attrs("lazy_throttling_max_waiting_requests") }}>
           </label>
         </div>
         <p class="muted small" id="create-lazy-help">Applies to Chat Completions and Responses. In wait mode both bounds are positive whole numbers (blank uses the shown defaults) and may not exceed the operator ceilings: {{ lazy_throttling_ceilings.max_wait_seconds | num }}s maximum wait, {{ lazy_throttling_ceilings.max_waiting_per_key | num }} waiting per key.</p>
@@ -351,26 +382,31 @@
       </fieldset>
       </div>
     </section>
+    </details>
 
+    <details class="advanced-policy-details" aria-labelledby="create-adv-live-burn-heading">
+      <summary id="create-adv-live-burn-heading">Stopping long responses early</summary>
     <section class="action-panel" aria-labelledby="create-chat-streaming-live-burn-heading" data-streaming-live-burn-surface data-guided-policy-section>
       <h2 id="create-chat-streaming-live-burn-heading">{{ chat_live_burn_surface.display_title }}</h2>
       <p class="muted small" data-guided-compact-note hidden>Inactive in document mode: the configuration document defines this key's streaming live-burn policy. The guided controls are submitted disabled.</p>
       <div data-guided-policy-body>
+      <p class="muted">In plain terms: while a streamed chat reply is being generated, the gateway watches the spend accumulated so far and can cut the stream a little early when it looks like the reply would push past this key's limits. The provider's final usage and cost always stay authoritative; the margins below only decide how early the gateway pulls the plug.</p>
       <p class="muted">Applies only to <code>{{ chat_live_burn_surface.endpoint_label }}</code> with <code>stream=true</code>. Final provider usage/cost remains authoritative.</p>
       <label class="checkbox-row">
-        <input id="create-chat-streaming-live-burn-enabled" type="checkbox" name="{{ chat_live_burn_surface.enabled_field_name }}" value="true" {% if form.chat_streaming_live_burn_enabled == "true" or form.chat_streaming_live_burn_enabled is sameas true %}checked{% endif %} data-streaming-live-burn-enabled aria-describedby="create-chat-streaming-live-burn-hint">
+        <input id="create-chat-streaming-live-burn-enabled" type="checkbox" name="{{ chat_live_burn_surface.enabled_field_name }}" value="true" {% if form.chat_streaming_live_burn_enabled == "true" or form.chat_streaming_live_burn_enabled is sameas true %}checked{% endif %} data-streaming-live-burn-enabled aria-describedby="create-chat-streaming-live-burn-hint" {{ field_error_attrs("chat_streaming_live_burn_enabled", with_id=false) }}>
         Enable live-burn monitoring for Chat Completions streaming
       </label>
       <div id="create-chat-streaming-live-burn-fields" class="form-grid{% if not (form.chat_streaming_live_burn_enabled == "true" or form.chat_streaming_live_burn_enabled is sameas true) %} live-burn-fields-disabled{% endif %}" data-streaming-live-burn-margin-fields>
         <label>
           Cost margin (EUR)
-          <input id="create-chat-streaming-live-burn-cost-margin" name="{{ chat_live_burn_surface.cost_margin_field_name }}" value="{{ form.chat_streaming_live_burn_cost_margin_eur or '0' }}" inputmode="decimal" autocomplete="off" aria-describedby="create-chat-streaming-live-burn-hint"{% if not (form.chat_streaming_live_burn_enabled == "true" or form.chat_streaming_live_burn_enabled is sameas true) %} disabled{% endif %}>
+          <input id="create-chat-streaming-live-burn-cost-margin" name="{{ chat_live_burn_surface.cost_margin_field_name }}" value="{{ form.chat_streaming_live_burn_cost_margin_eur or '0' }}" inputmode="decimal" autocomplete="off" aria-describedby="create-chat-streaming-live-burn-hint" {{ field_error_attrs("chat_streaming_live_burn_cost_margin_eur", with_id=false) }}{% if not (form.chat_streaming_live_burn_enabled == "true" or form.chat_streaming_live_burn_enabled is sameas true) %} disabled{% endif %}>
         </label>
         <label>
           Output token margin
-          <input id="create-chat-streaming-live-burn-token-margin" name="{{ chat_live_burn_surface.token_margin_field_name }}" value="{{ form.chat_streaming_live_burn_token_margin or '0' }}" inputmode="numeric" autocomplete="off" aria-describedby="create-chat-streaming-live-burn-hint"{% if not (form.chat_streaming_live_burn_enabled == "true" or form.chat_streaming_live_burn_enabled is sameas true) %} disabled{% endif %}>
+          <input id="create-chat-streaming-live-burn-token-margin" name="{{ chat_live_burn_surface.token_margin_field_name }}" value="{{ form.chat_streaming_live_burn_token_margin or '0' }}" inputmode="numeric" autocomplete="off" aria-describedby="create-chat-streaming-live-burn-hint" {{ field_error_attrs("chat_streaming_live_burn_token_margin", with_id=false) }}{% if not (form.chat_streaming_live_burn_enabled == "true" or form.chat_streaming_live_burn_enabled is sameas true) %} disabled{% endif %}>
         </label>
       </div>
+      <p class="muted small">Margins are positive safety cushions, not budgets: the cost margin in EUR and the token margin in output tokens. Blank or 0 means the gateway only steps in once the projected spend actually crosses a limit. They are ignored entirely while monitoring is disabled.</p>
       <p id="create-chat-streaming-live-burn-hint" class="muted small">
         {% for line in chat_live_burn_surface.help_text %}{{ line }} {% endfor %}
         Margins are ignored while monitoring is off.
@@ -381,7 +417,10 @@
       </details>
       </div>
     </section>
+    </details>
 
+    <details class="advanced-policy-details" aria-labelledby="create-adv-calibration-heading">
+      <summary id="create-adv-calibration-heading">Trusted calibration key</summary>
     <section class="action-panel" aria-labelledby="create-calibration-heading">
       <h2 id="create-calibration-heading">Trusted Calibration Key</h2>
       <p class="warning-text">Trusted calibration keys use broad discovery policy for a small number of calls. Do not issue them to participants. They are for trusted organizers/admins only. Observed usage is used later to derive strict participant policies.</p>
@@ -398,11 +437,11 @@
         <dd>{{ "Allowed" if trusted_calibration_settings.allow_external_authority else "Denied by default" }}</dd>
       </dl>
       <label class="checkbox-row">
-        <input type="checkbox" name="trusted_calibration" value="true" {% if form.trusted_calibration %}checked{% endif %} aria-describedby="create-calibration-help">
+        <input type="checkbox" name="trusted_calibration" value="true" {% if form.trusted_calibration %}checked{% endif %} aria-describedby="create-calibration-help" {{ field_error_attrs("trusted_calibration") }}>
         Create as trusted calibration key
       </label>
       <label class="checkbox-row">
-        <input type="checkbox" name="confirm_trusted_calibration" value="true" {% if form.confirm_trusted_calibration %}checked{% endif %} aria-describedby="create-calibration-help">
+        <input type="checkbox" name="confirm_trusted_calibration" value="true" {% if form.confirm_trusted_calibration %}checked{% endif %} aria-describedby="create-calibration-help" {{ field_error_attrs("confirm_trusted_calibration") }}>
         I understand this is for trusted calibration discovery only
       </label>
       <p class="muted small" id="create-calibration-help">Both boxes are required together when creating a calibration key. The service enforces short validity, a configured request-limit maximum, and standard provider-secret isolation. Trusted calibration keys are real gateway keys, not templates or participant keys, and must not be issued to participants.</p>
@@ -411,13 +450,29 @@
         <p class="muted small">Calibration keys intentionally discover broad access so real usage can be observed; they are the wrong choice for ordinary users because they may reach more providers and models than a normal key while only allowing a small number of calls. Use them only as a trusted admin to gather calibration data, then derive strict participant policies from the observed usage.</p>
       </details>
     </section>
+    </details>
+
+    <section class="action-panel" aria-labelledby="create-access-summary-heading">
+      <h2 id="create-access-summary-heading">What this key will be able to do</h2>
+      {% if access_summary %}
+      <dl class="compact-dl access-summary">
+        {% for row in access_summary %}
+        <dt>{{ row.label }}</dt>
+        <dd>{{ row.value }}</dd>
+        {% endfor %}
+      </dl>
+      <p class="muted small">Restated from your guided choices above, including preset endpoints. The gateway rechecks every grant and each route's readiness before the key is created; if anything no longer qualifies, the create is refused and nothing is granted.</p>
+      {% else %}
+      <p class="muted small">In configuration-document mode this summary is not shown: the document defines the policy, and the gateway still rechecks every grant before the key is created.</p>
+      {% endif %}
+    </section>
 
     <section class="action-panel" aria-labelledby="create-submit-heading">
       <h2 id="create-submit-heading">Create Key</h2>
       <p class="warning-text">The selected mode controls the only plaintext destination. Old keys cannot be resent; lost keys must be rotated.</p>
       <label>
         Email delivery mode
-        <select name="email_delivery_mode" aria-describedby="create-delivery-help">
+        <select name="email_delivery_mode" aria-describedby="create-delivery-help" {{ field_error_attrs("email_delivery_mode") }}>
           <option value="none" {% if form.email_delivery_mode == "none" or not form.email_delivery_mode %}selected{% endif %}>None - show key once in browser</option>
           <option value="pending" {% if form.email_delivery_mode == "pending" %}selected{% endif %}>Pending - create delivery row and show key once</option>
           <option value="send-now" {% if form.email_delivery_mode == "send-now" %}selected{% endif %}>Send now - email is the delivery channel</option>
@@ -427,7 +482,7 @@
       <p class="muted small" id="create-delivery-help">The selected mode is the only plaintext destination for the new key. Send-now and enqueue suppress browser plaintext display. Pending creates a delivery record but still shows the key once. Celery payloads contain IDs only, and provider keys are never involved.</p>
       <label>
         Audit reason
-        <input name="reason" value="{{ form.reason }}" required maxlength="512" autocomplete="off" placeholder="Required reason" aria-describedby="create-reason-help">
+        <input name="reason" value="{{ form.reason }}" required maxlength="512" autocomplete="off" placeholder="Required reason" aria-describedby="create-reason-help" {{ field_error_attrs("reason") }}>
       </label>
       <p class="field-help" id="create-reason-help">Required, at most 512 characters. Credential-shaped values are masked before storage.</p>
       <button type="submit">Create key</button>
@@ -439,12 +494,12 @@
 <script src="{{ asset_url('lazy-throttling.js') }}"></script>
 <script>
 (() => {
-  // Policy-source switch (G01 advanced document mode): in document mode the
-  // guided POLICY checkboxes default to "off", the document label/editor/help
-  // group is disclosed together, and the inactive guided policy sections are
-  // compacted to a one-line note (the server still enforces the single-source
-  // law; identity checkboxes such as trusted calibration are untouched and
-  // rejected server-side in document mode).
+  // Policy-source switch: in document mode the guided POLICY controls are
+  // compacted to one-line notes, the document label/editor/help group is
+  // disclosed, and the client-use checkboxes become VISIBLY INACTIVE
+  // (disabled, never hidden, and therefore never submitted) with a visible
+  // note; returning to guided re-enables them and re-syncs their presets.
+  // The server still enforces the single-source law.
   const source = document.querySelector('select[name="policy_source"]');
   const docGroup = document.querySelector('[data-create-configuration-document-group]');
   if (!source || !docGroup) return;
@@ -457,6 +512,8 @@
     'input[name="chat_streaming_live_burn_enabled"]',
     'input[name="confirm_external_tool_fenced"]',
   ];
+  const clientBoxes = Array.from(document.querySelectorAll('input[name^="client_use_"]'));
+  const docModeNote = document.querySelector('[data-doc-mode-client-note]');
   const setDocumentMode = (on) => {
     docGroup.hidden = !on;
     for (const section of guidedPolicySections) {
@@ -465,6 +522,9 @@
       if (body) body.hidden = on;
       if (note) note.hidden = !on;
     }
+    for (const box of clientBoxes) box.disabled = on;
+    if (docModeNote) docModeNote.hidden = !on;
+    document.dispatchEvent(new CustomEvent("create-doc-mode", { detail: on }));
   };
   const syncPolicySource = () => {
     const documentMode = source.value === "configuration";
@@ -486,9 +546,14 @@
   syncPolicySource();
 })();
 (() => {
-  // Client-use presets: preselect the unambiguous endpoints each checked
-  // client needs and show the resulting access. The server rechecks every
-  // grant before creating the key; this convenience never widens a grant.
+  // Client-use presets with endpoint ownership: a checked client
+  // preselects the endpoints that client needs; unchecking it removes ONLY
+  // the endpoints that preset owns (endpoints already present or added by
+  // the operator survive). Programmatic preset writes fire no events;
+  // operator typing in the manual list or moving an option into the
+  // selected list marks that endpoint as explicitly theirs. The server
+  // rechecks every grant before creating the key; this convenience never
+  // widens a grant.
   const boxes = Array.from(
     document.querySelectorAll('input[name^="client_use_"]')
   );
@@ -509,52 +574,155 @@
       .split("\n")
       .map((item) => item.trim())
       .filter(Boolean);
-  const ensureEndpoint = (endpoint) => {
-    if (manual) {
-      const lines = parseList(manual.value);
-      if (!lines.includes(endpoint)) {
-        lines.push(endpoint);
-        manual.value = lines.join("\n");
-      }
-    }
-    if (available && selected) {
-      const option = Array.from(available.options).find(
-        (candidate) => candidate.value === endpoint
-      );
-      if (option) {
-        available.removeChild(option);
-        selected.appendChild(option);
-      }
-    }
-  };
-  const sync = () => {
+  const requiredEndpoints = () => {
     const required = new Set();
     for (const box of boxes) {
       if (!box.checked) continue;
       for (const endpoint of presetEndpoints[box.name] || []) {
         required.add(endpoint);
-        ensureEndpoint(endpoint);
+      }
+    }
+    return required;
+  };
+  // Explicit = endpoints present on load, plus anything the operator adds
+  // afterwards (never the preset's own programmatic writes).
+  const explicit = new Set(manual ? parseList(manual.value) : []);
+  const ensureEndpoint = (endpoint) => {
+    if (manual && !parseList(manual.value).includes(endpoint)) {
+      manual.value = [...parseList(manual.value), endpoint].join("\n");
+    }
+    if (available && selected) {
+      const alreadySelected = Array.from(selected.options).some(
+        (candidate) => candidate.value === endpoint
+      );
+      if (!alreadySelected) {
+        const option = Array.from(available.options).find(
+          (candidate) => candidate.value === endpoint
+        );
+        if (option) {
+          available.removeChild(option);
+          selected.appendChild(option);
+        }
+      }
+    }
+  };
+  const removeEndpoint = (endpoint) => {
+    if (manual) {
+      manual.value = parseList(manual.value)
+        .filter((line) => line !== endpoint)
+        .join("\n");
+    }
+    if (selected && available) {
+      const option = Array.from(selected.options).find(
+        (candidate) => candidate.value === endpoint
+      );
+      if (option) {
+        selected.removeChild(option);
+        const stillInAvailable = Array.from(available.options).some(
+          (candidate) => candidate.value === endpoint
+        );
+        if (!stillInAvailable) {
+          available.appendChild(option);
+        }
+      }
+    }
+  };
+  const showSummary = () => {
+    if (!summary) return;
+    const required = requiredEndpoints();
+    if (!required.size) {
+      summary.hidden = true;
+      summary.textContent = "";
+      return;
+    }
+    summary.hidden = false;
+    summary.textContent =
+      "Checked clients preselected these endpoints: " +
+      Array.from(required).sort().join(", ") +
+      ". You can still adjust the lists; the server rechecks every grant before the key is created.";
+  };
+  const sync = () => {
+    const required = requiredEndpoints();
+    for (const endpoint of required) {
+      ensureEndpoint(endpoint);
+    }
+    // Remove only what no checked preset owns and the operator did not add.
+    const keep = new Set([...required, ...explicit]);
+    for (const endpoint of parseList(manual ? manual.value : "")) {
+      if (!keep.has(endpoint)) {
+        removeEndpoint(endpoint);
       }
     }
     if (allowAll && required.size && allowAll.checked) {
       allowAll.checked = false;
       allowAll.dispatchEvent(new Event("change", { bubbles: true }));
     }
-    if (summary) {
-      if (!required.size) {
-        summary.hidden = true;
-        summary.textContent = "";
-      } else {
+    showSummary();
+  };
+  // Operator edits mark endpoints as explicitly theirs (preset endpoints
+  // stay preset-owned unless the operator also typed/moved them).
+  if (manual) {
+    manual.addEventListener("input", () => {
+      const required = requiredEndpoints();
+      for (const line of parseList(manual.value)) {
+        if (!required.has(line)) {
+          explicit.add(line);
+        }
+      }
+    });
+  }
+  if (selected) {
+    selected.addEventListener("change", () => {
+      const required = requiredEndpoints();
+      for (const option of Array.from(selected.selectedOptions)) {
+        if (!required.has(option.value)) {
+          explicit.add(option.value);
+        }
+      }
+    });
+  }
+  for (const box of boxes) box.addEventListener("change", sync);
+  document.addEventListener("create-doc-mode", (event) => {
+    if (!event.detail) {
+      sync(); // guided mode restored: re-assert the checked presets
+    }
+  });
+  const form = document.querySelector('form.create-form');
+  if (form) {
+    form.addEventListener("submit", () => {
+      const required = requiredEndpoints();
+      const present = new Set(parseList(manual ? manual.value : ""));
+      const missing = Array.from(required)
+        .filter((endpoint) => !present.has(endpoint))
+        .sort();
+      if (summary && missing.length) {
         summary.hidden = false;
         summary.textContent =
-          "Checked clients preselected these endpoints: " +
-          Array.from(required).sort().join(", ") +
-          ". You can still adjust the lists; the server rechecks every grant before the key is created.";
+          "Warning: a checked client needs " + missing.join(", ") +
+          " but it is missing from the endpoint list. The server applies the client preset add-only: your explicit endpoint choices are kept and the missing required endpoint is added, so the key's final endpoint list (shown on the confirmation page) includes it.";
       }
-    }
-  };
-  for (const box of boxes) box.addEventListener("change", sync);
+    });
+  }
   sync();
+})();
+(() => {
+  // Safe-error focus: when the page re-renders after a refused create,
+  // open every collapsed group that contains a flagged field, then move
+  // focus to the first flagged field (or the error summary itself).
+  const summary = document.getElementById("create-error-summary");
+  if (!summary) return;
+  const fields = Array.from(document.querySelectorAll(".create-error-field"));
+  for (const field of fields) {
+    let group = field.closest("details");
+    while (group) {
+      group.open = true;
+      const parent = group.parentElement;
+      group = parent ? parent.closest("details") : null;
+    }
+  }
+  const target = fields.length ? fields[0] : summary;
+  target.focus();
+  target.scrollIntoView({ block: "center" });
 })();
 </script>
 {% endblock %}
