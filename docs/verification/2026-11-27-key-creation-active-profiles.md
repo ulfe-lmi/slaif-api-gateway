@@ -1,7 +1,15 @@
 # 2026-11-27 — Key creation uses active client profiles and explains its choices
 
-OAP objective 229 (four continuations on the same PR #403: 229-a, 229-b,
-229-c, 229-d). CURRENT end state (229-d, 2026-11-27): the admin GUI
+OAP objective 229 (five continuations on the same PR #403: 229-a, 229-b,
+229-c, 229-d, 229-e). CURRENT end state (229-e, 2026-11-27): the
+229-d GUI feature state below, with the demonstrated final-CI failures
+of the 229-d head repaired — the shared key-creation result template now
+renders with a safe default pin context for every legitimate caller (a
+real product regression: template creation returned 500), and the test
+suite is portable again (test-owned screenshot directory, wall-clock
+relative test key, and browser tests operating the current native
+request-speed disclosure, including no-JS) — as recorded in the 229-e
+section below. The 229-d end state (as of that continuation) was: the admin GUI
 key-creation form shows a plain-language access summary that tracks the
 CURRENT visible choices (client setup, models, providers, endpoints
 including the effective preset union, lifetime limits, validity, and the
@@ -18,8 +26,8 @@ secret is unavailable); invalid numeric inputs pinpoint ONLY the actually
 invalid control with the field's real units and exact blank/zero/default
 behavior; and every editable advanced control has its own adjacent plain-
 language help with accessible `aria-describedby` relationships. The 229-a,
-229-b, and 229-c sections below are historical continuations of this same
-objective, preserved as dated evidence; where a later continuation
+229-b, 229-c, and 229-d sections below are historical continuations of this
+same objective, preserved as dated evidence; where a later continuation
 supersedes an earlier description, the latest one governs.
 
 ## Root cause
@@ -510,3 +518,104 @@ Evidence (this continuation):
 - Not run: no real provider traffic, no real email, no production DB, no
   full 128-worker harness; this continuation makes no live-provider
   qualification claim.
+
+## 229-e continuation (2026-11-27, same PR #403)
+
+Final-CI repair on the 229-d head, from root's exact-head CI run
+46064198175 (implementation 4cc0b2d5, report SELF 7f4eec9c). Exactly two
+jobs failed: unit/lint job 140725539904 — **2 failed, 8943 passed, 1
+skipped** — and browser job 140725539535 — **11 failed, 134 passed**.
+PostgreSQL, E2E, Docker, documentation, both security workflows, and the
+CodeQL aggregate PASSED; main was unchanged; PR #403 was
+ready/unmerged/no auto-merge. One failure was a real shared-template
+product regression; the other three were fixture, portability, and
+test-alignment issues in tests only. No redesign, no schema, preset/DATA,
+migration, existing-key/permissions/quotas, or request-runtime change.
+
+1. **Shared create-result template regression (product code).**
+   `tests/unit/test_admin_keys_routes.py::test_create_key_from_template_creates_one_key_result`
+   POSTed the template-create path and got 500: Jinja `UndefinedError:
+   'client_module_pins' is undefined`. The shared
+   `keys/create_result.html` gained the optional pin explanation in
+   229-b, but only the NATIVE create caller supplied
+   `client_module_pins`; the template-create caller did not. Fix (code +
+   template only): the template now defaults the variable to `{}` before
+   first use, and the template caller passes
+   `_safe_client_module_pins(...)` derived from the stored template
+   snapshot's `responses_policy` (chat is never pinned by template
+   creation, so `None`). No key or template metadata is changed; native
+   creation still shows the correct pin facts, and template creation
+   renders successfully. New regressions in
+   `tests/unit/test_admin_key_create_templates.py`: the result template
+   renders WITHOUT any pin context (no fabricated pin facts), and it
+   shows the stored Responses pin (id, `v8`, digest prefix, no chat row)
+   when present.
+2. **Portable browser screenshot artifacts (test portability).** Nine
+   failures in `tests/browser/test_admin_key_create_229b.py` tried to
+   write the personal path `/home/janezp/codex-work/slaif-229-task`,
+   which does not exist on the CI runner. Replaced with a session-scoped
+   `artifact_dir` fixture: a pytest temporary directory (0700) by
+   default — no setup, no personal home, no privileged permission, no
+   repository write — with an explicit test-only `SLAIF_229B_ARTIFACT_DIR`
+   override for operator-owned local provenance. ALL ten screenshot call
+   sites (helper and direct full-page/element screenshots) route through
+   the fixture. No skips, no catch-and-ignore, no CI-side `/home/janezp`
+   creation; the existing private screenshots in the owned task directory
+   stay as review provenance.
+3. **Date-dependent unit fixture (test clock).**
+   `tests/unit/test_cli_keys_effective_policy.py::test_policy_effective_json_shape`
+   built its fixture key around a hardcoded `NOW = 2026-10-28`; with
+   `valid_until = NOW + 30 days`, the key genuinely expired on
+   2026-11-27, and the code correctly reported `expired` where the test
+   expected active. The production expiry/authorization logic is correct
+   and untouched. Fix: the test clock is now wall-clock relative
+   (`datetime.now(UTC)`), so the fixture key is valid from shortly before
+   the run until 30 days after the run against the same clock the
+   inspection checks. Expired/future-key negative behavior stays covered
+   by `tests/unit/test_key_policy_inspection.py`, which drives the
+   injected `now` seam of `build_key_policy_inspection` directly.
+4. **Lazy-throttling browser alignment (test fixture).** Two failures in
+   `tests/browser/test_admin_lazy_throttling.py` after the intentional
+   229-c layout/help changes. (a) The old literal combined ceiling
+   sentence no longer exists on the create form; the test now asserts
+   the ACTUAL per-field help ceilings ("the operator ceiling of 120
+   seconds", "the operator ceiling of 16") that 229-c renders. (b) The
+   lazy-throttling fields live inside the new native
+   "Request speed controls" `<details>` disclosure (closed by default);
+   both tests now open it by clicking its summary — a browser built-in,
+   so the no-JS context works without any script. The full wait
+   create → detail → update → back-to-reject flow, the persisted wait
+   policy, the escaped invalid-bounds redisplay, and the no-JS create
+   all still execute and assert exactly as before; no waiting/ceiling/
+   security assertion was weakened, and no hidden control is forced open
+   with JS. No product regression was exposed once the tests could reach
+   the controls.
+
+Evidence (this continuation):
+- `tests/unit/test_cli_keys_effective_policy.py` +
+  `tests/unit/test_admin_keys_routes.py` — **56 passed** (30.01 s),
+  including the previously failing template-create node and the
+  relative-clock `test_policy_effective_json_shape`.
+- `tests/unit/test_admin_key_create_templates.py` — **10 passed** (5.33
+  s) with the two new result-template regressions.
+- `tests/browser/test_admin_key_create_229b.py` (13) +
+  `tests/browser/test_admin_lazy_throttling.py` (3) — **16 passed**
+  (45.26 s) against the owned disposable PostgreSQL and actual
+  Chromium; all 10 creation screenshots verified inside the test-owned
+  0700 temporary artifacts directory, and the old owned task directory
+  untouched.
+- `ruff check` on all changed Python files — all checks passed;
+  `git diff --check` — clean; doc guards
+  (`test_documentation_inventory`, `test_documentation_contract_drift`,
+  `test_documentation_asof`) — **44 passed**.
+- REUSED unchanged (not re-run): `test_admin_key_create_client_use_postgres.py`
+  13 passed (its line-476 "Responses client module" assertion already
+  proves the native pin-facts display), the rev16/17 GUI pin and
+  readiness evidence, the email sendability/retry integration coverage,
+  and the security/accounting suites.
+- Not run yet: the broad CI rerun on the new final head is the remaining
+  required gate (root-owned); no real provider traffic, no real email,
+  no production DB, no full 128-worker harness in this continuation.
+- Operator notes: none affected — the shared-template fix changes no
+  operator-visible text or workflow beyond rendering the already-existing
+  pin explanation for every legitimate create-result caller.

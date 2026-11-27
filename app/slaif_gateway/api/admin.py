@@ -2767,6 +2767,12 @@ async def create_admin_key_from_template_revision(
             },
             "key_purpose": result.created_key.key_purpose,
             "capability_policy_mode": result.created_key.capability_policy_mode,
+            "client_module_pins": _safe_client_module_pins(
+                (
+                    getattr(result.revision, "template_snapshot", None) or {}
+                ).get("responses_policy"),
+                None,
+            ),
             "template_provenance": {
                 "template_id": result.template.id,
                 "template_name": result.template.name,

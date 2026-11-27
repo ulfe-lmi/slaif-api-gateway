@@ -36,8 +36,10 @@ retaining the still-valid 229-b coverage in the same file:
 
 Safety: only synthetic fixture values are read; session/CSRF values are
 used transiently for login and never logged or screenshotted.
-Screenshots (synthetic data only, no key/session/secret cells) go under
-/home/janezp/codex-work/slaif-229-task/ (the existing owned task dir).
+Screenshots (synthetic data only, no key/session/secret cells) go under a
+test-owned temporary directory (pytest tmp_path_factory by default, 0700);
+an explicit test-only SLAIF_229B_ARTIFACT_DIR override may point at an
+operator-owned directory for local provenance.
 
 Run:  python -m pytest tests/browser/test_admin_key_create_229b.py -m playwright
 """
@@ -45,6 +47,7 @@ Run:  python -m pytest tests/browser/test_admin_key_create_229b.py -m playwright
 from __future__ import annotations
 
 import asyncio
+import os
 import re
 import socket
 import threading
@@ -104,7 +107,7 @@ pytestmark = pytest.mark.playwright
 
 ADMIN_PASSWORD = "correct horse battery staple"
 LOGIN_FORM = 'form[action="/admin/login"]'
-SCREENSHOT_DIR = Path("/home/janezp/codex-work/slaif-229-task")
+ARTIFACT_DIR_ENV = "SLAIF_229B_ARTIFACT_DIR"
 
 OPENCODE_RESPONSES_GATES = (
     "codex_request_envelope",
@@ -424,9 +427,24 @@ def _login(page: object, env: dict[str, Any]) -> None:
     page.wait_for_url("**/admin")  # type: ignore[attr-defined]
 
 
-def _screenshot(page: object, name: str) -> None:
-    SCREENSHOT_DIR.mkdir(parents=True, exist_ok=True)
-    page.screenshot(path=str(SCREENSHOT_DIR / name))  # type: ignore[attr-defined]
+@pytest.fixture(scope="session")
+def artifact_dir(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """Test-owned screenshot output directory (0700), for ANY checkout/user.
+
+    The default is a pytest temporary directory: no setup, no personal
+    home, no privileged permission, no repository write. An explicit
+    test-only override (environment variable) may point at an
+    operator-owned directory for local provenance.
+    """
+    override = os.environ.get(ARTIFACT_DIR_ENV)
+    target = Path(override) if override else tmp_path_factory.mktemp("229b-artifacts")
+    target.mkdir(parents=True, exist_ok=True)
+    os.chmod(target, 0o700)
+    return target
+
+
+def _screenshot(page: object, artifact_dir: Path, name: str) -> None:
+    page.screenshot(path=str(artifact_dir / name))  # type: ignore[attr-defined]
 
 
 def _flat(page: object) -> str:
@@ -517,7 +535,7 @@ def _select_explicit_provider(page: object, provider: str) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_main_flow_visible_advanced_collapsed_summary(chromium, env229b) -> None:
+def test_main_flow_visible_advanced_collapsed_summary(chromium, env229b, artifact_dir) -> None:
     env = env229b
     with chromium.new_context(base_url=env["base_url"]) as context:  # type: ignore[attr-defined]
         page = context.new_page()
@@ -570,7 +588,7 @@ def test_main_flow_visible_advanced_collapsed_summary(chromium, env229b) -> None
         assert "None - plain API key only" in text
         assert "unlimited" in text  # blank lifetime limits = unlimited, stated
 
-        _screenshot(page, "229b-create-ordinary-desktop.png")
+        _screenshot(page, artifact_dir, "229b-create-ordinary-desktop.png")
 
     # Narrow desktop viewport: the busy guided form still fits.
     with chromium.new_context(  # type: ignore[attr-defined]
@@ -584,7 +602,7 @@ def test_main_flow_visible_advanced_collapsed_summary(chromium, env229b) -> None
             "() => document.documentElement.scrollWidth - document.documentElement.clientWidth"
         )
         assert overflow <= 0
-        _screenshot(page, "229b-create-ordinary-narrow.png")
+        _screenshot(page, artifact_dir, "229b-create-ordinary-narrow.png")
 
 
 # ---------------------------------------------------------------------------
@@ -593,7 +611,7 @@ def test_main_flow_visible_advanced_collapsed_summary(chromium, env229b) -> None
 # ---------------------------------------------------------------------------
 
 
-def test_preset_switching_endpoint_ownership(chromium, env229b) -> None:
+def test_preset_switching_endpoint_ownership(chromium, env229b, artifact_dir) -> None:
     env = env229b
     with chromium.new_context(base_url=env["base_url"]) as context:  # type: ignore[attr-defined]
         page = context.new_page()
@@ -662,7 +680,7 @@ def test_preset_switching_endpoint_ownership(chromium, env229b) -> None:
         ).is_visible()
         assert _manual_endpoints(page) == ["/v1/models"]
 
-        _screenshot(page, "229b-create-client-presets.png")
+        _screenshot(page, artifact_dir, "229b-create-client-presets.png")
 
 
 # ---------------------------------------------------------------------------
@@ -770,7 +788,7 @@ def test_refused_create_leaves_no_side_effects(chromium, env229b) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_document_mode_disables_client_choices(chromium, env229b) -> None:
+def test_document_mode_disables_client_choices(chromium, env229b, artifact_dir) -> None:
     env = env229b
     with chromium.new_context(base_url=env["base_url"]) as context:  # type: ignore[attr-defined]
         page = context.new_page()
@@ -806,7 +824,7 @@ def test_document_mode_disables_client_choices(chromium, env229b) -> None:
         assert page.locator(  # type: ignore[attr-defined]
             '[data-create-configuration-document-group]'
         ).is_visible()
-        _screenshot(page, "229b-create-doc-mode.png")
+        _screenshot(page, artifact_dir, "229b-create-doc-mode.png")
 
         # Deliberate return to guided: re-enabled, preset re-synced.
         page.select_option('select[name="policy_source"]', "guided")  # type: ignore[attr-defined]
@@ -820,7 +838,7 @@ def test_document_mode_disables_client_choices(chromium, env229b) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_nojs_hermes_create_server_applied_preset(chromium, env229b) -> None:
+def test_nojs_hermes_create_server_applied_preset(chromium, env229b, artifact_dir) -> None:
     env = env229b
     owner_id = env["owner_id"]
     emails_before = _count(env["database_url"], EmailDelivery)
@@ -844,7 +862,7 @@ def test_nojs_hermes_create_server_applied_preset(chromium, env229b) -> None:
         page.fill('textarea[name="allowed_models"]', "gpt-test")  # type: ignore[attr-defined]
         page.fill('textarea[name="allowed_endpoints"]', "/v1/models")  # type: ignore[attr-defined]
         _client_box(page, "client_use_hermes").check()
-        _screenshot(page, "229b-create-nojs-client-form.png")
+        _screenshot(page, artifact_dir, "229b-create-nojs-client-form.png")
 
         with page.expect_response(  # type: ignore[attr-defined]
             lambda r: r.request.method == "POST"
@@ -889,7 +907,7 @@ def test_nojs_hermes_create_server_applied_preset(chromium, env229b) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_error_state_anchors_focus_and_open_details(chromium, env229b) -> None:
+def test_error_state_anchors_focus_and_open_details(chromium, env229b, artifact_dir) -> None:
     env = env229b
     with chromium.new_context(base_url=env["base_url"]) as context:  # type: ignore[attr-defined]
         page = context.new_page()
@@ -965,7 +983,7 @@ def test_error_state_anchors_focus_and_open_details(chromium, env229b) -> None:
             page.locator('input[name="rate_limit_requests_per_minute"]').input_value()  # type: ignore[attr-defined]
             == "abc"
         )
-        _screenshot(page, "229c-create-one-field-error.png")
+        _screenshot(page, artifact_dir, "229c-create-one-field-error.png")
 
         # Correcting ONLY that value issues the key successfully.
         page.fill('input[name="rate_limit_requests_per_minute"]', "60")  # type: ignore[attr-defined]
@@ -979,7 +997,7 @@ def test_error_state_anchors_focus_and_open_details(chromium, env229b) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_advanced_explanations_open_screenshot(chromium, env229b) -> None:
+def test_advanced_explanations_open_screenshot(chromium, env229b, artifact_dir) -> None:
     env = env229b
     with chromium.new_context(base_url=env["base_url"]) as context:  # type: ignore[attr-defined]
         page = context.new_page()
@@ -994,7 +1012,7 @@ def test_advanced_explanations_open_screenshot(chromium, env229b) -> None:
         # Per-field help is adjacent and plain-language.
         assert "requests per minute" in rate_details.inner_text().lower()  # type: ignore[attr-defined]
         page.screenshot(  # type: ignore[attr-defined]
-            path=str(SCREENSHOT_DIR / "229b-create-advanced-open.png"), full_page=True
+            path=str(artifact_dir / "229b-create-advanced-open.png"), full_page=True
         )
 
 
@@ -1003,7 +1021,7 @@ def test_advanced_explanations_open_screenshot(chromium, env229b) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_live_access_summary_reflects_current_choices(chromium, env229b) -> None:
+def test_live_access_summary_reflects_current_choices(chromium, env229b, artifact_dir) -> None:
     """Every summary row must restate the choices the operator is looking
     at while editing — before any submit — including the effective preset
     endpoint union, not the stale initial defaults."""
@@ -1042,7 +1060,7 @@ def test_live_access_summary_reflects_current_choices(chromium, env229b) -> None
         )
         assert row("Validity") == "30 days"
         assert "No browser plaintext" in row("After creation")
-        _screenshot(page, "229c-create-summary-live.png")
+        _screenshot(page, artifact_dir, "229c-create-summary-live.png")
 
 
 # ---------------------------------------------------------------------------
@@ -1088,7 +1106,7 @@ def test_delivery_one_time_warnings_track_mode(chromium, env229b) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_advanced_per_field_help_relationships(chromium, env229b) -> None:
+def test_advanced_per_field_help_relationships(chromium, env229b, artifact_dir) -> None:
     env = env229b
     with chromium.new_context(base_url=env["base_url"]) as context:  # type: ignore[attr-defined]
         page = context.new_page()
@@ -1135,7 +1153,7 @@ def test_advanced_per_field_help_relationships(chromium, env229b) -> None:
         assert "Allowed provider tools" in _flat(page)
         assert "Reviewed capability IDs" not in _flat(page)
         page.screenshot(  # type: ignore[attr-defined]
-            path=str(SCREENSHOT_DIR / "229c-create-advanced-help.png"), full_page=True
+            path=str(artifact_dir / "229c-create-advanced-help.png"), full_page=True
         )
 
 
@@ -1168,7 +1186,7 @@ def test_nojs_withholds_stale_live_summary(chromium, env229b) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_policy_selector_widgets_update_live_summary(chromium, env229b) -> None:
+def test_policy_selector_widgets_update_live_summary(chromium, env229b, artifact_dir) -> None:
     """Choosing in the ACTUAL available/selected widgets — real option
     clicks plus the Add/Remove buttons, and the server-side search
     selection — must update BOTH the submitted manual values and the
@@ -1270,4 +1288,4 @@ def test_policy_selector_widgets_update_live_summary(chromium, env229b) -> None:
         # The ACTUAL summary element with the current selections visible.
         page.locator(  # type: ignore[attr-defined]
             'section[aria-labelledby="create-access-summary-heading"]'
-        ).screenshot(path=str(SCREENSHOT_DIR / "229d-create-summary-widget-path.png"))
+        ).screenshot(path=str(artifact_dir / "229d-create-summary-widget-path.png"))

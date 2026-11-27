@@ -161,6 +161,10 @@
           </ul>
         </dd>
         {% endif %}
+        {# Shared result template: the pin explanation is optional context;
+           every caller supplies it, and the default keeps any future
+           caller rendering safely instead of failing. #}
+        {% set client_module_pins = client_module_pins | default({}) %}
         {% if client_module_pins.responses %}
         <dt>Responses client module</dt>
         <dd>
