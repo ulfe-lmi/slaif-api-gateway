@@ -10,6 +10,12 @@ fitness, security, compliance, provider behavior, or scale.
 For current readers, these are the newest qualification and identity records
 on record. They are dated, commit-specific evidence, not certifications.
 
+- [`2026-11-27 Objective 229-a key creation uses active client profiles and explains its choices`](2026-11-27-key-creation-active-profiles.md)
+  - GUI key-create client-use presets pin NEW keys to the ACTIVE installed
+  client-module DATA snapshot (Codex module-ID gate, active revision/digest
+  pin; no existing-key migration, stale explicit pins fail closed);
+  drift-audit findings table, field-help/UX coverage, unit/PG/browser
+  verification results, and limitations.
 - [`2026-11-23 Objective 228 (a + b, 228-c mock half consolidated) OpenCode 1.19.3 Responses module preprotected record`](2026-11-23-opencode-responses-preprotected.md)
   (record finalized 2026-11-24, 228-c mock-half results consolidated
   2026-11-25; filename dated 2026-11-23 to match the

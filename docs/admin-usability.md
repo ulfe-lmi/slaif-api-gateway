@@ -1988,3 +1988,62 @@ in the 219-a final head:
   UUID under the non-credential key instead of silently dropping the
   scope. The canonical JSON payload/filter shape, the alias checks, and
   the actor/count facts are unchanged.
+
+## 21. Client-use key choices and active profile pins (229-a)
+
+### 21.1 The "Who will use this key?" section
+
+The guided key-create form adds a "Who will use this key?" section with
+four checkboxes, each with an inline "What is this for?" disclosure:
+
+- **This key is for Codex** — the confirmation for the existing Qwen Codex
+  policy path. The server gates on the STABLE Codex module ID plus the
+  currently installed (active) compatibility DATA and route readiness;
+  the created key is pinned to the ACTIVE snapshot (module ID, revision,
+  digest), while the frozen qualification revision stays evidence only.
+- **This key is for OpenCode (Chat)** / **This key is for Hermes** — one
+  Chat client binding; the key is pinned to the active chat client module
+  (`opencode-1.19.3-chat-v1` / `hermes-0.22.5-chat-v1`) and must allow
+  `/v1/chat/completions`.
+- **This key is for OpenCode (Responses)** — requires explicit models and
+  providers (no allow-all), the `/v1/responses` endpoint, and an enabled
+  exact route with all four OpenCode Responses gates for every selected
+  model × provider pair; fail closed otherwise.
+
+Checking a client preselects its unambiguous endpoint(s) and shows a
+summary line; the server rechecks every grant before creating the key.
+The historical Codex sections (protocol pilot, Qwen 0.162 authoring) sit
+in one "Advanced: historical Codex key modes" disclosure and cannot be
+combined with client-use choices.
+
+### 21.2 Conflict rules and error recovery
+
+Server-enforced (field-labeled, fail closed): client-use + advanced
+configuration document, client-use + trusted calibration, two Chat-family
+bindings, two Responses-family bindings, advanced historical Codex +
+client-use. On refusal the form re-renders with a `role="alert"` summary,
+a diagnostic reference ID, and every entered value preserved for
+correction.
+
+### 21.3 Result page and dashboard
+
+The create-result page lists the pinned client module(s) per key
+("Responses client module" / "Chat client module" with ID, revision, and
+digest). The compatibility dashboard's Codex module column shows
+`<module> v<active> (qualified v<frozen>)`, keeping the active runtime
+identity distinct from the frozen qualification evidence.
+
+### 21.4 No-JS, keyboard, and upgrade note
+
+- No-JS: the owner/cohort record choices degrade to plain inputs and the
+  manual policy strings panel is the primary policy editor; the form still
+  creates keys server-side (browser-qualified).
+- Keyboard: all four checkboxes are focusable and toggle with Space.
+- Deploying a NEW compatibility profile (e.g. a promoted
+  `CODEX_COMPATIBILITY_PROFILE_FILE`) requires an application
+  **restart/recreate** so the new DATA binds; there is NO existing-key
+  migration — explicit pins stay explicit, and a pin that no longer
+  matches the installed DATA fails closed at request time. Operators
+  migrate deliberately through the audited CLI workflow. Key templates
+  intentionally keep their frozen 0.147 pin and have no client-use
+  choices (documented gap, not a defect).

@@ -161,6 +161,20 @@
           </ul>
         </dd>
         {% endif %}
+        {% if client_module_pins.responses %}
+        <dt>Responses client module</dt>
+        <dd>
+          <code>{{ client_module_pins.responses.id }} v{{ client_module_pins.responses.version }}</code>
+          <span class="muted small">digest {{ client_module_pins.responses.fixture_sha256[:16] }}&hellip; - the active compatibility snapshot installed on this deployment; new keys pin it, existing keys are unchanged.</span>
+        </dd>
+        {% endif %}
+        {% if client_module_pins.chat %}
+        <dt>Chat client module</dt>
+        <dd>
+          <code>{{ client_module_pins.chat.id }} v{{ client_module_pins.chat.version }}</code>
+          <span class="muted small">digest {{ client_module_pins.chat.fixture_sha256[:16] }}&hellip; - the active reviewed Chat client snapshot installed on this deployment; new keys pin it, existing keys are unchanged.</span>
+        </dd>
+        {% endif %}
       </dl>
     </section>
   </div>

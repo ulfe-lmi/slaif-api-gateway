@@ -382,6 +382,16 @@ audit entries are never reverted; and keys served under the restored
 revision-15 snapshot return to the old engine's singleton law, whose
 incremental-history refusals may reappear for 0.167.1-shaped clients.
 
+**GUI key creation after a profile promotion (229-a):** promoting the
+profile file and restarting is what binds the new active snapshot. From
+that point, NEW keys created through the GUI client-use choices (or the
+CLI policy fields) are pinned to the ACTIVE identity — no operator action
+is needed per new key. There is NO existing-key migration performed by the
+GUI: explicit historical pins stay explicit, and a pin that no longer
+matches the installed DATA fails closed at request time until migrated
+deliberately with the audited `codex migrate-key-profile` workflow above.
+The compatibility dashboard shows the distinction as
+`<module> v<active> (qualified v<frozen>)`.
 
 ## Hermes/OpenCode Chat client profile upgrade and rollback (227-a)
 

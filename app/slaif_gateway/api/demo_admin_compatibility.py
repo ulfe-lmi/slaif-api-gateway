@@ -58,6 +58,8 @@ from slaif_gateway.api.admin_compatibility import (
     _safe_display,
 )
 from slaif_gateway.db.session import get_sessionmaker_from_app
+from slaif_gateway.modules.clients.codex_0162 import CODEX_0162_CLIENT_MODULE_ID
+from slaif_gateway.modules.clients.registry import active_client_module_facts
 from slaif_gateway.modules.codex_profile_data import (
     CodexProfileDataError,
     list_codex_presets,
@@ -179,11 +181,20 @@ async def demo_compatibility_index(request: Request) -> Response:
                 artifacts_note = _DEMO_ARTIFACTS_NOTE
             else:
                 artifacts_note = "Unavailable until the route is ready (see Reasons)."
-            module_text = (
-                f"{result.client_module_id} v{result.client_module_version}"
-                if result.client_module_id
-                else "—"
-            )
+            if result.client_module_id == CODEX_0162_CLIENT_MODULE_ID:
+                active_module = active_client_module_facts(
+                    CODEX_0162_CLIENT_MODULE_ID
+                )
+                module_text = (
+                    f"{active_module.module_id} v{active_module.module_version} "
+                    f"(qualified v{result.client_module_version})"
+                )
+            elif result.client_module_id:
+                module_text = (
+                    f"{result.client_module_id} v{result.client_module_version}"
+                )
+            else:
+                module_text = "—"
             reasons_text = (
                 ", ".join(result.reason_codes)
                 if result.reason_codes

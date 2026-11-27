@@ -45,7 +45,20 @@ from slaif_gateway.db.repositories.usage_profiles import UsageProfilesRepository
 from slaif_gateway.db.session import get_sessionmaker_from_app
 from slaif_gateway.services.admin_record_choices import RecordChoice, load_choices
 from slaif_gateway.modules.clients.codex_0162 import CODEX_0162_CLIENT_MODULE_ID
-from slaif_gateway.modules.clients.registry import client_module_metadata, get_client_module
+from slaif_gateway.modules.clients.hermes_0225_chat import (
+    HERMES_0225_CHAT_CLIENT_MODULE_ID,
+)
+from slaif_gateway.modules.clients.opencode_1193_chat import (
+    OPENCODE_1193_CHAT_CLIENT_MODULE_ID,
+)
+from slaif_gateway.modules.clients.opencode_1193_responses import (
+    OPENCODE_1193_RESPONSES_CLIENT_MODULE_ID,
+)
+from slaif_gateway.modules.clients.registry import (
+    active_client_module_facts,
+    client_module_metadata,
+    get_client_module,
+)
 from slaif_gateway.services.admin_activity_dashboard import (
     AdminActivityDashboardService,
     AdminActivityNotFoundError,
@@ -1246,6 +1259,10 @@ async def create_admin_key(
     confirm_codex_protocol_pilot: str = Form(""),
     qwen_codex: str = Form(""),
     confirm_qwen_codex: str = Form(""),
+    client_use_codex: str = Form(""),
+    client_use_opencode_chat: str = Form(""),
+    client_use_opencode_responses: str = Form(""),
+    client_use_hermes: str = Form(""),
     external_tool_mode: str = Form(STRICT_BOUNDED),
     external_tool_capabilities: list[str] = Form([]),
     external_tool_destination_ids: str = Form(""),
@@ -1297,6 +1314,10 @@ async def create_admin_key(
         "confirm_codex_protocol_pilot": confirm_codex_protocol_pilot,
         "qwen_codex": qwen_codex,
         "confirm_qwen_codex": confirm_qwen_codex,
+        "client_use_codex": client_use_codex,
+        "client_use_opencode_chat": client_use_opencode_chat,
+        "client_use_opencode_responses": client_use_opencode_responses,
+        "client_use_hermes": client_use_hermes,
         "external_tool_mode": external_tool_mode,
         "external_tool_capabilities": "\n".join(external_tool_capabilities),
         "external_tool_destination_ids": external_tool_destination_ids,
@@ -1350,6 +1371,24 @@ async def create_admin_key(
                 allow_all_models=validated_request_policy.allow_all_models,
                 allow_all_endpoints=validated_request_policy.allow_all_endpoints,
             )
+        use_codex = _is_checked(client_use_codex)
+        use_opencode_chat = _is_checked(client_use_opencode_chat)
+        use_opencode_responses = _is_checked(client_use_opencode_responses)
+        use_hermes = _is_checked(client_use_hermes)
+        _validate_admin_client_use_selection(
+            client_use_selected=use_codex
+            or use_opencode_chat
+            or use_opencode_responses
+            or use_hermes,
+            use_codex=use_codex,
+            use_opencode_chat=use_opencode_chat,
+            use_opencode_responses=use_opencode_responses,
+            use_hermes=use_hermes,
+            advanced_codex_selected=_is_checked(codex_protocol_pilot)
+            or _is_checked(qwen_codex),
+            document_mode=policy_source_mode == "configuration",
+            trusted_calibration_selected=_is_checked(trusted_calibration),
+        )
         if _is_checked(codex_protocol_pilot) and _is_checked(qwen_codex):
             raise ValueError("Select only one Codex key mode.")
         if _is_checked(codex_protocol_pilot):
@@ -1378,6 +1417,33 @@ async def create_admin_key(
             parsed_input = replace(
                 parsed_input,
                 responses_policy=await _validated_admin_qwen_codex_policy(request, parsed_input),
+            )
+        if use_codex:
+            # The explicit client-use checkbox is the confirmation: it is the
+            # operator's deliberate choice, and the same validated Qwen
+            # policy/readiness path applies.
+            parsed_input = replace(
+                parsed_input,
+                responses_policy=await _validated_admin_qwen_codex_policy(request, parsed_input),
+            )
+        if use_hermes:
+            parsed_input = _apply_admin_chat_client_preset(
+                parsed_input,
+                module_id=HERMES_0225_CHAT_CLIENT_MODULE_ID,
+                client_label="Hermes",
+            )
+        elif use_opencode_chat:
+            parsed_input = _apply_admin_chat_client_preset(
+                parsed_input,
+                module_id=OPENCODE_1193_CHAT_CLIENT_MODULE_ID,
+                client_label="OpenCode Chat",
+            )
+        if use_opencode_responses:
+            parsed_input = replace(
+                parsed_input,
+                responses_policy=await _validated_admin_opencode_responses_policy(
+                    request, parsed_input
+                ),
             )
         parsed_email_delivery_mode = _parse_admin_email_delivery_mode(email_delivery_mode)
         _validate_admin_email_delivery_preconditions(settings, parsed_email_delivery_mode)
@@ -1633,6 +1699,9 @@ async def create_admin_key(
             },
             "key_purpose": created.key_purpose,
             "capability_policy_mode": created.capability_policy_mode,
+            "client_module_pins": _safe_client_module_pins(
+                parsed_input.responses_policy, parsed_input.chat_client_module
+            ),
             "email_delivery_mode": parsed_email_delivery_mode,
             "delivery": delivery_result,
             "celery_task_id": celery_task_id,
@@ -10596,6 +10665,10 @@ def _default_key_create_form() -> dict[str, str]:
         "confirm_codex_protocol_pilot": "",
         "qwen_codex": "",
         "confirm_qwen_codex": "",
+        "client_use_codex": "",
+        "client_use_opencode_chat": "",
+        "client_use_opencode_responses": "",
+        "client_use_hermes": "",
         "external_tool_mode": STRICT_BOUNDED,
         "external_tool_capabilities": "",
         "external_tool_destination_ids": "",
@@ -12804,11 +12877,211 @@ async def _validate_admin_codex_protocol_pilot_readiness(
         ).ready_responses_profile(provider=provider)
 
 
+OPENCODE_RESPONSES_PRESET_GATES = (
+    "codex_request_envelope",
+    "codex_client_tools",
+    "codex_streaming_tool_events",
+    "codex_encrypted_reasoning_replay",
+)
+
+
+def _validate_admin_client_use_selection(
+    *,
+    client_use_selected: bool,
+    use_codex: bool,
+    use_opencode_chat: bool,
+    use_opencode_responses: bool,
+    use_hermes: bool,
+    advanced_codex_selected: bool,
+    document_mode: bool,
+    trusted_calibration_selected: bool,
+) -> None:
+    """Fail closed on client-use selections that would define a key twice.
+
+    A key carries at most one Chat client binding and one Responses client
+    binding. The rules name the conflicting selections and the remedy so the
+    operator can correct the form; they never widen a grant.
+    """
+    if client_use_selected and document_mode:
+        raise ValueError(
+            "Client use: the client-use choices are guided-mode only. In "
+            "document mode the configuration document defines the key's "
+            "client policy; switch the policy source back to guided fields "
+            "or define the client policy in the document."
+        )
+    if client_use_selected and trusted_calibration_selected:
+        raise ValueError(
+            "Client use: client-use presets create ordinary standard keys. "
+            "Trusted calibration keys use discovery policy instead; use one "
+            "or the other."
+        )
+    if use_opencode_chat and use_hermes:
+        raise ValueError(
+            "Client use: OpenCode Chat and Hermes both need this key's "
+            "single Chat client binding. Create one key per client, or keep "
+            "only one of the two choices."
+        )
+    if use_codex and use_opencode_responses:
+        raise ValueError(
+            "Client use: Codex and OpenCode Responses both need this key's "
+            "single Responses client binding. Create one key per client, or "
+            "use a different wire."
+        )
+    if advanced_codex_selected and client_use_selected:
+        raise ValueError(
+            "Client use: the advanced Codex sections and the client-use "
+            "choices both define the same Codex/Responses client policy. "
+            "Use one of them, not both."
+        )
+
+
+def _admin_key_uses_endpoint(key_input: CreateGatewayKeyInput, endpoint: str) -> bool:
+    return bool(key_input.allow_all_endpoints) or endpoint in key_input.allowed_endpoints
+
+
+def _apply_admin_chat_client_preset(
+    key_input: CreateGatewayKeyInput,
+    *,
+    module_id: str,
+    client_label: str,
+) -> CreateGatewayKeyInput:
+    """Pin the key's single Chat binding to the ACTIVE registered module.
+
+    The pin is built from the module snapshot installed for this process
+    (active DATA revision and canonical digest), so a deployment that
+    promoted a newer Chat client profile pins new keys to that snapshot;
+    existing stored pins are never touched.
+    """
+    if not _admin_key_uses_endpoint(key_input, "/v1/chat/completions"):
+        raise ValueError(
+            "Endpoints: add /v1/chat/completions to the allowed endpoints - "
+            f"{client_label} keys cannot work without the Chat endpoint."
+        )
+    active = active_client_module_facts(module_id)
+    return replace(key_input, chat_client_module=active.pin)
+
+
+def _route_supports_opencode_responses_gates(route: object) -> bool:
+    capabilities = getattr(route, "capabilities", None)
+    if not isinstance(capabilities, Mapping):
+        return False
+    responses = capabilities.get("responses")
+    if not isinstance(responses, Mapping):
+        return False
+    return all(responses.get(gate) is True for gate in OPENCODE_RESPONSES_PRESET_GATES)
+
+
+async def _validated_admin_opencode_responses_policy(
+    request: Request,
+    key_input: CreateGatewayKeyInput,
+) -> dict[str, object]:
+    """Grant the OpenCode Responses wire under the ACTIVE registered module.
+
+    The preset pins the key to the active OpenCode Responses client module
+    snapshot and requires an enabled exact /v1/responses route carrying the
+    four OpenCode Responses gates for every selected model/provider pair.
+    Missing setup is reported as an operator-side route problem, never
+    widened into a permissive grant.
+    """
+    models = set(key_input.allowed_models)
+    providers = set(key_input.allowed_providers or ())
+    if key_input.allow_all_models or not models:
+        raise ValueError(
+            "Models: OpenCode Responses keys need explicit models (no "
+            "allow-all) so every model/provider pair can be checked against "
+            "a qualifying route."
+        )
+    if not providers:
+        raise ValueError(
+            "Providers: choose the explicit providers that serve the "
+            "selected models; do not use allow-all for this preset."
+        )
+    if not _admin_key_uses_endpoint(key_input, "/v1/responses"):
+        raise ValueError(
+            "Endpoints: add /v1/responses to the allowed endpoints for this "
+            "OpenCode Responses key."
+        )
+    active = active_client_module_facts(OPENCODE_1193_RESPONSES_CLIENT_MODULE_ID)
+    async_session_factory = get_sessionmaker_from_app(request)
+    async with async_session_factory() as session:
+        routes = await ModelRoutesRepository(session).list_model_routes(limit=1000, offset=0)
+    missing = []
+    for model in sorted(models):
+        for provider in sorted(providers):
+            qualifying = [
+                route
+                for route in routes
+                if str(getattr(route, "requested_model", "") or "") == model
+                and str(getattr(route, "provider", "") or "") == provider
+                and str(getattr(route, "endpoint", "") or "") == "/v1/responses"
+                and str(getattr(route, "match_type", "") or "") == "exact"
+                and bool(getattr(route, "enabled", False))
+                and _route_supports_opencode_responses_gates(route)
+            ]
+            if not qualifying:
+                missing.append(f"{model} on {provider}")
+    if missing:
+        raise ValueError(
+            "Routes: no enabled exact /v1/responses route with the four "
+            "OpenCode Responses gates for " + ", ".join(missing)
+            + ". Qualify those routes first (route, gates, pricing); the key "
+            "was not created."
+        )
+    return {
+        "version": 1,
+        "allowed_capabilities": list(OPENCODE_RESPONSES_PRESET_GATES),
+        "allowed_local_tool_types": ["function", "custom"],
+        "client_module": active.pin,
+    }
+
+
+def _safe_client_module_pins(
+    responses_policy: object,
+    chat_client_module: object,
+) -> dict[str, dict[str, str]]:
+    """Reviewed client-module pins only, for the one-time result page.
+
+    Pins are displayed only when the creation path already validated them
+    against the registered modules (fail-closed); nothing here re-validates
+    or rewrites stored policy.
+    """
+    pins: dict[str, dict[str, str]] = {}
+
+    def _as_pin(raw: object) -> dict[str, str] | None:
+        if (
+            isinstance(raw, Mapping)
+            and set(raw) == {"id", "version", "fixture_sha256"}
+            and all(
+                isinstance(raw[field], str) and raw[field]
+                for field in ("id", "version", "fixture_sha256")
+            )
+        ):
+            return {field: str(raw[field]) for field in ("id", "version", "fixture_sha256")}
+        return None
+
+    if isinstance(responses_policy, Mapping):
+        responses_pin = _as_pin(responses_policy.get("client_module"))
+        if responses_pin is not None:
+            pins["responses"] = responses_pin
+    chat_pin = _as_pin(chat_client_module)
+    if chat_pin is not None:
+        pins["chat"] = chat_pin
+    return pins
+
+
 async def _validated_admin_qwen_codex_policy(
     request: Request,
     key_input: CreateGatewayKeyInput,
 ) -> dict[str, object]:
-    """Grant only selected, currently ready Qwen routes under the loaded 0.162 module."""
+    """Grant only selected, currently ready Qwen routes under the stable Codex module.
+
+    The selected qualification profiles are frozen evidence: their recorded
+    client-module revision (the DATA snapshot the route was qualified
+    against) is evidence, not a runtime equality gate.  The runtime check
+    is the stable executable module ID; the new key pin is built from the
+    ACTIVE DATA snapshot installed for this process, so a deployment that
+    promoted a newer compatibility preset pins new keys to that preset.
+    """
     models = set(key_input.allowed_models)
     providers = set(key_input.allowed_providers or ())
     if (
@@ -12825,14 +13098,18 @@ async def _validated_admin_qwen_codex_policy(
             "/v1/models and /v1/responses; do not use allow-all settings."
         )
 
-    module = get_client_module(CODEX_0162_CLIENT_MODULE_ID)
+    active = active_client_module_facts(CODEX_0162_CLIENT_MODULE_ID)
     selected_profiles = [_QWEN_CODEX_PROFILES_BY_MODEL[model] for model in sorted(models)]
-    if any(
-        profile.client_module_id != module.module_id
-        or profile.client_module_version != module.module_version
-        for profile in selected_profiles
-    ):
-        raise ValueError("The active Codex 0.162 module does not match the selected Qwen profile.")
+    for profile in selected_profiles:
+        if (
+            profile.client_module_id is None
+            or profile.client_module_id != active.module_id
+        ):
+            raise ValueError(
+                "Client use: the selected Qwen profile was not qualified for the "
+                "installed Codex module. Select different models, or restore the "
+                "Codex module the routes were qualified against."
+            )
 
     async_session_factory = get_sessionmaker_from_app(request)
     async with async_session_factory() as session:
@@ -12893,7 +13170,7 @@ async def _validated_admin_qwen_codex_policy(
             if gate in gates
         ],
         "allowed_local_tool_types": ["function", "custom"],
-        "client_module": client_module_metadata(module),
+        "client_module": active.pin,
     }
 
 
@@ -13051,18 +13328,16 @@ def _safe_codex_responses_policy_summary(
     ):
         return None
     if tuple(allowed_capabilities) != expected_capabilities:
-        qwen_gates = (
-            "codex_request_envelope",
-            "codex_client_tools",
-            "codex_streaming_tool_events",
-            "codex_encrypted_reasoning_replay",
-        )
+        qwen_gates = OPENCODE_RESPONSES_PRESET_GATES
+        acceptable_pins = [
+            client_module_metadata(get_client_module(CODEX_0162_CLIENT_MODULE_ID)),
+            active_client_module_facts(OPENCODE_1193_RESPONSES_CLIENT_MODULE_ID).pin,
+        ]
         if (
             policy.get("version") != 1
             or tuple(allowed_capabilities)
             not in {qwen_gates, (*qwen_gates, "image_input")}
-            or policy.get("client_module")
-            != client_module_metadata(get_client_module(CODEX_0162_CLIENT_MODULE_ID))
+            or policy.get("client_module") not in acceptable_pins
         ):
             return None
         expected_capabilities = tuple(allowed_capabilities)

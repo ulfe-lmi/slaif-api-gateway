@@ -1939,6 +1939,33 @@ td.col-subject {
   line-height: 1.35;
 }
 
+.field-help-details {
+  margin: 0.35rem 0 0.9rem;
+}
+
+.field-help-details summary {
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 0.82rem;
+  font-weight: 600;
+}
+
+.field-help-details[open] summary {
+  margin-bottom: 0.35rem;
+}
+
+.advanced-codex-modes {
+  margin: 0 0 1rem;
+  border: 1px dashed var(--border);
+  border-radius: 0.5rem;
+  padding: 0.5rem 0.9rem;
+}
+
+.advanced-codex-modes > summary {
+  cursor: pointer;
+  font-weight: 700;
+}
+
 .config-json {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 0.8rem;

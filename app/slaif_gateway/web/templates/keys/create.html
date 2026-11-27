@@ -64,6 +64,45 @@
       </div>
     </section>
 
+    <section class="action-panel" aria-labelledby="create-client-use-heading">
+      <h2 id="create-client-use-heading">Who will use this key?</h2>
+      <p class="muted">Check the clients that will call the gateway with this key. Leave everything unchecked for an ordinary API key used by plain OpenAI-compatible code.</p>
+      <div class="form-grid">
+        <label class="checkbox-row">
+          <input type="checkbox" name="client_use_codex" value="true" {% if form.client_use_codex %}checked{% endif %} data-client-use-codex aria-describedby="create-client-use-help">
+          This key is for Codex
+        </label>
+        <label class="checkbox-row">
+          <input type="checkbox" name="client_use_opencode_chat" value="true" {% if form.client_use_opencode_chat %}checked{% endif %} data-client-use-opencode-chat aria-describedby="create-client-use-help">
+          This key is for OpenCode (Chat)
+        </label>
+        <label class="checkbox-row">
+          <input type="checkbox" name="client_use_opencode_responses" value="true" {% if form.client_use_opencode_responses %}checked{% endif %} data-client-use-opencode-responses aria-describedby="create-client-use-help">
+          This key is for OpenCode (Responses)
+        </label>
+        <label class="checkbox-row">
+          <input type="checkbox" name="client_use_hermes" value="true" {% if form.client_use_hermes %}checked{% endif %} data-client-use-hermes aria-describedby="create-client-use-help">
+          This key is for Hermes (Chat)
+        </label>
+      </div>
+      <p class="muted small" id="create-client-use-help">
+        One key can carry one Chat client (OpenCode Chat or Hermes) and one Responses client (Codex or OpenCode Responses) together; conflicting pairs are refused with an explanation.
+        The gateway applies the matching reviewed client profile and rechecks the routes before the key is created.
+      </p>
+      <details class="field-help-details">
+        <summary>What is this for?</summary>
+        <p class="muted small">In plain terms, each choice opens one client wire on this key:</p>
+        <ul class="muted small">
+          <li><strong>Codex</strong>: the Codex agent client for the Qwen models. You still choose the explicit Qwen models and their providers above; the endpoints <code>/v1/models</code> and <code>/v1/responses</code> are preselected for you.</li>
+          <li><strong>OpenCode (Chat)</strong>: OpenCode talking over Chat Completions. The <code>/v1/chat/completions</code> endpoint is preselected for you.</li>
+          <li><strong>OpenCode (Responses)</strong>: OpenCode's tool loop over the Responses endpoint. It needs explicit models/providers and routes that already carry the OpenCode Responses gates; the <code>/v1/responses</code> endpoint is preselected for you.</li>
+          <li><strong>Hermes (Chat)</strong>: Hermes over Chat Completions only. Hermes is never a Responses client, so this choice never implies Responses access.</li>
+        </ul>
+        <p class="muted small">Choosing a client installs nothing and touches no provider. It does not widen any allow list: if the routes cannot serve a choice, the create is refused and the page says exactly which model/provider route is missing and where to fix it.</p>
+      </details>
+      <p class="muted small" data-client-use-summary hidden></p>
+    </section>
+
     <section class="action-panel" aria-labelledby="create-validity-heading">
       <h2 id="create-validity-heading">Validity</h2>
       <p class="muted">Times are UTC. Use the date/time picker for Valid until or enter a positive Valid days value, not both. Blank Valid from starts now.</p>
@@ -108,6 +147,10 @@
       <p class="field-help" id="create-limits-help">
         Blank means UNLIMITED for that lifetime quota (stored null, never zero). In a configuration document the same null/omission law applies.
       </p>
+      <details class="field-help-details">
+        <summary>What is this for?</summary>
+        <p class="muted small">These are the key's lifetime budget: the most this key may spend, use, and call across its whole validity. Leaving one blank means no ceiling for that measure over the key's lifetime. They are separate from the per-minute speed limits lower on this page: a key can exhaust its lifetime budget even while every single request is allowed. Example: a 500 EUR cost limit with no token limit means "stop when the bill reaches 500 EUR", whatever the token count is.</p>
+      </details>
       </div>
     </section>
 
@@ -128,6 +171,10 @@
         In document mode, guided policy controls must be left at defaults: uncheck allow-all providers/models/endpoints,
         deny-all, live-burn and external-tool fences, and leave their numbers blank.
       </p>
+      <details class="field-help-details">
+        <summary>What is this for?</summary>
+        <p class="muted small">This is an expert alternative to the guided fields, not a second required box. In document mode the JSON document replaces the guided POLICY controls (limits, request policy, Codex, external tools, rate limits); identity fields such as owner, validity, and delivery stay guided. If you are not maintaining a versioned configuration document handed to you, keep Guided.</p>
+      </details>
       <div data-create-configuration-document-group>
         <label>
           Advanced configuration document
@@ -141,11 +188,18 @@
       <h2 id="create-policy-heading">Request Policy</h2>
       <p class="muted small" data-guided-compact-note hidden>Inactive in document mode: the configuration document defines this key's request policy. The guided selector is submitted at its defaults.</p>
       {% set selector_id_prefix = "create-policy" %}
+      <details class="field-help-details">
+        <summary>What is this for?</summary>
+        <p class="muted small">Three independent lists decide what this key may touch: which providers it may go through, which endpoint paths it may call, and which models it may request. Choosing nothing without an allow-all is denied, never treated as unrestricted. Example: one provider + <code>/v1/chat/completions</code> + one model means this key can only chat with that model through that provider.</p>
+      </details>
       <div data-guided-policy-body>
       {% include "keys/_policy_selector.html" %}
       </div>
     </section>
 
+    <details class="advanced-codex-modes" aria-labelledby="create-advanced-codex-heading">
+      <summary id="create-advanced-codex-heading">Advanced: historical Codex key modes (protocol pilot, Qwen 0.162 authoring)</summary>
+      <p class="muted">For normal Codex keys use "This key is for Codex" under Who will use this key? above. These checkboxes keep the earlier authoring flows; they cannot be combined with the client-use choices. They are historical because a newer compatibility DATA revision is installed, not because they are broken.</p>
     <section class="action-panel" aria-labelledby="create-codex-pilot-heading" data-guided-policy-section>
       <h2 id="create-codex-pilot-heading">Codex Protocol Pilot</h2>
       <p class="muted small" data-guided-compact-note hidden>Inactive in document mode: the configuration document defines this key's Codex policy. The guided checkboxes are submitted unchecked.</p>
@@ -180,6 +234,7 @@
       <p class="muted small" id="create-qwen-codex-help">Do not select the older Codex Protocol Pilot above. Ordinary key validity and quota settings still apply. The server checks route qualification again before issuing the key.</p>
       </div>
     </section>
+    </details>
 
     <section class="action-panel" aria-labelledby="create-external-tools-heading" data-guided-policy-section>
       <h2 id="create-external-tools-heading">External-tool Policy</h2>
@@ -227,6 +282,10 @@
       </label>
       <p class="warning-text">For the implemented web-search contract, concurrent requests are fenced, later exhausted requests are blocked, and missing or ambiguous final cost is held. Fenced mode requires positive finite request, token, and EUR limits, an acknowledgement, this second confirmation, and the audit reason below.</p>
       <p class="muted small" id="create-ext-tool-help">Installation ceilings: {{ external_tool_ceilings.max_distinct_capabilities | num }} capabilities, {{ external_tool_ceilings.max_approved_destinations | num }} destinations, and {{ external_tool_ceilings.max_provider_tool_calls_per_request | num }} provider calls per request. No wildcard, URL, credential, inline authorization, or allow-all option exists. Strict bounded is the default; fenced mode additionally needs the two confirmations above.</p>
+      <details class="field-help-details">
+        <summary>What is this for?</summary>
+        <p class="muted small">Provider-run tools (for example the reviewed web search) can run and cost money at the provider before the gateway can stop the request. Strict bounded, the default, denies every hosted tool; fenced mode allows only the exact reviewed web-search contract and fences it so concurrent requests cannot overrun the budget silently. If your users never need provider-run tools, leave the default.</p>
+      </details>
       </div>
     </section>
 
@@ -258,6 +317,10 @@
         Blank inherits the deployment default; zero is not accepted. Enforced only while
         {% if redis_rate_limits_enabled %}Redis rate limiting is enabled.{% else %}Redis rate limiting is currently DISABLED, so stored values do not enforce until ENABLE_REDIS_RATE_LIMITS is true.{% endif %}
       </p>
+      <details class="field-help-details">
+        <summary>What is this for?</summary>
+        <p class="muted small">These are speed limits, not budgets: how many requests or tokens may start per minute. They do not reduce the lifetime quotas above. "Reject immediately" answers a rate-limit error when the key is too fast; "Wait for capacity" parks the request briefly and still errors if the queue is full or the wait expires. Use waiting for interactive clients that tolerate a pause; leave reject for batch jobs.</p>
+      </details>
       <fieldset data-lazy-throttling-surface>
         <legend>When a rate limit is reached</legend>
         <p class="muted">Optional lazy (waiting) throttling for this key. Waiting precedes provider execution; queue full or deadline returns 429, and disconnected requests are canceled. Hard quota, security, and hosted-tool fence refusals remain immediate, and streaming starts only after admission.</p>
@@ -312,6 +375,10 @@
         {% for line in chat_live_burn_surface.help_text %}{{ line }} {% endfor %}
         Margins are ignored while monitoring is off.
       </p>
+      <details class="field-help-details">
+        <summary>What is this for?</summary>
+        <p class="muted small">While a Chat stream is in flight, the gateway can stop the stream early when the projected spend is about to cross the key's limits, using these safety margins. Final provider usage and cost stay authoritative; the margins only decide how early the gateway pulls the plug. Leave it disabled unless you expect long streamed responses that could otherwise exceed limits.</p>
+      </details>
       </div>
     </section>
 
@@ -339,6 +406,10 @@
         I understand this is for trusted calibration discovery only
       </label>
       <p class="muted small" id="create-calibration-help">Both boxes are required together when creating a calibration key. The service enforces short validity, a configured request-limit maximum, and standard provider-secret isolation. Trusted calibration keys are real gateway keys, not templates or participant keys, and must not be issued to participants.</p>
+      <details class="field-help-details">
+        <summary>Why would I change this?</summary>
+        <p class="muted small">Calibration keys intentionally discover broad access so real usage can be observed; they are the wrong choice for ordinary users because they may reach more providers and models than a normal key while only allowing a small number of calls. Use them only as a trusted admin to gather calibration data, then derive strict participant policies from the observed usage.</p>
+      </details>
     </section>
 
     <section class="action-panel" aria-labelledby="create-submit-heading">
@@ -413,6 +484,77 @@
   };
   source.addEventListener("change", syncPolicySource);
   syncPolicySource();
+})();
+(() => {
+  // Client-use presets: preselect the unambiguous endpoints each checked
+  // client needs and show the resulting access. The server rechecks every
+  // grant before creating the key; this convenience never widens a grant.
+  const boxes = Array.from(
+    document.querySelectorAll('input[name^="client_use_"]')
+  );
+  if (!boxes.length) return;
+  const manual = document.querySelector('[data-policy-manual="endpoints"]');
+  const available = document.querySelector('[data-policy-available="endpoints"]');
+  const selected = document.querySelector('[data-policy-selected="endpoints"]');
+  const allowAll = document.querySelector('input[name="allow_all_endpoints"]');
+  const summary = document.querySelector('[data-client-use-summary]');
+  const presetEndpoints = {
+    client_use_codex: ["/v1/models", "/v1/responses"],
+    client_use_opencode_chat: ["/v1/chat/completions"],
+    client_use_opencode_responses: ["/v1/responses"],
+    client_use_hermes: ["/v1/chat/completions"],
+  };
+  const parseList = (value) =>
+    (value || "")
+      .split("\n")
+      .map((item) => item.trim())
+      .filter(Boolean);
+  const ensureEndpoint = (endpoint) => {
+    if (manual) {
+      const lines = parseList(manual.value);
+      if (!lines.includes(endpoint)) {
+        lines.push(endpoint);
+        manual.value = lines.join("\n");
+      }
+    }
+    if (available && selected) {
+      const option = Array.from(available.options).find(
+        (candidate) => candidate.value === endpoint
+      );
+      if (option) {
+        available.removeChild(option);
+        selected.appendChild(option);
+      }
+    }
+  };
+  const sync = () => {
+    const required = new Set();
+    for (const box of boxes) {
+      if (!box.checked) continue;
+      for (const endpoint of presetEndpoints[box.name] || []) {
+        required.add(endpoint);
+        ensureEndpoint(endpoint);
+      }
+    }
+    if (allowAll && required.size && allowAll.checked) {
+      allowAll.checked = false;
+      allowAll.dispatchEvent(new Event("change", { bubbles: true }));
+    }
+    if (summary) {
+      if (!required.size) {
+        summary.hidden = true;
+        summary.textContent = "";
+      } else {
+        summary.hidden = false;
+        summary.textContent =
+          "Checked clients preselected these endpoints: " +
+          Array.from(required).sort().join(", ") +
+          ". You can still adjust the lists; the server rechecks every grant before the key is created.";
+      }
+    }
+  };
+  for (const box of boxes) box.addEventListener("change", sync);
+  sync();
 })();
 </script>
 {% endblock %}
