@@ -68,7 +68,7 @@
             nojs_value=form.owner_id,
             clear_label="Select owner",
             placeholder="Search owners",
-            help="Existing owners only: search by name or email and select one. This form never creates a new owner.",
+            help="Choose the person or account responsible for this key. A key must belong to an existing owner; this form never creates one. Search by name or email; add a missing person on the Owners page first.",
             help_id="create-owner-help",
             control_id="create-field-owner_id",
         ) }}
@@ -81,7 +81,7 @@
             nojs_value=form.cohort_id,
             clear_label="No cohort",
             placeholder="Search cohorts",
-            help="Optional existing cohort used for grouping; choose No cohort to leave the key ungrouped. This form never creates a new cohort.",
+            help="Optional group for organizing keys and reports. Leave empty for an individual key; choose a workshop or team group when you want its keys listed together. This form never creates a new cohort.",
             help_id="create-cohort-help",
             control_id="create-field-cohort_id",
         ) }}
@@ -139,22 +139,21 @@
         </select>
       </label>
       <p class="field-help" id="create-policy-source-help">
-        Document mode applies the SAME strict version-1 schema as the CLI: unknown or duplicate fields are rejected,
-        omitted fields take service defaults, <code>null</code> <code>allowed_providers</code> is unrestricted,
-        <code>[]</code> denies all providers, null quotas are unlimited, and null rate members inherit the deployment.
-        In document mode, guided policy controls must be left at defaults: uncheck allow-all providers/models/endpoints,
-        deny-all, live-burn and external-tool fences, and leave their numbers blank.
+        An expert alternative supplied as a complete policy document. Leave Guided selected unless you have a
+        reviewed document to use. It replaces the guided access, budget, and speed settings; owner, validity,
+        and delivery are still chosen on the form. Unknown fields and stale profile pins are refused.
+        Never paste API keys or provider passwords into it.
       </p>
       <details class="field-help-details">
-        <summary>What is this for?</summary>
-        <p class="muted small">This is an expert alternative to the guided fields, not a second required box. In document mode the JSON document replaces the guided POLICY controls (limits, request policy, Codex, external tools, rate limits); identity fields such as owner, validity, and delivery stay guided. If you are not maintaining a versioned configuration document handed to you, keep Guided.</p>
+        <summary>Technical details</summary>
+        <p class="muted small">Document mode applies the same strict version-1 schema as the CLI: unknown or duplicate fields are rejected, omitted fields take service defaults, <code>null</code> <code>allowed_providers</code> is unrestricted, <code>[]</code> denies all providers, null quotas are unlimited, and null rate members inherit the deployment. In document mode the guided policy controls must be left at defaults: uncheck allow-all providers/models/endpoints, deny-all, live-burn and external-tool fences, and leave their numbers blank. Identity fields such as owner, validity, and delivery stay guided.</p>
       </details>
       <div data-create-configuration-document-group>
         <label>
           Advanced configuration document
-          <textarea name="configuration_json" rows="8" class="config-json" spellcheck="false" autocomplete="off" data-create-configuration-document aria-describedby="create-policy-source-help" {{ field_error_attrs("configuration_json") }}>{% if form.configuration_json %}{{ form.configuration_json }}{% endif %}</textarea>
+          <textarea name="configuration_json" rows="8" class="config-json" spellcheck="false" autocomplete="off" data-create-configuration-document aria-describedby="create-help-configuration_json" {{ field_error_attrs("configuration_json") }}>{% if form.configuration_json %}{{ form.configuration_json }}{% endif %}</textarea>
         </label>
-        <p class="muted small">Required only when policy source is "Advanced configuration document". The document defines policy only; it never carries identity, secrets, owner/cohort, validity, or server settings.</p>
+        <p class="field-help" id="create-help-configuration_json">Required only when the policy source is the advanced configuration document. Paste the complete version-1 document here; it defines policy only and never carries identity, secrets, owner/cohort, validity, or server settings. Never paste API keys or provider passwords into it.</p>
       </div>
     </section>
 
@@ -177,17 +176,20 @@
       <div class="form-grid">
         <label>
           Valid from (UTC)
-          <input type="datetime-local" name="valid_from" value="{{ form.valid_from|utc_datetime_local }}" step="60" autocomplete="off" aria-describedby="create-validity-help" {{ field_error_attrs("valid_from") }}>
+          <input type="datetime-local" name="valid_from" value="{{ form.valid_from|utc_datetime_local }}" step="60" autocomplete="off" aria-describedby="create-help-valid_from create-validity-help" {{ field_error_attrs("valid_from") }}>
         </label>
         <label>
           Valid until (UTC)
-          <input type="datetime-local" name="valid_until" value="{{ form.valid_until|utc_datetime_local }}" step="60" autocomplete="off" aria-describedby="create-validity-help" {{ field_error_attrs("valid_until") }}>
+          <input type="datetime-local" name="valid_until" value="{{ form.valid_until|utc_datetime_local }}" step="60" autocomplete="off" aria-describedby="create-help-valid_until create-validity-help" {{ field_error_attrs("valid_until") }}>
         </label>
         <label>
           Valid days
-          <input name="valid_days" value="{{ form.valid_days }}" inputmode="numeric" autocomplete="off" placeholder="30" aria-describedby="create-validity-help" {{ field_error_attrs("valid_days") }}>
+          <input name="valid_days" value="{{ form.valid_days }}" inputmode="numeric" autocomplete="off" placeholder="30" aria-describedby="create-help-valid_days create-validity-help" {{ field_error_attrs("valid_days") }}>
         </label>
       </div>
+      <p class="field-help" id="create-help-valid_from">When the key starts working, in UTC. Leave blank to start now; set a future time for scheduled access.</p>
+      <p class="field-help" id="create-help-valid_until">When access ends, in UTC. Use either an end date or a number of days, not both. For example, seven days is suitable for a week-long trial.</p>
+      <p class="field-help" id="create-help-valid_days">When access ends, counted from the start time. Use either an end date or a number of days, not both. For example, seven days is suitable for a week-long trial.</p>
       <p class="field-help" id="create-validity-help">
         Key validity is an identity fact, stored on the key row: it is not part of the advanced configuration document and cannot be changed by one.
       </p>
@@ -197,34 +199,40 @@
       <h2 id="create-limits-heading">Hard Quota Limits</h2>
       <p class="muted small" data-guided-compact-note hidden>Inactive in document mode: the configuration document defines these limits. The guided inputs are submitted at their blank (unlimited) defaults.</p>
       <div data-guided-policy-body>
-      <p class="muted">These are PostgreSQL-backed lifetime limits. Leave fields blank for no limit.</p>
+      <p class="muted">These are the key's lifetime ceilings: the most it may spend, use, and call across its whole validity. Leave a field blank for no ceiling on that measure.</p>
       <div class="form-grid">
-        <label>
-          Cost limit EUR
-          <input name="cost_limit_eur" value="{{ form.cost_limit_eur }}" inputmode="decimal" autocomplete="off" aria-describedby="create-limits-help" {{ field_error_attrs("cost_limit_eur") }}>
-        </label>
-        <label>
-          Token limit
-          <input name="token_limit_total" value="{{ form.token_limit_total }}" inputmode="numeric" autocomplete="off" aria-describedby="create-limits-help" {{ field_error_attrs("token_limit_total") }}>
-        </label>
-        <label>
-          Request limit
-          <input name="request_limit_total" value="{{ form.request_limit_total }}" inputmode="numeric" autocomplete="off" aria-describedby="create-limits-help" {{ field_error_attrs("request_limit_total") }}>
-        </label>
+        <div class="field">
+          <label>
+            Cost limit EUR
+            <input name="cost_limit_eur" value="{{ form.cost_limit_eur }}" inputmode="decimal" autocomplete="off" aria-describedby="create-help-cost_limit_eur" {{ field_error_attrs("cost_limit_eur") }}>
+          </label>
+          <p class="field-help" id="create-help-cost_limit_eur">Maximum spending recorded for this key over its lifetime, in EUR. Leave blank for no total spending limit. Use a finite amount for a trial or workshop; a request already running can still exceed the remaining amount. This is not an exact provider-invoice cap.</p>
+        </div>
+        <div class="field">
+          <label>
+            Token limit
+            <input name="token_limit_total" value="{{ form.token_limit_total }}" inputmode="numeric" autocomplete="off" aria-describedby="create-help-token_limit_total" {{ field_error_attrs("token_limit_total") }}>
+          </label>
+          <p class="field-help" id="create-help-token_limit_total">Maximum total text-processing usage over the key's lifetime, including inputs and outputs. Leave blank for no total token limit. Enter a whole token count; for example 1000000 is one million tokens.</p>
+        </div>
+        <div class="field">
+          <label>
+            Request limit
+            <input name="request_limit_total" value="{{ form.request_limit_total }}" inputmode="numeric" autocomplete="off" aria-describedby="create-help-request_limit_total" {{ field_error_attrs("request_limit_total") }}>
+          </label>
+          <p class="field-help" id="create-help-request_limit_total">Maximum number of requests counted against the key's lifetime quota. Leave blank for no total request limit. For example, 100 allows a small trial. Whether a failed attempt counts depends on where it fails.</p>
+        </div>
       </div>
-      <p class="field-help" id="create-limits-help">
-        Blank means UNLIMITED for that lifetime quota (stored null, never zero). In a configuration document the same null/omission law applies.
-      </p>
       <details class="field-help-details">
-        <summary>What is this for?</summary>
-        <p class="muted small">These are the key's lifetime budget: the most this key may spend, use, and call across its whole validity. Leaving one blank means no ceiling for that measure over the key's lifetime. They are separate from the per-minute speed controls further down this page: a key can exhaust its lifetime budget even while every single request is admitted. Example: with a 500 EUR cost limit, the gateway stops admitting NEW requests once the used cost approaches 500 EUR; a request that already started may finish, so the final provider bill can slightly exceed the limit.</p>
+        <summary>Technical details</summary>
+        <p class="muted small">These limits are backed by the gateway's hard quota accounting (PostgreSQL), and they are separate from the speed controls further down this page: a key can exhaust its lifetime budget even while every single request is admitted. Blank means UNLIMITED for that lifetime quota (stored null, never zero); in a configuration document the same null/omission law applies. Example: with a 500 EUR cost limit, the gateway stops admitting NEW requests once the used cost approaches 500 EUR; a request that already started may finish, so the final provider bill can slightly exceed the limit.</p>
       </details>
       </div>
     </section>
 
     <details class="advanced-codex-modes" aria-labelledby="create-advanced-codex-heading">
       <summary id="create-advanced-codex-heading">Advanced: historical Codex key modes (protocol pilot, Qwen 0.162 authoring)</summary>
-      <p class="muted">For normal Codex keys use "This key is for Codex" under Who will use this key? above. These checkboxes keep the earlier authoring flows; they cannot be combined with the client-use choices. They are historical because a newer compatibility DATA revision is installed, not because they are broken.</p>
+      <p class="muted">Use the main "This key is for Codex" choice for a new ordinary Codex key. These checkboxes exist only for reproducing the explicitly named historical setups; they cannot be combined with the client-use choices above. The old engine identifiers are internal compatibility names, not instructions to install an older CLI. They remain because that DATA revision is installed, not because they are broken.</p>
     <section class="action-panel" aria-labelledby="create-codex-pilot-heading" data-guided-policy-section>
       <h2 id="create-codex-pilot-heading">Codex Protocol Pilot</h2>
       <p class="muted small" data-guided-compact-note hidden>Inactive in document mode: the configuration document defines this key's Codex policy. The guided checkboxes are submitted unchecked.</p>
@@ -270,13 +278,14 @@
       <p class="warning-text">Runtime permits only exact OpenAI Responses <code>web_search</code> when fenced key and route policy match. Remote MCP/connectors, provider URL authority, unknown authority, and every other hosted family remain denied.</p>
       <label>
         Mode
-        <select name="external_tool_mode" aria-describedby="create-ext-tool-help" {{ field_error_attrs("external_tool_mode") }}>
-          <option value="strict_bounded" {% if form.external_tool_mode != "external_tool_fenced" %}selected{% endif %}>Strict bounded (default deny)</option>
-          <option value="external_tool_fenced" {% if form.external_tool_mode == "external_tool_fenced" %}selected{% endif %}>External-tool fenced (web search only at runtime)</option>
+        <select name="external_tool_mode" aria-describedby="create-help-external_tool_mode create-ext-tool-help" {{ field_error_attrs("external_tool_mode") }}>
+          <option value="strict_bounded" {% if form.external_tool_mode != "external_tool_fenced" %}selected{% endif %}>Blocked - no provider-run tools (default)</option>
+          <option value="external_tool_fenced" {% if form.external_tool_mode == "external_tool_fenced" %}selected{% endif %}>Allow web search only (reviewed)</option>
         </select>
       </label>
-      <fieldset aria-describedby="create-ext-tool-help">
-        <legend>Reviewed capability IDs</legend>
+      <p class="field-help" id="create-help-external_tool_mode">Leave blocked unless the client needs a provider-operated tool such as the specifically supported web search. Allowing tools can incur additional provider charges before the gateway can stop work. Only the currently supported, reviewed tool/route combination runs; other policy metadata does not make an unsupported tool work.</p>
+      <fieldset aria-describedby="create-help-external_tool_capabilities create-ext-tool-help">
+        <legend>Allowed provider tools</legend>
         {% for capability in external_tool_capabilities %}
         <label class="checkbox-row">
           <input type="checkbox" name="external_tool_capabilities" value="{{ capability }}" {% if capability in form.external_tool_capabilities %}checked{% endif %}>
@@ -284,6 +293,7 @@
         </label>
         {% endfor %}
       </fieldset>
+      <p class="field-help" id="create-help-external_tool_capabilities">Choose exactly which supported provider-operated tools the key may use. Leave none selected when tools are blocked. Currently only the reviewed OpenAI Responses web-search combination executes; stored-policy choices for unsupported tools are listed for reference in the technical details below. This does not enable tools run by Codex/OpenCode/Hermes on the user's machine.</p>
       {{ record_choice(
           "external_tool_destination_ids", "tool_destination", "Reviewed destination IDs",
           options=none,
@@ -292,22 +302,24 @@
           serialize="newline",
           allow_new=true,
           placeholder="connector:reviewed_id or remote_mcp:reviewed_id, one per line",
-          help="Destination IDs are key-local reviewed identifiers; type them directly (no global registry lookup).",
+          help="Advanced destination restrictions for reviewed tool policies, not server URLs or passwords. Leave blank for ordinary keys and for the currently supported web-search setup unless its actual contract requires one. A stored destination identifier alone never enables a connector the gateway does not support.",
           help_id="create-ext-tool-dest-help",
       ) }}
       <label>
         Maximum provider tool calls per request
-        <input name="external_tool_max_calls" value="{{ form.external_tool_max_calls or '0' }}" inputmode="numeric" autocomplete="off" aria-describedby="create-ext-tool-help" {{ field_error_attrs("external_tool_max_calls") }}>
+        <input name="external_tool_max_calls" value="{{ form.external_tool_max_calls or '0' }}" inputmode="numeric" autocomplete="off" aria-describedby="create-help-external_tool_max_calls create-ext-tool-help" {{ field_error_attrs("external_tool_max_calls") }}>
       </label>
-      <p class="muted small">Whole number of provider tool calls allowed within ONE admitted request (per request). In strict-bounded mode no hosted tool runs, so this number never applies; in fenced mode it must be at least 1 and at most the ceiling above. Example: 2 means one request may trigger at most two web-search calls.</p>
+      <p class="field-help" id="create-help-external_tool_max_calls">Largest number of provider-run tool calls one request may make. Leave the default when provider-run tools are blocked. A permitted tool mode requires a positive number within the shown ceiling; for example 2 permits at most two calls in one request.</p>
       <label class="checkbox-row">
-        <input type="checkbox" name="external_tool_overrun_acknowledged" value="true" {% if form.external_tool_overrun_acknowledged %}checked{% endif %} aria-describedby="create-ext-tool-help" {{ field_error_attrs("external_tool_overrun_acknowledged") }}>
+        <input type="checkbox" name="external_tool_overrun_acknowledged" value="true" {% if form.external_tool_overrun_acknowledged %}checked{% endif %} aria-describedby="create-help-external_tool_overrun_acknowledged create-ext-tool-help" {{ field_error_attrs("external_tool_overrun_acknowledged") }}>
         I acknowledge that one admitted fenced web-search request may overrun its remaining quota.
       </label>
+      <p class="field-help" id="create-help-external_tool_overrun_acknowledged">Required when enabling provider-run tools: one request may cost more than the remaining budget before it finishes. Later requests are blocked if the budget is exhausted; unknown final cost can hold the key until an administrator resolves it. This is not a provider-invoice ceiling.</p>
       <label class="checkbox-row">
-        <input type="checkbox" name="confirm_external_tool_fenced" value="true" {% if form.confirm_external_tool_fenced %}checked{% endif %} aria-describedby="create-ext-tool-help" {{ field_error_attrs("confirm_external_tool_fenced") }}>
+        <input type="checkbox" name="confirm_external_tool_fenced" value="true" {% if form.confirm_external_tool_fenced %}checked{% endif %} aria-describedby="create-help-confirm_external_tool_fenced create-ext-tool-help" {{ field_error_attrs("confirm_external_tool_fenced") }}>
         I separately confirm fenced external-tool policy for this standard key.
       </label>
+      <p class="field-help" id="create-help-confirm_external_tool_fenced">Confirms the deliberate choice to enable the reviewed tool policy for this key. Leave unchecked for an ordinary key. It is separate from acknowledging the possible cost overrun.</p>
       <p class="warning-text">For the implemented web-search contract, concurrent requests are fenced, later exhausted requests are blocked, and missing or ambiguous final cost is held. Fenced mode requires positive finite request, token, and EUR limits, an acknowledgement, this second confirmation, and the audit reason below.</p>
       <p class="muted small" id="create-ext-tool-help">Installation ceilings: {{ external_tool_ceilings.max_distinct_capabilities | num }} capabilities, {{ external_tool_ceilings.max_approved_destinations | num }} destinations, and {{ external_tool_ceilings.max_provider_tool_calls_per_request | num }} provider calls per request. No wildcard, URL, credential, inline authorization, or allow-all option exists. Strict bounded is the default; fenced mode additionally needs the two confirmations above.</p>
       <details class="field-help-details">
@@ -324,58 +336,69 @@
       <h2 id="create-rate-limit-heading">Request speed controls</h2>
       <p class="muted small" data-guided-compact-note hidden>Inactive in document mode: the configuration document defines this key's rate and lazy-throttling policy. The guided inputs are submitted blank (deployment defaults).</p>
       <div data-guided-policy-body>
-      <p class="muted">These optional Redis counters are separate from PostgreSQL hard quota limits. Leave fields blank for default behavior.</p>
+      <p class="muted">These controls cap how quickly the key can send requests, not how much it may use in total. Leave a field blank to use this installation's default.</p>
       <div class="form-grid">
-        <label>
-          Requests per minute
-          <input name="rate_limit_requests_per_minute" value="{{ form.rate_limit_requests_per_minute }}" inputmode="numeric" autocomplete="off" aria-describedby="create-rate-limit-help" {{ field_error_attrs("rate_limit_requests_per_minute") }}>
-        </label>
-        <label>
-          Tokens per minute
-          <input name="rate_limit_tokens_per_minute" value="{{ form.rate_limit_tokens_per_minute }}" inputmode="numeric" autocomplete="off" aria-describedby="create-rate-limit-help" {{ field_error_attrs("rate_limit_tokens_per_minute") }}>
-        </label>
-        <label>
-          Concurrent requests
-          <input name="rate_limit_concurrent_requests" value="{{ form.rate_limit_concurrent_requests }}" inputmode="numeric" autocomplete="off" aria-describedby="create-rate-limit-help" {{ field_error_attrs("rate_limit_concurrent_requests") }}>
-        </label>
-        <label>
-          Window seconds
-          <input name="rate_limit_window_seconds" value="{{ form.rate_limit_window_seconds }}" inputmode="numeric" autocomplete="off" aria-describedby="create-rate-limit-help" {{ field_error_attrs("rate_limit_window_seconds") }}>
-        </label>
+        <div class="field">
+          <label>
+            Requests per minute
+            <input name="rate_limit_requests_per_minute" value="{{ form.rate_limit_requests_per_minute }}" inputmode="numeric" autocomplete="off" aria-describedby="create-help-rate_limit_requests_per_minute" {{ field_error_attrs("rate_limit_requests_per_minute") }}>
+          </label>
+          <p class="field-help" id="create-help-rate_limit_requests_per_minute">Controls how quickly the key can send requests, rather than its total usage. Blank uses this installation's default; zero is not accepted. For example 60 with a 60-second window permits up to 60 requests in that window.</p>
+        </div>
+        <div class="field">
+          <label>
+            Tokens per minute
+            <input name="rate_limit_tokens_per_minute" value="{{ form.rate_limit_tokens_per_minute }}" inputmode="numeric" autocomplete="off" aria-describedby="create-help-rate_limit_tokens_per_minute" {{ field_error_attrs("rate_limit_tokens_per_minute") }}>
+          </label>
+          <p class="field-help" id="create-help-rate_limit_tokens_per_minute">Controls the rate of text-processing usage. Blank uses this installation's default; zero is not accepted. For example 100000 with a 60-second window limits admitted token usage in that window. This is admitted usage, not an exact billing cap.</p>
+        </div>
+        <div class="field">
+          <label>
+            Concurrent requests
+            <input name="rate_limit_concurrent_requests" value="{{ form.rate_limit_concurrent_requests }}" inputmode="numeric" autocomplete="off" aria-describedby="create-help-rate_limit_concurrent_requests" {{ field_error_attrs("rate_limit_concurrent_requests") }}>
+          </label>
+          <p class="field-help" id="create-help-rate_limit_concurrent_requests">Maximum requests this key can run at the same time. Blank uses the installation default; zero is not accepted. Choose 1 to keep a shared coding session from running several requests together.</p>
+        </div>
+        <div class="field">
+          <label>
+            Window seconds
+            <input name="rate_limit_window_seconds" value="{{ form.rate_limit_window_seconds }}" inputmode="numeric" autocomplete="off" aria-describedby="create-help-rate_limit_window_seconds" {{ field_error_attrs("rate_limit_window_seconds") }}>
+          </label>
+          <p class="field-help" id="create-help-rate_limit_window_seconds">Length, in seconds, of the counting window for the request and token speed limits. Blank uses the actual default (currently 60 seconds). Normally leave it unchanged. For example, a 120-second window counts the configured request/token allowance across two minutes.</p>
+        </div>
       </div>
-      <p class="field-help" id="create-rate-limit-help">
-        Positive whole counts per selected window (Window seconds blank = the deployment's 60s default).
-        Blank inherits the deployment default; zero is not accepted. Enforced only while
-        {% if redis_rate_limits_enabled %}Redis rate limiting is enabled.{% else %}Redis rate limiting is currently DISABLED, so stored values do not enforce until ENABLE_REDIS_RATE_LIMITS is true.{% endif %}
-      </p>
       <details class="field-help-details">
-        <summary>What is this for?</summary>
-        <p class="muted small">These are speed limits, not budgets: how many requests or tokens may start per minute. They do not reduce the lifetime quotas above. "Reject immediately" answers a rate-limit error when the key is too fast; "Wait for capacity" parks the request briefly and still errors if the queue is full or the wait expires. Use waiting for interactive clients that tolerate a pause; leave reject for batch jobs.</p>
+        <summary>Technical details</summary>
+        <p class="muted small">These are Redis-backed counters and are separate from the lifetime ceilings above; they do not reduce those quotas. Positive whole counts are expected; blank inherits the deployment default and zero is not accepted. Enforced only while
+        {% if redis_rate_limits_enabled %}Redis rate limiting is enabled.{% else %}Redis rate limiting is currently DISABLED, so stored values do not enforce until the operator enables it (ENABLE_REDIS_RATE_LIMITS).{% endif %}</p>
       </details>
       <fieldset data-lazy-throttling-surface>
         <legend>When a rate limit is reached</legend>
         <p class="muted">Optional lazy (waiting) throttling for this key. Waiting precedes provider execution; queue full or deadline returns 429, and disconnected requests are canceled. Hard quota, security, and hosted-tool fence refusals remain immediate, and streaming starts only after admission.</p>
         <div class="form-grid">
           <label class="checkbox-row">
-            <input type="radio" name="lazy_throttling_mode" value="reject" data-lazy-throttling-mode aria-describedby="create-lazy-help" {% if form.lazy_throttling_mode != "wait" %}checked{% endif %}>
+            <input type="radio" name="lazy_throttling_mode" value="reject" data-lazy-throttling-mode aria-describedby="create-help-lazy_throttling_mode" {% if form.lazy_throttling_mode != "wait" %}checked{% endif %}>
             Reject immediately (default)
           </label>
           <label class="checkbox-row">
-            <input type="radio" name="lazy_throttling_mode" value="wait" data-lazy-throttling-mode aria-describedby="create-lazy-help" {% if form.lazy_throttling_mode == "wait" %}checked{% endif %}>
+            <input type="radio" name="lazy_throttling_mode" value="wait" data-lazy-throttling-mode aria-describedby="create-help-lazy_throttling_mode" {% if form.lazy_throttling_mode == "wait" %}checked{% endif %}>
             Wait for capacity (lazy throttling)
           </label>
         </div>
+        <p class="field-help" id="create-help-lazy_throttling_mode">Reject returns a rate-limit error immediately; wait briefly queues a request until capacity is available. Keep reject for ordinary batch use; waiting can make interactive clients smoother. Full queues, expired waits, and hard budget or security refusals still return an error.</p>
         <div class="form-grid" data-lazy-throttling-field-group>
           <label>
             Maximum waiting time (seconds)
-            <input name="lazy_throttling_max_wait_seconds" value="{{ form.lazy_throttling_max_wait_seconds or lazy_throttling_defaults.max_wait_seconds }}" inputmode="numeric" autocomplete="off" data-lazy-throttling-field aria-describedby="create-lazy-help" {{ field_error_attrs("lazy_throttling_max_wait_seconds") }}>
+            <input name="lazy_throttling_max_wait_seconds" value="{{ form.lazy_throttling_max_wait_seconds or lazy_throttling_defaults.max_wait_seconds }}" inputmode="numeric" autocomplete="off" data-lazy-throttling-field aria-describedby="create-help-lazy_throttling_max_wait_seconds" {{ field_error_attrs("lazy_throttling_max_wait_seconds") }}>
           </label>
+          <p class="field-help" id="create-help-lazy_throttling_max_wait_seconds">Longest time a queued request may wait, in seconds. Used only when waiting is enabled. Blank uses the shown default; zero is invalid, and the value may not exceed the operator ceiling of {{ lazy_throttling_ceilings.max_wait_seconds | num }} seconds. For example 30 allows a short pause, then an error if capacity never becomes available.</p>
           <label>
             Maximum waiting requests per key
-            <input name="lazy_throttling_max_waiting_requests" value="{{ form.lazy_throttling_max_waiting_requests or lazy_throttling_defaults.max_waiting_per_key }}" inputmode="numeric" autocomplete="off" data-lazy-throttling-field aria-describedby="create-lazy-help" {{ field_error_attrs("lazy_throttling_max_waiting_requests") }}>
+            <input name="lazy_throttling_max_waiting_requests" value="{{ form.lazy_throttling_max_waiting_requests or lazy_throttling_defaults.max_waiting_per_key }}" inputmode="numeric" autocomplete="off" data-lazy-throttling-field aria-describedby="create-help-lazy_throttling_max_waiting_requests" {{ field_error_attrs("lazy_throttling_max_waiting_requests") }}>
           </label>
+          <p class="field-help" id="create-help-lazy_throttling_max_waiting_requests">How many requests from this key can wait at once. Used only when waiting is enabled. Blank uses the shown default; zero is invalid, and the value may not exceed the operator ceiling of {{ lazy_throttling_ceilings.max_waiting_per_key | num }}. A small value such as 2 prevents a long queue from building up.</p>
         </div>
-        <p class="muted small" id="create-lazy-help">Applies to Chat Completions and Responses. In wait mode both bounds are positive whole numbers (blank uses the shown defaults) and may not exceed the operator ceilings: {{ lazy_throttling_ceilings.max_wait_seconds | num }}s maximum wait, {{ lazy_throttling_ceilings.max_waiting_per_key | num }} waiting per key.</p>
+        <p class="muted small">Waiting applies to Chat Completions and Responses streaming alike.</p>
         {% if not redis_rate_limits_enabled %}
         <p class="warning-text">Redis rate limiting is currently disabled (ENABLE_REDIS_RATE_LIMITS=false), so operational throttling is inactive: saving a wait policy does not enforce waiting until the operator enables it.</p>
         {% endif %}
@@ -393,20 +416,23 @@
       <p class="muted">In plain terms: while a streamed chat reply is being generated, the gateway watches the spend accumulated so far and can cut the stream a little early when it looks like the reply would push past this key's limits. The provider's final usage and cost always stay authoritative; the margins below only decide how early the gateway pulls the plug.</p>
       <p class="muted">Applies only to <code>{{ chat_live_burn_surface.endpoint_label }}</code> with <code>stream=true</code>. Final provider usage/cost remains authoritative.</p>
       <label class="checkbox-row">
-        <input id="create-chat-streaming-live-burn-enabled" type="checkbox" name="{{ chat_live_burn_surface.enabled_field_name }}" value="true" {% if form.chat_streaming_live_burn_enabled == "true" or form.chat_streaming_live_burn_enabled is sameas true %}checked{% endif %} data-streaming-live-burn-enabled aria-describedby="create-chat-streaming-live-burn-hint" {{ field_error_attrs("chat_streaming_live_burn_enabled", with_id=false) }}>
+        <input id="create-chat-streaming-live-burn-enabled" type="checkbox" name="{{ chat_live_burn_surface.enabled_field_name }}" value="true" {% if form.chat_streaming_live_burn_enabled == "true" or form.chat_streaming_live_burn_enabled is sameas true %}checked{% endif %} data-streaming-live-burn-enabled aria-describedby="create-help-chat_streaming_live_burn_enabled create-chat-streaming-live-burn-hint" {{ field_error_attrs("chat_streaming_live_burn_enabled", with_id=false) }}>
         Enable live-burn monitoring for Chat Completions streaming
       </label>
+      <p class="field-help" id="create-help-chat_streaming_live_burn_enabled">Optional protection for long streamed Chat replies. Leave off for normal use. It can end the response when estimated usage reaches the key's limit; final provider usage still determines accounting, and stopping the client stream does not guarantee the provider stopped processing.</p>
       <div id="create-chat-streaming-live-burn-fields" class="form-grid{% if not (form.chat_streaming_live_burn_enabled == "true" or form.chat_streaming_live_burn_enabled is sameas true) %} live-burn-fields-disabled{% endif %}" data-streaming-live-burn-margin-fields>
         <label>
           Cost margin (EUR)
-          <input id="create-chat-streaming-live-burn-cost-margin" name="{{ chat_live_burn_surface.cost_margin_field_name }}" value="{{ form.chat_streaming_live_burn_cost_margin_eur or '0' }}" inputmode="decimal" autocomplete="off" aria-describedby="create-chat-streaming-live-burn-hint" {{ field_error_attrs("chat_streaming_live_burn_cost_margin_eur", with_id=false) }}{% if not (form.chat_streaming_live_burn_enabled == "true" or form.chat_streaming_live_burn_enabled is sameas true) %} disabled{% endif %}>
+          <input id="create-chat-streaming-live-burn-cost-margin" name="{{ chat_live_burn_surface.cost_margin_field_name }}" value="{{ form.chat_streaming_live_burn_cost_margin_eur or '0' }}" inputmode="decimal" autocomplete="off" aria-describedby="create-help-chat_streaming_live_burn_cost_margin_eur create-chat-streaming-live-burn-hint" {{ field_error_attrs("chat_streaming_live_burn_cost_margin_eur", with_id=false) }}{% if not (form.chat_streaming_live_burn_enabled == "true" or form.chat_streaming_live_burn_enabled is sameas true) %} disabled{% endif %}>
         </label>
+        <p class="field-help" id="create-help-chat_streaming_live_burn_cost_margin_eur">Adjusts when the stream stops relative to the estimated spending limit, in EUR. Used only when early stopping is enabled. Zero stops near the estimated boundary; positive 0.10 asks it to act ten cents earlier. A negative value deliberately permits a bounded estimated overrun, so use it only if you accept that risk. Final provider cost can still differ; this is not an exact invoice guarantee.</p>
         <label>
           Output token margin
-          <input id="create-chat-streaming-live-burn-token-margin" name="{{ chat_live_burn_surface.token_margin_field_name }}" value="{{ form.chat_streaming_live_burn_token_margin or '0' }}" inputmode="numeric" autocomplete="off" aria-describedby="create-chat-streaming-live-burn-hint" {{ field_error_attrs("chat_streaming_live_burn_token_margin", with_id=false) }}{% if not (form.chat_streaming_live_burn_enabled == "true" or form.chat_streaming_live_burn_enabled is sameas true) %} disabled{% endif %}>
+          <input id="create-chat-streaming-live-burn-token-margin" name="{{ chat_live_burn_surface.token_margin_field_name }}" value="{{ form.chat_streaming_live_burn_token_margin or '0' }}" inputmode="numeric" autocomplete="off" aria-describedby="create-help-chat_streaming_live_burn_token_margin create-chat-streaming-live-burn-hint" {{ field_error_attrs("chat_streaming_live_burn_token_margin", with_id=false) }}{% if not (form.chat_streaming_live_burn_enabled == "true" or form.chat_streaming_live_burn_enabled is sameas true) %} disabled{% endif %}>
         </label>
+        <p class="field-help" id="create-help-chat_streaming_live_burn_token_margin">Adjusts the stream cutoff in output tokens. Used only when early stopping is enabled. Zero stops near the estimated boundary; positive 1000 asks it to act about 1000 output tokens earlier. A negative value permits a bounded estimated token overrun. This does not change final usage accounting.</p>
       </div>
-      <p class="muted small">Margins are positive safety cushions, not budgets: the cost margin in EUR and the token margin in output tokens. Blank or 0 means the gateway only steps in once the projected spend actually crosses a limit. They are ignored entirely while monitoring is disabled.</p>
+      <p class="muted small">Zero stops near the estimated boundary; a positive margin asks the gateway to act earlier; a negative margin deliberately allows a bounded estimated overrun. These margins are ignored entirely while monitoring is disabled.</p>
       <p id="create-chat-streaming-live-burn-hint" class="muted small">
         {% for line in chat_live_burn_surface.help_text %}{{ line }} {% endfor %}
         Margins are ignored while monitoring is off.
@@ -437,13 +463,15 @@
         <dd>{{ "Allowed" if trusted_calibration_settings.allow_external_authority else "Denied by default" }}</dd>
       </dl>
       <label class="checkbox-row">
-        <input type="checkbox" name="trusted_calibration" value="true" {% if form.trusted_calibration %}checked{% endif %} aria-describedby="create-calibration-help" {{ field_error_attrs("trusted_calibration") }}>
+        <input type="checkbox" name="trusted_calibration" value="true" {% if form.trusted_calibration %}checked{% endif %} aria-describedby="create-help-trusted_calibration create-calibration-help" {{ field_error_attrs("trusted_calibration") }}>
         Create as trusted calibration key
       </label>
+      <p class="field-help" id="create-help-trusted_calibration">A short-lived administrator tool for observing what a workflow needs before creating ordinary restricted keys. Leave unchecked for staff, users, and participants. It can have broader discovery access and requires the displayed short duration and request bounds plus the explicit confirmation.</p>
       <label class="checkbox-row">
-        <input type="checkbox" name="confirm_trusted_calibration" value="true" {% if form.confirm_trusted_calibration %}checked{% endif %} aria-describedby="create-calibration-help" {{ field_error_attrs("confirm_trusted_calibration") }}>
+        <input type="checkbox" name="confirm_trusted_calibration" value="true" {% if form.confirm_trusted_calibration %}checked{% endif %} aria-describedby="create-help-confirm_trusted_calibration create-calibration-help" {{ field_error_attrs("confirm_trusted_calibration") }}>
         I understand this is for trusted calibration discovery only
       </label>
+      <p class="field-help" id="create-help-confirm_trusted_calibration">Confirms this is for a trusted administrator's temporary investigation. Do not check it to get around normal model/provider restrictions; create an ordinary client key for day-to-day use.</p>
       <p class="muted small" id="create-calibration-help">Both boxes are required together when creating a calibration key. The service enforces short validity, a configured request-limit maximum, and standard provider-secret isolation. Trusted calibration keys are real gateway keys, not templates or participant keys, and must not be issued to participants.</p>
       <details class="field-help-details">
         <summary>Why would I change this?</summary>
@@ -455,12 +483,24 @@
     <section class="action-panel" aria-labelledby="create-access-summary-heading">
       <h2 id="create-access-summary-heading">What this key will be able to do</h2>
       {% if access_summary %}
-      <dl class="compact-dl access-summary">
-        {% for row in access_summary %}
-        <dt>{{ row.label }}</dt>
-        <dd>{{ row.value }}</dd>
-        {% endfor %}
-      </dl>
+      <div data-access-summary-live hidden>
+        <dl class="compact-dl access-summary">
+          {% for row in access_summary %}
+          <div class="access-summary-row" data-summary-row="{{ row.label }}">
+            <dt>{{ row.label }}</dt>
+            <dd>{{ row.value }}</dd>
+          </div>
+          {% endfor %}
+        </dl>
+        <details class="field-help-details">
+          <summary>Technical detail</summary>
+          <p class="muted small" data-summary-technical>{% if access_summary_technical %}{{ access_summary_technical|join(" | ") }}{% else %}No client profiles selected.{% endif %}</p>
+        </details>
+        <script type="application/json" data-access-summary-data>{{ access_summary_data_json|safe }}</script>
+      </div>
+      <noscript>
+        <p class="muted small">The live access summary needs scripts, so it is withheld here rather than showing outdated initial defaults. Your entered fields above govern what the key receives; the gateway rechecks every grant before the key is created.</p>
+      </noscript>
       <p class="muted small">Restated from your guided choices above, including preset endpoints. The gateway rechecks every grant and each route's readiness before the key is created; if anything no longer qualifies, the create is refused and nothing is granted.</p>
       {% else %}
       <p class="muted small">In configuration-document mode this summary is not shown: the document defines the policy, and the gateway still rechecks every grant before the key is created.</p>
@@ -469,22 +509,24 @@
 
     <section class="action-panel" aria-labelledby="create-submit-heading">
       <h2 id="create-submit-heading">Create Key</h2>
-      <p class="warning-text">The selected mode controls the only plaintext destination. Old keys cannot be resent; lost keys must be rotated.</p>
+      <p class="warning-text">The selected mode controls the only plaintext destination for the new key. With no email the key is shown in the browser ONCE after creation - copy it before leaving; the saved record cannot recover it later. Old keys cannot be resent; lost keys must be rotated.</p>
       <label>
         Email delivery mode
         <select name="email_delivery_mode" aria-describedby="create-delivery-help" {{ field_error_attrs("email_delivery_mode") }}>
-          <option value="none" {% if form.email_delivery_mode == "none" or not form.email_delivery_mode %}selected{% endif %}>None - show key once in browser</option>
-          <option value="pending" {% if form.email_delivery_mode == "pending" %}selected{% endif %}>Pending - create delivery row and show key once</option>
-          <option value="send-now" {% if form.email_delivery_mode == "send-now" %}selected{% endif %}>Send now - email is the delivery channel</option>
-          <option value="enqueue" {% if form.email_delivery_mode == "enqueue" %}selected{% endif %}>Enqueue - Celery email delivery</option>
+          <option value="none" {% if form.email_delivery_mode == "none" or not form.email_delivery_mode %}selected{% endif %}>None - key shown once in browser after creation</option>
+          <option value="pending" {% if form.email_delivery_mode == "pending" %}selected{% endif %}>Pending - key shown once; delivery record created</option>
+          <option value="send-now" {% if form.email_delivery_mode == "send-now" %}selected{% endif %}>Send now - owner email is the delivery channel (no browser plaintext)</option>
+          <option value="enqueue" {% if form.email_delivery_mode == "enqueue" %}selected{% endif %}>Enqueue - owner email via background queue (no browser plaintext)</option>
         </select>
       </label>
-      <p class="muted small" id="create-delivery-help">The selected mode is the only plaintext destination for the new key. Send-now and enqueue suppress browser plaintext display. Pending creates a delivery record but still shows the key once. Celery payloads contain IDs only, and provider keys are never involved.</p>
+      <p class="warning-text" data-delivery-warning-emailless {% if form.email_delivery_mode in ("send-now", "enqueue") %}hidden{% endif %}>The key will be shown in the browser ONCE after creation. Copy it before leaving - the saved key record cannot recover the plaintext later.</p>
+      <p class="warning-text" data-delivery-warning-email {% if form.email_delivery_mode in ("none", "pending") or not form.email_delivery_mode %}hidden{% endif %}>No browser plaintext: the owner email is the delivery channel. If the email cannot be sent or queued, the result page says so and the key cannot be resent.</p>
+      <p class="field-help" id="create-delivery-help">Choose how the newly generated secret is received. With no email it is shown ONCE after creation, so copy it before leaving; the saved key record does not let you recover the plaintext later. Send-now and enqueue use the owner email as the delivery channel and suppress the browser plaintext; if the email cannot be sent or queued, the result page says so and the key cannot be resent. Celery payloads contain IDs only, and provider keys are never involved.</p>
       <label>
         Audit reason
         <input name="reason" value="{{ form.reason }}" required maxlength="512" autocomplete="off" placeholder="Required reason" aria-describedby="create-reason-help" {{ field_error_attrs("reason") }}>
       </label>
-      <p class="field-help" id="create-reason-help">Required, at most 512 characters. Credential-shaped values are masked before storage.</p>
+      <p class="field-help" id="create-reason-help">A short explanation of why you are issuing this key, for the administrative history. For example, "Seven-day coding trial for the research team". Do not include passwords, API keys or private prompts. Required, at most 512 characters; credential-shaped values are masked before storage.</p>
       <button type="submit">Create key</button>
     </section>
   </form>
@@ -703,6 +745,181 @@
       }
     });
   }
+  sync();
+})();
+(() => {
+  // Live access summary: restates the CURRENT visible guided choices as
+  // the operator edits the form. Informational only - the server rechecks
+  // every grant and each route's readiness before creating the key.
+  // Withheld (never shown stale) when scripts cannot run or the summary
+  // data is unavailable.
+  const parseList = (value) =>
+    (value || "")
+      .split("\n")
+      .map((item) => item.trim())
+      .filter(Boolean);
+  const checked = (selector) => {
+    const el = document.querySelector(selector);
+    return !!(el && el.checked && !el.disabled);
+  };
+  const value = (selector) => {
+    const el = document.querySelector(selector);
+    return el ? el.value : "";
+  };
+  const dataEl = document.querySelector('[data-access-summary-data]');
+  const live = document.querySelector('[data-access-summary-live]');
+  const refresh = () => {
+    if (source.value === "configuration") {
+      live.hidden = true;
+      return;
+    }
+    live.hidden = false;
+    setRow("Client setup", clientText());
+    setRow("Models", modelsText());
+    setRow("Providers", providersText());
+    setRow("Endpoints", endpointsText());
+    setRow("Lifetime limits", lifetimeText());
+    setRow("Validity", validityText());
+    setRow("After creation", deliveryText());
+    syncTechnical();
+  };
+  const validityText = () => {
+    const from = value('input[name="valid_from"]').trim();
+    const until = value('input[name="valid_until"]').trim();
+    const days = value('input[name="valid_days"]').trim();
+    const parts = [];
+    if (from) parts.push("from " + from);
+    if (days) parts.push(days + " days");
+    else if (until) parts.push("until " + until);
+    return parts.length ? parts.join(" ") : "starts now, no end date";
+  };
+  const deliveryMode = () => {
+    const mode = document.querySelector('select[name="email_delivery_mode"]');
+    return mode ? mode.value : "none";
+  };
+  const deliveryText = () =>
+    (data.deliveryTexts || {})[deliveryMode()] ||
+    (data.deliveryTexts || {}).none ||
+    "";
+  const syncTechnical = () => {
+    const el = document.querySelector('[data-summary-technical]');
+    if (!el) return;
+    const parts = [];
+    for (const box of document.querySelectorAll('input[name^="client_use_"]')) {
+      if (!box.checked || box.disabled) continue;
+      const fact = (data.clientFacts || {})[box.name];
+      if (fact && fact.technical) {
+        parts.push(fact.label + ": " + fact.technical);
+      }
+    }
+    el.textContent = parts.length
+      ? parts.join(" | ")
+      : "No client profiles selected.";
+  };
+  const endpointsText = () => {
+    if (checked('input[name="allow_all_endpoints"]')) return "All implemented endpoints";
+    const endpoints = new Set(parseList(value('textarea[name="allowed_endpoints"]')));
+    for (const box of document.querySelectorAll('input[name^="client_use_"]')) {
+      if (!box.checked || box.disabled) continue;
+      for (const endpoint of (data.presetEndpoints || {})[box.name] || []) {
+        endpoints.add(endpoint);
+      }
+    }
+    return endpoints.size ? [...endpoints].sort().join(", ") : "None yet";
+  };
+  const lifetimeText = () => {
+    const cost = value('input[name="cost_limit_eur"]').trim();
+    const tokens = value('input[name="token_limit_total"]').trim();
+    const requests = value('input[name="request_limit_total"]').trim();
+    return (
+      "cost " + (cost ? cost + " EUR" : "unlimited") +
+      ", tokens " + (tokens || "unlimited") +
+      ", requests " + (requests || "unlimited")
+    );
+  };
+  const clientText = () => {
+    const parts = [];
+    for (const box of document.querySelectorAll('input[name^="client_use_"]')) {
+      if (!box.checked || box.disabled) continue;
+      const fact = (data.clientFacts || {})[box.name];
+      if (fact) parts.push(fact.label + ": " + fact.human);
+    }
+    return parts.length ? parts.join("; ") : data.noClient || "None";
+  };
+  const modelsText = () => {
+    if (checked('input[name="allow_all_models"]')) return "All models";
+    const lines = parseList(value('textarea[name="allowed_models"]'));
+    return lines.length ? lines.join(", ") : "None yet";
+  };
+  const providersText = () => {
+    if (checked('input[name="allow_all_providers"]')) return "All enabled providers";
+    if (checked('input[name="provider_deny_all"]')) return "None (deny all)";
+    const lines = parseList(value('textarea[name="allowed_providers"]'));
+    return lines.length ? lines.join(", ") : "None selected";
+  };
+  const source = document.querySelector('select[name="policy_source"]');
+  if (!dataEl || !live || !source) return;
+  let data;
+  try {
+    data = JSON.parse(dataEl.textContent);
+  } catch {
+    return; // withhold rather than show a stale summary
+  }
+  const rows = {};
+  for (const row of live.querySelectorAll('[data-summary-row]')) {
+    rows[row.dataset.summaryRow] = row.querySelector("dd");
+  }
+  const setRow = (label, value) => {
+    const dd = rows[label];
+    if (dd && dd.textContent !== value) dd.textContent = value;
+  };
+  for (const box of document.querySelectorAll('input[name^="client_use_"]')) {
+    box.addEventListener("change", refresh);
+  }
+  for (const selector of [
+    'input[name="allow_all_models"]',
+    'input[name="allow_all_providers"]',
+    'input[name="provider_deny_all"]',
+    'input[name="allow_all_endpoints"]',
+  ]) {
+    const el = document.querySelector(selector);
+    if (el) el.addEventListener("change", refresh);
+  }
+  const delivery = document.querySelector('select[name="email_delivery_mode"]');
+  if (delivery) delivery.addEventListener("change", refresh);
+  source.addEventListener("change", refresh);
+  for (const selector of [
+    'textarea[name="allowed_models"]',
+    'textarea[name="allowed_providers"]',
+    'textarea[name="allowed_endpoints"]',
+    'input[name="cost_limit_eur"]',
+    'input[name="token_limit_total"]',
+    'input[name="request_limit_total"]',
+    'input[name="valid_from"]',
+    'input[name="valid_until"]',
+    'input[name="valid_days"]',
+  ]) {
+    const el = document.querySelector(selector);
+    if (el) el.addEventListener("input", refresh);
+  }
+  document.addEventListener("create-doc-mode", () => refresh());
+  refresh();
+})();
+(() => {
+  // Delivery warnings: the one-time browser-plaintext warning matters for
+  // the modes that show the key in the browser (none/pending); the
+  // email-channel text matters for send-now/enqueue. The server renders
+  // the initial hidden state; this keeps it in sync while editing.
+  const delivery = document.querySelector('select[name="email_delivery_mode"]');
+  const emailless = document.querySelector('[data-delivery-warning-emailless]');
+  const email = document.querySelector('[data-delivery-warning-email]');
+  if (!delivery || !emailless || !email) return;
+  const sync = () => {
+    const browserShown = !["send-now", "enqueue"].includes(delivery.value);
+    emailless.hidden = !browserShown;
+    email.hidden = browserShown;
+  };
+  delivery.addEventListener("change", sync);
   sync();
 })();
 (() => {

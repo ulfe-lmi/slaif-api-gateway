@@ -1516,7 +1516,7 @@ async def create_admin_key(
     except (KeyManagementError, ValueError) as exc:
         form["configuration_json"] = ""
         diagnostic_id = _admin_diagnostic_id(request)
-        field_issues, field_error_fields = _admin_key_create_field_issues(exc)
+        field_issues, field_error_fields = _admin_key_create_field_issues(exc, settings)
         _log_admin_action_failure(
             request,
             exc=exc,
@@ -1621,7 +1621,7 @@ async def create_admin_key(
             )
     except (EmailError, KeyManagementError, ValueError) as exc:
         diagnostic_id = _admin_diagnostic_id(request)
-        field_issues, field_error_fields = _admin_key_create_field_issues(exc)
+        field_issues, field_error_fields = _admin_key_create_field_issues(exc, settings)
         _log_admin_action_failure(
             request,
             exc=exc,
@@ -10595,37 +10595,88 @@ def _render_owner_form(
     )
 
 
+CLIENT_USE_FACT_FIELDS: tuple[tuple[str, str, str], ...] = (
+    ("client_use_codex", "Codex", CODEX_0162_CLIENT_MODULE_ID),
+    ("client_use_opencode_chat", "OpenCode Chat", OPENCODE_1193_CHAT_CLIENT_MODULE_ID),
+    ("client_use_opencode_responses", "OpenCode Responses", OPENCODE_1193_RESPONSES_CLIENT_MODULE_ID),
+    ("client_use_hermes", "Hermes", HERMES_0225_CHAT_CLIENT_MODULE_ID),
+)
+
+
+def _key_create_client_facts() -> dict[str, dict[str, str]]:
+    """Per-client identity facts for the create-form access summary.
+
+    ``human`` is the operator-facing text: the installed CLI version from
+    the validated provenance, or an honest installed/absent state.
+    ``technical`` carries the stable executable ID, DATA revision, and
+    canonical digest for the secondary technical detail. Values come from
+    the installed registry snapshot only; nothing is granted or inferred.
+    """
+    facts: dict[str, dict[str, str]] = {}
+    for field, _label, module_id in CLIENT_USE_FACT_FIELDS:
+        try:
+            resolved = active_client_module_facts(module_id)
+        except ModuleSelectionError:
+            facts[field] = {"human": "not installed in this deployment", "technical": ""}
+            continue
+        if resolved.cli_version:
+            human = f"CLI {resolved.cli_version}"
+        else:
+            human = "installed in this deployment"
+        facts[field] = {
+            "human": human,
+            "technical": (
+                f"{resolved.module_id} / DATA revision {resolved.module_version} / "
+                f"digest {resolved.fixture_sha256}"
+            ),
+        }
+    return facts
+
+
+# One-time secret / delivery truth for the summary and form copy: what the
+# operator actually gets after creation, without promising delivery before
+# it happens.
+_KEY_CREATE_DELIVERY_SUMMARY_TEXTS: dict[str, str] = {
+    "none": (
+        "No email. The key is shown in the browser once after creation - "
+        "copy it before leaving; the saved record cannot recover it later."
+    ),
+    "pending": (
+        "No email sent now. The key is shown in the browser once after "
+        "creation - copy it before leaving. A delivery record is created; "
+        "email is sent only if you choose to send it later."
+    ),
+    "send-now": (
+        "No browser plaintext. The owner email is sent immediately after "
+        "creation; if the send fails, the result page says so and the key "
+        "cannot be resent."
+    ),
+    "enqueue": (
+        "No browser plaintext. The owner email is queued after creation "
+        "and sent in the background; if queueing or the send fails, the "
+        "failure is recorded and the key cannot be resent."
+    ),
+}
+
+
 def _build_key_create_access_summary(form: Mapping[str, str]) -> list[dict[str, str]]:
     """Compact plain-language summary of the access the key WOULD get.
 
     Server-rendered (the browser never grants anything): it restates the
     submitted guided choices — client presets with the ACTIVE installed
     module identity, models, providers, effective endpoints including the
-    preset-added ones, lifetime limits, and the email delivery effect —
-    in operator words. Values are only restated as submitted or as
-    registry-installed identities; nothing new is granted or validated.
+    preset-added ones, lifetime limits, validity, and the email delivery
+    effect — in operator words. Values are only restated as submitted or
+    as registry-installed identities; nothing new is granted or validated.
     """
     rows: list[dict[str, str]] = []
 
+    facts = _key_create_client_facts()
     clients: list[str] = []
-    for field, label, module_id in (
-        ("client_use_codex", "Codex", CODEX_0162_CLIENT_MODULE_ID),
-        ("client_use_opencode_chat", "OpenCode Chat", OPENCODE_1193_CHAT_CLIENT_MODULE_ID),
-        ("client_use_opencode_responses", "OpenCode Responses", OPENCODE_1193_RESPONSES_CLIENT_MODULE_ID),
-        ("client_use_hermes", "Hermes", HERMES_0225_CHAT_CLIENT_MODULE_ID),
-    ):
+    for field, label, _module_id in CLIENT_USE_FACT_FIELDS:
         if not _is_checked(form.get(field, "")):
             continue
-        fact_text = ""
-        try:
-            facts = active_client_module_facts(module_id)
-            fact_text = f"{facts.module_id} (installed version {facts.module_version}"
-            if facts.cli_version:
-                fact_text += f", CLI {facts.cli_version}"
-            fact_text += ")"
-        except ModuleSelectionError:
-            fact_text = "not installed in this deployment"
-        clients.append(f"{label}: {fact_text}" if fact_text else label)
+        clients.append(f"{label}: {facts[field]['human']}")
     rows.append(
         {
             "label": "Client setup",
@@ -10675,14 +10726,32 @@ def _build_key_create_access_summary(form: Mapping[str, str]) -> list[dict[str, 
         }
     )
 
+    valid_from = str(form.get("valid_from") or "").strip()
+    valid_until = str(form.get("valid_until") or "").strip()
+    valid_days = str(form.get("valid_days") or "").strip()
+    validity_parts: list[str] = []
+    if valid_from:
+        validity_parts.append(f"from {valid_from}")
+    if valid_days:
+        validity_parts.append(f"{valid_days} days")
+    elif valid_until:
+        validity_parts.append(f"until {valid_until}")
+    rows.append(
+        {
+            "label": "Validity",
+            "value": " ".join(validity_parts) if validity_parts else "starts now, no end date",
+        }
+    )
+
     email_mode = str(form.get("email_delivery_mode") or "none").strip().lower()
-    delivery_text = {
-        "none": "No email; the key stays available in the dashboard.",
-        "pending": "Email prepared now, sent only if you choose to send it later.",
-        "send-now": "Key emailed to the owner immediately after creation.",
-        "enqueue": "Key email queued for the owner after creation.",
-    }.get(email_mode, "No email.")
-    rows.append({"label": "After creation", "value": delivery_text})
+    rows.append(
+        {
+            "label": "After creation",
+            "value": _KEY_CREATE_DELIVERY_SUMMARY_TEXTS.get(
+                email_mode, _KEY_CREATE_DELIVERY_SUMMARY_TEXTS["none"]
+            ),
+        }
+    )
     return rows
 
 
@@ -10703,11 +10772,35 @@ def _render_key_create_form(
     settings = _settings(request)
     choices = dict(choices or {})
     access_summary: list[dict[str, str]] = []
+    access_summary_data_json = ""
+    access_summary_technical: list[str] = []
     if str(form.get("policy_source") or "guided").strip().lower() == "guided":
         try:
             access_summary = _build_key_create_access_summary(form)
         except (KeyManagementError, ValueError):
             access_summary = []
+        if access_summary:
+            client_facts = _key_create_client_facts()
+            access_summary_data = {
+                "clientFacts": {
+                    field: {"label": label, **client_facts[field]}
+                    for field, label, _module_id in CLIENT_USE_FACT_FIELDS
+                },
+                "deliveryTexts": dict(_KEY_CREATE_DELIVERY_SUMMARY_TEXTS),
+                "presetEndpoints": {
+                    field: list(endpoints)
+                    for field, endpoints in CLIENT_USE_PRESET_ENDPOINTS.items()
+                },
+                "noClient": "None - plain API key only",
+            }
+            access_summary_data_json = json.dumps(
+                access_summary_data, separators=(",", ":"), sort_keys=True
+            ).replace("</", "<\\/")
+            access_summary_technical = [
+                f"{label}: {client_facts[field]['technical']}"
+                for field, label, _module_id in CLIENT_USE_FACT_FIELDS
+                if _is_checked(form.get(field, "")) and client_facts[field]["technical"]
+            ]
     return templates.TemplateResponse(
         request,
         "keys/create.html",
@@ -10727,6 +10820,8 @@ def _render_key_create_form(
             "field_error_fields": list(field_error_fields),
             "field_labels": KEY_CREATE_FIELD_LABELS,
             "access_summary": access_summary,
+            "access_summary_data_json": access_summary_data_json,
+            "access_summary_technical": access_summary_technical,
             "diagnostic_id": diagnostic_id,
             "choices": choices,
             "choice_labels": _choice_selected_labels(
@@ -12808,8 +12903,15 @@ def _parse_key_create_configuration_form(
     try:
         owner_id = _parse_required_admin_uuid(form.get("owner_id"), field_name="owner_id")
     except ValueError as exc:
+        if not str(form.get("owner_id") or "").strip():
+            owner_message = "Select an owner before creating the key."
+        else:
+            owner_message = (
+                "The selected owner is not available on this deployment. "
+                "Choose an existing owner from the list."
+            )
         raise KeyCreateFieldError(
-            str(exc),
+            owner_message,
             fields=("owner_id",),
             remedy="Choose an existing owner from the list above.",
         ) from exc
@@ -12817,7 +12919,8 @@ def _parse_key_create_configuration_form(
         cohort_id = _parse_optional_admin_uuid(form.get("cohort_id"), field_name="cohort_id")
     except ValueError as exc:
         raise KeyCreateFieldError(
-            str(exc),
+            "The selected cohort is not available on this deployment. "
+            "Choose an existing cohort or leave it blank.",
             fields=("cohort_id",),
             remedy="Select an existing cohort or leave cohort blank.",
         ) from exc
@@ -12896,6 +12999,163 @@ def _parse_key_create_configuration_form(
     )
 
 
+# Field-specific correction texts for the numeric create controls: the real
+# units and the EXACT blank behavior of each control (never the generic
+# "blank means no limit for that control", which is false for the speed
+# controls whose blank values use the installation defaults).
+KEY_CREATE_NUMERIC_FIELD_REMEDIES: dict[str, str] = {
+    "cost_limit_eur": (
+        "Enter a positive amount in EUR, or leave blank for no total spending limit."
+    ),
+    "token_limit_total": (
+        "Enter a positive whole token count, or leave blank for no total token limit."
+    ),
+    "request_limit_total": (
+        "Enter a positive whole request count, or leave blank for no total request limit."
+    ),
+    "rate_limit_requests_per_minute": (
+        "Enter a positive whole number of requests per window, or leave blank "
+        "to use this installation's default."
+    ),
+    "rate_limit_tokens_per_minute": (
+        "Enter a positive whole number of tokens per window, or leave blank "
+        "to use this installation's default."
+    ),
+    "rate_limit_concurrent_requests": (
+        "Enter a positive whole number, or leave blank to use this "
+        "installation's default."
+    ),
+    "rate_limit_window_seconds": (
+        "Enter a positive whole number of seconds, or leave blank to use the "
+        "60-second default window."
+    ),
+    "lazy_throttling_mode": "Choose reject or wait.",
+    "lazy_throttling_max_wait_seconds": (
+        "Enter a positive whole number of seconds up to the shown ceiling, or "
+        "leave blank to use the shown default."
+    ),
+    "lazy_throttling_max_waiting_requests": (
+        "Enter a positive whole number up to the shown ceiling, or leave blank "
+        "to use the shown default."
+    ),
+    "chat_streaming_live_burn_cost_margin_eur": (
+        "Enter a finite decimal EUR margin (negative allowed) within the "
+        "shown ceiling, or leave blank for zero."
+    ),
+    "chat_streaming_live_burn_token_margin": (
+        "Enter a whole-number token margin (negative allowed) within the "
+        "shown ceiling, or leave blank for zero."
+    ),
+}
+
+
+def _locate_key_create_numeric_failures(
+    form: Mapping[str, str], settings: Settings | None
+) -> tuple[list[str], dict[str, str]]:
+    """Pinpoint the exact numeric controls that fail their OWN typed parse.
+
+    Each control is re-checked with the same parser the submit path uses,
+    so valid blank neighbours (no lifetime ceiling; deployment defaults for
+    the speed controls; shown defaults for the queue bounds) are never
+    flagged. Returns the failing field names in form order plus their
+    field-specific remedy texts.
+    """
+    failing: list[str] = []
+    try:
+        _parse_optional_admin_decimal(form.get("cost_limit_eur"))
+    except ValueError:
+        failing.append("cost_limit_eur")
+    for name in (
+        "token_limit_total",
+        "request_limit_total",
+        "rate_limit_requests_per_minute",
+        "rate_limit_tokens_per_minute",
+        "rate_limit_concurrent_requests",
+        "rate_limit_window_seconds",
+    ):
+        try:
+            _parse_optional_admin_int(form.get(name))
+        except ValueError:
+            failing.append(name)
+
+    mode = str(form.get("lazy_throttling_mode") or "reject").strip()
+    if mode not in ("reject", "wait"):
+        failing.append("lazy_throttling_mode")
+    elif mode == "wait":
+        if settings is not None:
+            max_wait_ceiling = settings.LAZY_THROTTLING_MAX_WAIT_SECONDS
+            max_waiting_ceiling = settings.LAZY_THROTTLING_MAX_WAITING_PER_KEY
+        else:
+            max_wait_ceiling, max_waiting_ceiling = 120, 16
+        for name, label, default, ceiling in (
+            (
+                "lazy_throttling_max_wait_seconds",
+                "Maximum waiting time",
+                30,
+                max_wait_ceiling,
+            ),
+            (
+                "lazy_throttling_max_waiting_requests",
+                "Maximum waiting requests",
+                2,
+                max_waiting_ceiling,
+            ),
+        ):
+            try:
+                _parse_admin_lazy_throttling_bound(
+                    form.get(name), label=label, default=default, ceiling=ceiling
+                )
+            except ValueError:
+                failing.append(name)
+
+    # Live-burn margins: only non-blank values can fail, so probe each one
+    # with its own parser while the other margin is the always-valid "0".
+    max_abs_cost = (
+        settings.CHAT_STREAMING_LIVE_BURN_MAX_ABS_COST_MARGIN_EUR
+        if settings is not None
+        else Decimal("1000000")
+    )
+    max_abs_token = (
+        settings.CHAT_STREAMING_LIVE_BURN_MAX_ABS_TOKEN_MARGIN
+        if settings is not None
+        else 1000000000
+    )
+    burn_enabled = _is_checked(form.get("chat_streaming_live_burn_enabled", ""))
+    cost_margin = form.get("chat_streaming_live_burn_cost_margin_eur")
+    if cost_margin is not None and str(cost_margin).strip():
+        try:
+            parse_streaming_live_burn_surface_form_policy(
+                CHAT_STREAMING_LIVE_BURN_SURFACE,
+                enabled=burn_enabled,
+                cost_margin_eur=cost_margin,
+                token_margin="0",
+                max_abs_cost_margin_eur=max_abs_cost,
+                max_abs_token_margin=max_abs_token,
+            )
+        except ValueError:
+            failing.append("chat_streaming_live_burn_cost_margin_eur")
+    token_margin = form.get("chat_streaming_live_burn_token_margin")
+    if token_margin is not None and str(token_margin).strip():
+        try:
+            parse_streaming_live_burn_surface_form_policy(
+                CHAT_STREAMING_LIVE_BURN_SURFACE,
+                enabled=burn_enabled,
+                cost_margin_eur="0",
+                token_margin=token_margin,
+                max_abs_cost_margin_eur=max_abs_cost,
+                max_abs_token_margin=max_abs_token,
+            )
+        except ValueError:
+            failing.append("chat_streaming_live_burn_token_margin")
+
+    remedies = {
+        name: remedy
+        for name, remedy in KEY_CREATE_NUMERIC_FIELD_REMEDIES.items()
+        if name in failing
+    }
+    return failing, remedies
+
+
 def _parse_key_create_form(
     form: dict[str, str],
     *,
@@ -12906,8 +13166,15 @@ def _parse_key_create_form(
     try:
         owner_id = _parse_required_admin_uuid(form.get("owner_id"), field_name="owner_id")
     except ValueError as exc:
+        if not str(form.get("owner_id") or "").strip():
+            owner_message = "Select an owner before creating the key."
+        else:
+            owner_message = (
+                "The selected owner is not available on this deployment. "
+                "Choose an existing owner from the list."
+            )
         raise KeyCreateFieldError(
-            str(exc),
+            owner_message,
             fields=("owner_id",),
             remedy="Choose an existing owner from the list above.",
         ) from exc
@@ -12915,7 +13182,8 @@ def _parse_key_create_form(
         cohort_id = _parse_optional_admin_uuid(form.get("cohort_id"), field_name="cohort_id")
     except ValueError as exc:
         raise KeyCreateFieldError(
-            str(exc),
+            "The selected cohort is not available on this deployment. "
+            "Choose an existing cohort or leave it blank.",
             fields=("cohort_id",),
             remedy="Select an existing cohort or leave cohort blank.",
         ) from exc
@@ -12977,74 +13245,16 @@ def _parse_key_create_form(
             ),
         )
     except ValueError as exc:
-        # Pinpoint which control group failed so the safe error can anchor
-        # the right fields; the message stays the same operator sentence.
-        failing_fields: list[str] = []
-        try:
-            _parse_optional_admin_decimal(form.get("cost_limit_eur"))
-        except ValueError:
-            failing_fields.append("cost_limit_eur")
-        try:
-            _parse_optional_admin_int(form.get("token_limit_total"))
-        except ValueError:
-            failing_fields.append("token_limit_total")
-        try:
-            _parse_optional_admin_int(form.get("request_limit_total"))
-        except ValueError:
-            failing_fields.append("request_limit_total")
-        try:
-            _parse_admin_rate_limit_policy(form)
-        except ValueError:
-            failing_fields.extend(
-                (
-                    "rate_limit_requests_per_minute",
-                    "rate_limit_tokens_per_minute",
-                    "rate_limit_concurrent_requests",
-                    "rate_limit_window_seconds",
-                )
-            )
-        try:
-            _parse_admin_lazy_throttling_policy(form, settings)
-        except ValueError:
-            failing_fields.extend(
-                (
-                    "lazy_throttling_mode",
-                    "lazy_throttling_max_wait_seconds",
-                    "lazy_throttling_max_waiting_requests",
-                )
-            )
-        try:
-            parse_streaming_live_burn_surface_form_policy(
-                CHAT_STREAMING_LIVE_BURN_SURFACE,
-                enabled=_is_checked(form.get("chat_streaming_live_burn_enabled", "")),
-                cost_margin_eur=form.get("chat_streaming_live_burn_cost_margin_eur"),
-                token_margin=form.get("chat_streaming_live_burn_token_margin"),
-                max_abs_cost_margin_eur=(
-                    settings.CHAT_STREAMING_LIVE_BURN_MAX_ABS_COST_MARGIN_EUR
-                    if settings is not None
-                    else Decimal("1000000")
-                ),
-                max_abs_token_margin=(
-                    settings.CHAT_STREAMING_LIVE_BURN_MAX_ABS_TOKEN_MARGIN
-                    if settings is not None
-                    else 1000000000
-                ),
-            )
-        except ValueError:
-            failing_fields.extend(
-                (
-                    "chat_streaming_live_burn_enabled",
-                    "chat_streaming_live_burn_cost_margin_eur",
-                    "chat_streaming_live_burn_token_margin",
-                )
-            )
+        # Pinpoint the exact failing controls: each group is re-checked with
+        # its own typed parser, so valid blank neighbours stay unflagged and
+        # every flagged field carries its own units/default remedy.
+        failing_fields, failing_remedies = _locate_key_create_numeric_failures(
+            form, settings
+        )
         raise KeyCreateFieldError(
             "Enter valid positive quota and rate-limit values.",
             fields=failing_fields,
-            remedy=(
-                "Use positive numbers in the shown units; a blank limit means "
-                "no limit for that control."
-            ),
+            field_remedies=failing_remedies,
         ) from exc
 
     trusted_calibration = _is_checked(form.get("trusted_calibration"))
@@ -13316,15 +13526,22 @@ class KeyCreateFieldError(ValueError):
         fields: Sequence[str] = (),
         remedy: str | None = None,
         details: Sequence[str] = (),
+        field_remedies: Mapping[str, str] | None = None,
     ) -> None:
         super().__init__(message)
         self.fields = tuple(name for name in fields if name in KEY_CREATE_ERROR_FIELDS)
         self.remedy = remedy
         self.details = tuple(details)
+        self.field_remedies = {
+            name: str(remedy_text)
+            for name, remedy_text in dict(field_remedies or {}).items()
+            if name in KEY_CREATE_ERROR_FIELDS
+        }
 
 
 def _admin_key_create_field_issues(
     exc: BaseException,
+    settings: Settings | None = None,
 ) -> tuple[list[dict[str, str]], list[str]]:
     """Convert one caught create failure into safe structured issues.
 
@@ -13335,15 +13552,24 @@ def _admin_key_create_field_issues(
     KeyConfigurationError, KeyManagementError.param); there is no
     string matching on arbitrary messages.
     """
+    def _redact(value: str) -> str:
+        return (
+            _admin_redact_key_form_value(value, settings)
+            if settings is not None
+            else redact_text(value)
+        )
+
     message: str
     fields: tuple[str, ...] = ()
     remedy: str | None = None
     details: tuple[str, ...] = ()
+    field_remedies: dict[str, str] = {}
     if isinstance(exc, KeyCreateFieldError):
         message = str(exc)
         fields = exc.fields
         remedy = exc.remedy
         details = exc.details
+        field_remedies = dict(exc.field_remedies)
     elif isinstance(exc, KeyConfigurationError):
         message = str(exc)
         fields = ("configuration_json",)
@@ -13359,17 +13585,23 @@ def _admin_key_create_field_issues(
         message = summary[:297] + "..." if len(summary) > 300 else (summary or "Key creation was refused.")
     # Credential redaction on every rendered path: operator texts are fixed
     # and safe, but service exceptions may carry credential-shaped values.
-    message = redact_text(message)
-    details = tuple(redact_text(item) for item in details)
+    message = _redact(message)
+    details = tuple(_redact(item) for item in details)
+    field_remedies = {name: _redact(text) for name, text in field_remedies.items()}
     field_names = list(fields)
     if details:
+        anchor = fields[0] if len(fields) == 1 else ""
         issues = [
-            {"field": "", "message": detail, "remedy": remedy or ""}
+            {"field": anchor, "message": detail, "remedy": remedy or ""}
             for detail in details[:8]
         ]
     elif fields:
         issues = [
-            {"field": name, "message": message, "remedy": remedy or ""}
+            {
+                "field": name,
+                "message": message,
+                "remedy": field_remedies.get(name, remedy or ""),
+            }
             for name in fields
         ]
     else:

@@ -887,7 +887,21 @@ def test_field_issues_from_field_error_details() -> None:
     issues, fields = admin_api._admin_key_create_field_issues(exc)
     assert fields == ["allowed_models"]
     assert [item["message"] for item in issues] == ["detail one", "detail two"]
-    assert all(item["field"] == "" for item in issues)
+    # 229-c: with exactly one flagged control, every detail line anchors to
+    # that control, so each detail is individually linkable/focusable.
+    assert all(item["field"] == "allowed_models" for item in issues)
+
+
+def test_field_issues_from_field_error_details_multi_field_no_anchor() -> None:
+    exc = admin_api.KeyCreateFieldError(
+        "combined",
+        fields=("cost_limit_eur", "request_limit_total"),
+        details=("detail one",),
+    )
+    issues, fields = admin_api._admin_key_create_field_issues(exc)
+    assert fields == ["cost_limit_eur", "request_limit_total"]
+    # No single control to anchor to: the detail line stays form-level.
+    assert issues[0]["field"] == ""
 
 
 def test_field_issues_from_key_configuration_error() -> None:

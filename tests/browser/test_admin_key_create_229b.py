@@ -1,25 +1,34 @@
-"""229-b GUI key creation: client presets, readiness, and safe errors.
+"""229-c GUI key creation: live summary, delivery truth, pinpoint errors,
+per-control help.
 
 Real Chromium on the owned, loopback-bound PostgreSQL fixture with an
-actual uvicorn app. Exercises the 229-b completion scope end to end:
+actual uvicorn app. Exercises the 229-c completion scope end to end,
+retaining the still-valid 229-b coverage in the same file:
 
 1. the guided main flow stays visible while every advanced category is
    collapsed by default, with a plain-language access summary;
-2. client-use preset endpoint ownership: checking a client preselects
-   the endpoints that client needs, unchecking it removes ONLY
-   preset-owned endpoints while operator-added endpoints survive, and
-   repeated toggling is stable (no duplicates);
-3. a genuinely missing required endpoint warns before submit and is
-   still refused by the server with the exact operator text;
-4. document mode makes client-use choices VISIBLY INACTIVE (disabled,
-   never hidden, never submitted) with a visible note, and returning
+2. client-use preset endpoint ownership (preselect, operator additions
+   survive, stable repeated toggling);
+3. a genuinely missing required endpoint warns before submit, and the
+   server applies the preset add-only; a refused create leaves no side
+   effects;
+4. document mode makes client-use choices VISIBLY INACTIVE and returning
    to guided re-enables them and re-syncs presets;
-5. an ACTUAL no-JavaScript Hermes create: the server applies the client
-   preset add-only (keeps the operator's explicit endpoint, adds the
-   chat endpoint, persists the active Hermes pin) — no browser script
-   supplies required endpoints;
-6. safe structured errors: field anchors, aria-invalid, focus on the
-   failed submit, and the affected collapsed group opened.
+5. an ACTUAL no-JavaScript Hermes create with the server-applied preset;
+6. the LIVE access summary reflects the CURRENT visible choices (client,
+   models, providers, preset-union endpoints, lifetime limits, validity,
+   delivery) while editing, before any POST;
+7. one-time secret/delivery truth: the browser-shown-ONCE warning shows
+   for the modes that reveal the key in the browser, the email-channel
+   warning for send-now/enqueue;
+8. safe structured errors: ONLY the actually invalid control is flagged
+   (blank neighbours stay clean), with that field's exact default
+   behaviour remedy, anchor, focus, and opened group; correcting the one
+   value then issues the key successfully;
+9. per-control plain-language help with accessible aria-describedby
+   relationships for the advanced fields;
+10. no-JS honesty: the live summary is withheld rather than shown stale,
+    without regressing the no-JS create path.
 
 Safety: only synthetic fixture values are read; session/CSRF values are
 used transiently for login and never logged or screenshotted.
@@ -872,7 +881,7 @@ def test_nojs_hermes_create_server_applied_preset(chromium, env229b) -> None:
 
 
 # ---------------------------------------------------------------------------
-# 6) Safe structured errors: anchors, aria-invalid, focus, group opened
+# 6) Safe structured errors: ONLY the invalid control flagged, remedy, correction succeeds
 # ---------------------------------------------------------------------------
 
 
@@ -934,21 +943,31 @@ def test_error_state_anchors_focus_and_open_details(chromium, env229b) -> None:
         active_id = page.evaluate("() => document.activeElement.id")  # type: ignore[attr-defined]
         assert active_id == "create-field-rate_limit_requests_per_minute"
 
-        # All four rate fields of the failing control group are flagged.
+        # Pinpoint: the three blank neighbours are NOT flagged — only the
+        # control whose own value failed carries the anchor id.
         for name in (
-            "rate_limit_requests_per_minute",
             "rate_limit_tokens_per_minute",
             "rate_limit_concurrent_requests",
             "rate_limit_window_seconds",
         ):
-            assert page.locator(f"#create-field-{name}").count() == 1  # type: ignore[attr-defined]
+            assert page.locator(f"#create-field-{name}").count() == 0  # type: ignore[attr-defined]
+
+        # The remedy gives this field's real units and exact default.
+        assert "requests per window" in error_text
+        assert "leave blank to use this installation's default" in error_text
 
         # The entered (nonsecret) value is preserved for correction.
         assert (
             page.locator('input[name="rate_limit_requests_per_minute"]').input_value()  # type: ignore[attr-defined]
             == "abc"
         )
-        _screenshot(page, "229b-create-error-state.png")
+        _screenshot(page, "229c-create-one-field-error.png")
+
+        # Correcting ONLY that value issues the key successfully.
+        page.fill('input[name="rate_limit_requests_per_minute"]', "60")  # type: ignore[attr-defined]
+        status = _submit_create(page)
+        assert status == 200
+        assert "Gateway Key Created" in _flat(page)
 
 
 # ---------------------------------------------------------------------------
@@ -973,3 +992,167 @@ def test_advanced_explanations_open_screenshot(chromium, env229b) -> None:
         page.screenshot(  # type: ignore[attr-defined]
             path=str(SCREENSHOT_DIR / "229b-create-advanced-open.png"), full_page=True
         )
+
+
+# ---------------------------------------------------------------------------
+# 7) Live access summary reflects the CURRENT visible choices (no POST)
+# ---------------------------------------------------------------------------
+
+
+def test_live_access_summary_reflects_current_choices(chromium, env229b) -> None:
+    """Every summary row must restate the choices the operator is looking
+    at while editing — before any submit — including the effective preset
+    endpoint union, not the stale initial defaults."""
+    env = env229b
+    with chromium.new_context(base_url=env["base_url"]) as context:  # type: ignore[attr-defined]
+        page = context.new_page()
+        _login(page, env)
+        page.goto("/admin/keys/create")
+        page.wait_for_selector("form[action='/admin/keys/create']")  # type: ignore[attr-defined]
+        _fill_identity(page, env, js_mode=True)
+        _open_manual_details(page)
+        _client_box(page, "client_use_hermes").check()
+        _select_explicit_provider(page, str(env["chat_provider"]))
+        page.fill('textarea[name="allowed_models"]', "gpt-test")  # type: ignore[attr-defined]
+        page.locator('input[name="allow_all_models"]').uncheck()  # type: ignore[attr-defined]
+        page.locator('input[name="allow_all_endpoints"]').uncheck()  # type: ignore[attr-defined]
+        page.fill('input[name="cost_limit_eur"]', "500")  # type: ignore[attr-defined]
+        page.select_option('select[name="email_delivery_mode"]', "send-now")  # type: ignore[attr-defined]
+
+        def row(label: str) -> str:
+            return page.locator(  # type: ignore[attr-defined]
+                f'[data-summary-row="{label}"] dd'
+            ).inner_text()
+
+        client = row("Client setup")
+        assert "Hermes" in client
+        assert "None - plain API key only" not in client
+        assert row("Models") == "gpt-test"
+        assert str(env["chat_provider"]) in row("Providers")
+        # The effective preset endpoint union: the checked client's chat
+        # endpoint is included although no explicit endpoint list was
+        # typed.
+        assert _CHAT_ENDPOINT in row("Endpoints")
+        assert row("Lifetime limits") == (
+            "cost 500 EUR, tokens unlimited, requests unlimited"
+        )
+        assert row("Validity") == "30 days"
+        assert "No browser plaintext" in row("After creation")
+        _screenshot(page, "229c-create-summary-live.png")
+
+
+# ---------------------------------------------------------------------------
+# 8) One-time secret / delivery truth: warnings track the selected mode
+# ---------------------------------------------------------------------------
+
+
+def test_delivery_one_time_warnings_track_mode(chromium, env229b) -> None:
+    env = env229b
+    with chromium.new_context(base_url=env["base_url"]) as context:  # type: ignore[attr-defined]
+        page = context.new_page()
+        _login(page, env)
+        page.goto("/admin/keys/create")
+        page.wait_for_selector("form[action='/admin/keys/create']")  # type: ignore[attr-defined]
+        _fill_identity(page, env, js_mode=True)
+
+        emailless = page.locator('[data-delivery-warning-emailless]')  # type: ignore[attr-defined]
+        email = page.locator('[data-delivery-warning-email]')  # type: ignore[attr-defined]
+
+        # Default mode (none): the key is shown ONCE in the browser.
+        assert emailless.is_visible()
+        warning = emailless.inner_text()
+        assert "shown in the browser ONCE" in warning
+        assert "copy it before leaving" in warning.lower()
+        assert not email.is_visible()
+        after = page.locator(  # type: ignore[attr-defined]
+            '[data-summary-row="After creation"] dd'
+        ).inner_text()
+        assert after.startswith("No email.")
+
+        # Send-now: the owner email is the channel, no browser plaintext.
+        page.select_option('select[name="email_delivery_mode"]', "send-now")  # type: ignore[attr-defined]
+        assert email.is_visible()
+        assert not emailless.is_visible()
+        after = page.locator(  # type: ignore[attr-defined]
+            '[data-summary-row="After creation"] dd'
+        ).inner_text()
+        assert "No browser plaintext" in after
+
+
+# ---------------------------------------------------------------------------
+# 9) Per-control plain-language help with accessible relationships
+# ---------------------------------------------------------------------------
+
+
+def test_advanced_per_field_help_relationships(chromium, env229b) -> None:
+    env = env229b
+    with chromium.new_context(base_url=env["base_url"]) as context:  # type: ignore[attr-defined]
+        page = context.new_page()
+        _login(page, env)
+        page.goto("/admin/keys/create")
+        page.wait_for_selector("form[action='/admin/keys/create']")  # type: ignore[attr-defined]
+
+        # Open every advanced group the way an operator would.
+        for heading_id in ADVANCED_DETAIL_HEADING_IDS:
+            page.locator(f"#{heading_id}").click()  # type: ignore[attr-defined]
+
+        for help_id in (
+            "create-help-rate_limit_requests_per_minute",
+            "create-help-rate_limit_window_seconds",
+            "create-help-chat_streaming_live_burn_cost_margin_eur",
+            "create-help-external_tool_max_calls",
+        ):
+            assert page.locator(f"#{help_id}").count() == 1  # type: ignore[attr-defined]
+
+        for selector, help_id in (
+            (
+                'input[name="rate_limit_requests_per_minute"]',
+                "create-help-rate_limit_requests_per_minute",
+            ),
+            (
+                'input[name="rate_limit_window_seconds"]',
+                "create-help-rate_limit_window_seconds",
+            ),
+            (
+                "#create-chat-streaming-live-burn-cost-margin",
+                "create-help-chat_streaming_live_burn_cost_margin_eur",
+            ),
+            (
+                'input[name="external_tool_max_calls"]',
+                "create-help-external_tool_max_calls",
+            ),
+        ):
+            described_by = (
+                page.locator(selector).get_attribute("aria-describedby") or ""  # type: ignore[attr-defined]
+            )
+            assert help_id in described_by
+
+        # Friendly labels replace the programmer vocabulary.
+        assert "Allowed provider tools" in _flat(page)
+        assert "Reviewed capability IDs" not in _flat(page)
+        page.screenshot(  # type: ignore[attr-defined]
+            path=str(SCREENSHOT_DIR / "229c-create-advanced-help.png"), full_page=True
+        )
+
+
+# ---------------------------------------------------------------------------
+# 10) no-JS honesty: live summary withheld, never shown stale
+# ---------------------------------------------------------------------------
+
+
+def test_nojs_withholds_stale_live_summary(chromium, env229b) -> None:
+    env = env229b
+    with chromium.new_context(
+        base_url=env["base_url"], java_script_enabled=False
+    ) as context:  # type: ignore[attr-defined]
+        page = context.new_page()
+        _login(page, env)
+        page.goto("/admin/keys/create")
+        page.wait_for_selector("form[action='/admin/keys/create']")  # type: ignore[attr-defined]
+        _fill_identity(page, env, js_mode=False)
+
+        # Without scripts the live summary cannot be computed, so the
+        # server withholds it instead of presenting stale initial
+        # defaults as a current preview.
+        assert page.locator("dl.access-summary").is_hidden()  # type: ignore[attr-defined]
+        assert "withheld" in _flat(page)

@@ -2093,3 +2093,36 @@ identity distinct from the frozen qualification evidence.
   moved to the summary, and the containing collapsed group opened. Entered
   NONSECRET values are preserved; the reference ID enables support lookup;
   validation refusals create nothing (verified from the database side).
+
+### 21.6 229-c: live summary, delivery truth, pinpoint errors, per-field help
+
+- **Live access summary** — the summary before creation recomputes from the
+  CURRENT visible choices on every relevant change (client setup, models,
+  providers, endpoints including the effective preset union, lifetime
+  limits, validity, delivery effect), so it never shows the initial
+  defaults as if current. It is client-side information only; the server's
+  validation remains authoritative. With scripts disabled the live summary
+  is withheld with an explanation that the entered fields govern, instead
+  of displaying stale defaults; the no-JS create path and final result are
+  unchanged.
+- **One-time secret and delivery truth** — with no email the row states the
+  real behavior: the key is shown in the browser ONCE, copy it before
+  leaving, it cannot be retrieved later, and the warning is displayed for
+  that mode. Send-now and enqueue use the owner email as the delivery
+  channel and suppress the browser plaintext; the wording never promises
+  successful delivery before it happens.
+- **Pinpoint numeric errors** — an invalid numeric value flags ONLY the
+  control that failed (valid blank fields are never marked), preserves the
+  entered nonsecret value, opens the containing group, focuses the field,
+  and gives the field's real units plus its exact blank/zero/default
+  behavior: blank lifetime quota means no total ceiling, blank speed values
+  use the shown deployment defaults, blank queue bounds use the shown
+  defaults, and zero is invalid for positive limits but valid for the
+  existing safety-margin controls. Unknown failures get an honest safe
+  fallback with a reference ID, never raw exception text.
+- **Per-control plain-language help** — every editable advanced control has
+  its own adjacent help with an accessible `aria-describedby` relationship
+  stating what it controls, its units, what blank/zero do, and an example
+  where useful; raw Redis/null/schema/fence/capability-ID vocabulary and
+  source names sit in optional Technical details, and all advanced
+  functions remain available.

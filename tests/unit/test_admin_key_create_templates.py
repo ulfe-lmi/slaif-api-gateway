@@ -128,9 +128,12 @@ def test_create_form_template_includes_csrf_and_no_secret_fields(monkeypatch) ->
     assert str(settings.TRUSTED_CALIBRATION_MAX_REQUESTS) in html
     assert str(settings.TRUSTED_CALIBRATION_MAX_VALID_DAYS) in html
     assert "key plaintext is shown once" not in html.lower()
-    assert "None - show key once in browser" in html
+    assert "None - key shown once in browser after creation" in html
     assert "Email delivery mode" in html
-    assert "Send-now and enqueue suppress browser plaintext display" in html
+    assert (
+        "Send-now and enqueue use the owner email as the delivery channel"
+        " and suppress the browser plaintext" in html
+    )
     assert "Chat Completions streaming live-burn monitoring" in html
     assert 'name="chat_streaming_live_burn_enabled" value="true" checked' in html
     assert 'name="chat_streaming_live_burn_cost_margin_eur" value="0"' in html
@@ -392,11 +395,11 @@ def test_create_form_renders_lazy_throttling_defaults_ceilings_and_inactive_note
     # Default selection is immediate rejection with usable wait inputs.
     assert (
         'name="lazy_throttling_mode" value="reject" data-lazy-throttling-mode '
-        'aria-describedby="create-lazy-help" checked'
+        'aria-describedby="create-help-lazy_throttling_mode" checked'
         in html
     )
     assert (
-        'value="wait" data-lazy-throttling-mode aria-describedby="create-lazy-help" checked'
+        'value="wait" data-lazy-throttling-mode aria-describedby="create-help-lazy_throttling_mode" checked'
         not in html
     )
     assert 'name="lazy_throttling_max_wait_seconds" value="30"' in html
@@ -405,8 +408,10 @@ def test_create_form_renders_lazy_throttling_defaults_ceilings_and_inactive_note
     assert "data-lazy-throttling-field disabled" not in html
     # Operator ceilings and plain queue/deadline/disconnect help.
     # Linked help explains the actual rendered defaults and ceilings.
-    assert "may not exceed the operator ceilings: 120s maximum wait, 16 waiting per key" in html
-    assert "blank uses the shown defaults" in html
+    # 229-c: per-field help states each control's own ceiling.
+    assert "the value may not exceed the operator ceiling of 120 seconds." in html
+    assert "the value may not exceed the operator ceiling of 16." in html
+    assert "Blank uses the shown default" in html
     assert (
         "queue full or deadline returns 429, and disconnected requests are canceled"
         in html
@@ -430,5 +435,7 @@ def test_create_form_lazy_defaults_fit_lowered_operator_ceilings(monkeypatch) ->
 
     assert 'name="lazy_throttling_max_wait_seconds" value="20"' in html
     assert 'name="lazy_throttling_max_waiting_requests" value="1"' in html
-    assert "may not exceed the operator ceilings: 20s maximum wait, 1 waiting per key" in html
-    assert "blank uses the shown defaults" in html
+    # 229-c: per-field help states each control's own ceiling.
+    assert "the value may not exceed the operator ceiling of 20 seconds." in html
+    assert "the value may not exceed the operator ceiling of 1." in html
+    assert "Blank uses the shown default" in html

@@ -1,10 +1,20 @@
 # 2026-11-27 — Key creation uses active client profiles and explains its choices
 
-OAP objective 229-a. Scope: the admin GUI key-creation form now issues key
-pins from the ACTIVE installed client-module DATA snapshot (not from frozen
-qualification constants), the four "Who will use this key?" choices carry
-field-level help, conflict rules fail closed with preserved values, and the
-result page explains which client module each created key is pinned to.
+OAP objective 229 (three continuations on the same PR #403: 229-a, 229-b,
+229-c). CURRENT end state (229-c, 2026-11-27): the admin GUI key-creation
+form shows a plain-language access summary that tracks the CURRENT visible
+choices (client setup, models, providers, endpoints including the effective
+preset union, lifetime limits, validity, and the delivery effect) and is
+withheld with an explanation when scripts are disabled; the one-time secret
+and delivery text states the real show-once / copy-before-leaving / no-
+later-retrieval behavior and matches the actual email workflow; invalid
+numeric inputs pinpoint ONLY the actually invalid control with the field's
+real units and exact blank/zero/default behavior; and every editable
+advanced control has its own adjacent plain-language help with accessible
+`aria-describedby` relationships. The 229-a and 229-b sections below are
+historical continuations of this same objective, preserved as dated
+evidence; where a later continuation supersedes an earlier description, the
+latest one governs.
 
 ## Root cause
 
@@ -295,3 +305,120 @@ are MOCKED; no real inference, no real mail, no production `DATABASE_URL`.
   full 128-worker harness. This continuation makes no live-provider
   qualification claim; the qualified historical records remain the dated
   evidence.
+
+## 229-c continuation (2026-11-27, same PR #403)
+
+### What ROOT's independent review of 229-b still blocked
+
+1. **Stale live summary** — the `.access-summary` rendered only
+   server-side at form load and stayed at the initial defaults while the
+   operator changed client, model, provider, lifetime limits, validity, or
+   delivery before submit.
+2. **Delivery truth** — the summary said "No email; the key stays available
+   in the dashboard", which is false: with no email the key is shown in the
+   browser ONCE and cannot be retrieved later; the email-mode text also had
+   to match the actual send-now/enqueue workflow without promising delivery
+   before it happens.
+3. **Numeric errors flagged every speed control** — the numeric catch
+   re-parsed groups and marked ALL four speed controls for a single
+   requests=`abc`; a then-committed browser assertion codified that
+   mistake.
+4. **Per-field help not actually finished** — advanced fields still showed
+   group paragraphs and programmer text (for example "Redis counters
+   separate from PostgreSQL hard quota limits") instead of the reviewed
+   copy next to EACH editable control.
+
+### 229-c implementation (form, focused helpers, template, tests, docs)
+
+1. **Live summary** — the summary recomputes client-side from the current
+   form state on every relevant change (including the effective preset
+   endpoint union) using safe text rendering; it is informational only and
+   server validation remains authoritative. Under no-JS the summary is
+   withheld with an explanation that the entered fields govern, and the
+   accepted no-JS create path and final result are unchanged. Two real
+   template bugs were caught by the new browser tests and fixed: the JSON
+   data script was HTML-escaped by Jinja (breaking `JSON.parse`) and is now
+   emitted unescaped with `</` escaping, and the delivery row read the
+   policy-source select instead of the delivery select.
+2. **One-time/delivery truth** — the "after creation" row states the real
+   behavior per mode: no email, the key is shown in the browser once, copy
+   it before leaving, no later retrieval (the one-time warning is displayed
+   for that mode); send-now/enqueue, the owner email is the delivery
+   channel and the browser plaintext is suppressed (the email warning is
+   displayed instead). No successful delivery is promised before it
+   happens.
+3. **Pinpoint numeric failures** — `_locate_key_create_numeric_failures`
+   reports typed field/call-site context so ONLY the actually invalid
+   control is flagged and valid blank fields stay valid (parser acceptance
+   law unchanged); `KEY_CREATE_NUMERIC_FIELD_REMEDIES` gives each field its
+   real units and exact blank/zero/default behavior (blank lifetime quota =
+   no total ceiling; blank speed values = the shown deployment defaults;
+   blank queue bounds = the shown defaults; zero invalid for positive
+   limits, valid for the existing safety-margin controls). The entered
+   NONSECRET value is preserved, the containing group opens and focus moves
+   to the field, single-field details anchor to that control while
+   multi-field details keep an empty anchor, and unknown failures get an
+   honest safe fallback with a reference ID instead of raw exception text,
+   reusing the existing settings-aware redaction.
+4. **Per-control plain-language help** — every editable advanced control
+   carries its own adjacent plain-language help with accessible
+   `aria-describedby` relationships (the former group-level
+   `create-limits-help` / `create-rate-limit-help` paragraphs are replaced
+   by per-field help); raw Redis/null/schema/fence/capability-ID vocabulary
+   and source names moved into optional Technical details; the copy was
+   checked against the runtime (counting-window semantics, margin threshold
+   direction) and relabeled honestly (the old "Margins are positive safety
+   cushions" wording replaced by signed-margin text, mode relabels,
+   "Allowed provider tools" legend); all advanced functions remain
+   available.
+
+### 229-c evidence (exact)
+
+Environment: owned disposable PostgreSQL (module fixture, self-
+tearing-down), repo venv, Playwright Chromium against local uvicorn on a
+free loopback port. Providers and email MOCKED; no real inference, no real
+mail, no production `DATABASE_URL`.
+
+- `tests/browser/test_admin_key_create_229b.py` — **12 passed** (27.43 s):
+  the eight 229-b tests (one corrected: the invalid requests=`abc` case
+  now asserts ONLY the flagged control, the per-field remedy with real
+  units and default behavior, the preserved nonsecret value, then
+  correction and successful issuance) plus four NEW tests —
+  `test_live_access_summary_reflects_current_choices` (row values track the
+  current choices, including the preset endpoints),
+  `test_delivery_one_time_warnings_track_mode` (one-time warning for the
+  no-email mode, email warning for send-now, "No browser plaintext"),
+  `test_advanced_per_field_help_relationships` (four opened advanced
+  groups, four help ids, four `aria-describedby` references, jargon out of
+  the primary help), and `test_nojs_withholds_stale_live_summary`
+  (summary withheld with an explanation, no stale defaults displayed).
+- Reused unchanged suites re-run once after the template/JS change, the
+  eight-file GUI/unit suite — **556 passed** (230.98 s)
+  (`test_admin_key_create_routes`, `test_key_create_client_use_presets`,
+  `test_admin_key_policy_207`, `test_admin_key_create_email_delivery_routes`,
+  `test_admin_key_create_templates`, `test_admin_gui_completion_219`,
+  `test_demo_web`, `test_admin_usability_inventory`), including
+  `test_admin_key_create_routes.py` 39 passed with the corrected
+  `test_create_numeric_error_flags_only_the_invalid_control`.
+- REUSED unchanged (not re-run): `test_admin_key_create_client_use_postgres.py`
+  13 passed, the rev16/17 GUI pin and readiness evidence, and 229-b's
+  then-620 eight-file count (historical, not summed with the current 556).
+- Fixture corrections in this continuation (assertions that encoded the old
+  behavior): `test_admin_key_create_229b.py` (four falsely highlighted
+  speed controls → the single flagged control),
+  `test_admin_key_create_templates.py` (stale summary copy, per-field help
+  ids, per-field ceiling wording), `test_key_create_client_use_presets.py`
+  (detail anchoring: a single field anchors the control, multiple fields
+  keep an empty anchor), `test_admin_key_policy_207.py` (per-field help
+  ids; the rate-limit help lives in a collapsed group and must be opened
+  before asserting its text).
+- Doc guards `test_documentation_inventory`,
+  `test_documentation_contract_drift`, `test_documentation_asof` —
+  **44 passed**; `ruff check` on all changed Python files — all checks
+  passed; `git diff --check` — clean.
+- Screenshots in the owned task directory (for root review):
+  `229c-create-summary-live.png`, `229c-create-one-field-error.png`,
+  `229c-create-advanced-help.png`.
+- Not run: no real provider traffic, no real email, no production DB, no
+  full 128-worker harness; this continuation makes no live-provider
+  qualification claim.
