@@ -10648,13 +10648,18 @@ _KEY_CREATE_DELIVERY_SUMMARY_TEXTS: dict[str, str] = {
     ),
     "send-now": (
         "No browser plaintext. The owner email is sent immediately after "
-        "creation; if the send fails, the result page says so and the key "
-        "cannot be resent."
+        "creation; if the send fails, the result page says so. Check the "
+        "Email delivery result and use the existing retry action only "
+        "when it is permitted; if delivery is ambiguous or the secret is "
+        "unavailable, rotate or reissue the key."
     ),
     "enqueue": (
         "No browser plaintext. The owner email is queued after creation "
         "and sent in the background; if queueing or the send fails, the "
-        "failure is recorded and the key cannot be resent."
+        "failure is recorded. Check the Email delivery result and use the "
+        "existing retry action only when it is permitted; if delivery is "
+        "ambiguous or the secret is unavailable, rotate or reissue the "
+        "key."
     ),
 }
 

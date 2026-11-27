@@ -2100,17 +2100,25 @@ identity distinct from the frozen qualification evidence.
   CURRENT visible choices on every relevant change (client setup, models,
   providers, endpoints including the effective preset union, lifetime
   limits, validity, delivery effect), so it never shows the initial
-  defaults as if current. It is client-side information only; the server's
-  validation remains authoritative. With scripts disabled the live summary
-  is withheld with an explanation that the entered fields govern, instead
-  of displaying stale defaults; the no-JS create path and final result are
-  unchanged.
+  defaults as if current. The primary widget path is covered too: Add/
+  Remove selections in the policy selector's available/selected lists and
+  server-side search choices update the summary immediately through a
+  shared post-mutation notification. It is client-side information only;
+  the server's validation remains authoritative. With scripts disabled the
+  live summary is withheld with an explanation that the entered fields
+  govern, instead of displaying stale defaults; the no-JS create path and
+  final result are unchanged.
 - **One-time secret and delivery truth** — with no email the row states the
   real behavior: the key is shown in the browser ONCE, copy it before
   leaving, it cannot be retrieved later, and the warning is displayed for
   that mode. Send-now and enqueue use the owner email as the delivery
   channel and suppress the browser plaintext; the wording never promises
-  successful delivery before it happens.
+  successful delivery before it happens. For a failed or queued email the
+  guidance states the real recovery law: check the Email delivery result,
+  use the existing retry action only when sendability permits it (sent,
+  sending, ambiguous, consumed, or expired secrets are never retried), and
+  rotate or reissue the key if delivery is ambiguous or the secret is
+  unavailable.
 - **Pinpoint numeric errors** — an invalid numeric value flags ONLY the
   control that failed (valid blank fields are never marked), preserves the
   entered nonsecret value, opens the containing group, focuses the field,

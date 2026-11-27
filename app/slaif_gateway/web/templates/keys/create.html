@@ -520,8 +520,8 @@
         </select>
       </label>
       <p class="warning-text" data-delivery-warning-emailless {% if form.email_delivery_mode in ("send-now", "enqueue") %}hidden{% endif %}>The key will be shown in the browser ONCE after creation. Copy it before leaving - the saved key record cannot recover the plaintext later.</p>
-      <p class="warning-text" data-delivery-warning-email {% if form.email_delivery_mode in ("none", "pending") or not form.email_delivery_mode %}hidden{% endif %}>No browser plaintext: the owner email is the delivery channel. If the email cannot be sent or queued, the result page says so and the key cannot be resent.</p>
-      <p class="field-help" id="create-delivery-help">Choose how the newly generated secret is received. With no email it is shown ONCE after creation, so copy it before leaving; the saved key record does not let you recover the plaintext later. Send-now and enqueue use the owner email as the delivery channel and suppress the browser plaintext; if the email cannot be sent or queued, the result page says so and the key cannot be resent. Celery payloads contain IDs only, and provider keys are never involved.</p>
+      <p class="warning-text" data-delivery-warning-email {% if form.email_delivery_mode in ("none", "pending") or not form.email_delivery_mode %}hidden{% endif %}>No browser plaintext: the owner email is the delivery channel. If the email cannot be sent or queued, the result page says so; check the Email delivery result and use the existing retry action only when it is permitted, and rotate or reissue the key if delivery is ambiguous or the secret is unavailable.</p>
+      <p class="field-help" id="create-delivery-help">Choose how the newly generated secret is received. With no email it is shown ONCE after creation, so copy it before leaving; the saved key record does not let you recover the plaintext later. Send-now and enqueue use the owner email as the delivery channel and suppress the browser plaintext; if the email cannot be sent or queued, the result page says so - check the Email delivery result and use the existing retry action only when it is permitted, and rotate or reissue the key if delivery is ambiguous or the secret is unavailable. Celery payloads contain IDs only, and provider keys are never involved.</p>
       <label>
         Audit reason
         <input name="reason" value="{{ form.reason }}" required maxlength="512" autocomplete="off" placeholder="Required reason" aria-describedby="create-reason-help" {{ field_error_attrs("reason") }}>
@@ -901,6 +901,18 @@
   ]) {
     const el = document.querySelector(selector);
     if (el) el.addEventListener("input", refresh);
+  }
+  // Add/Remove/search selections in the policy selector set these
+  // manual textareas programmatically (no input event); the shared
+  // post-mutation notification keeps the live summary in step with the
+  // submitted values.
+  for (const selector of [
+    'textarea[name="allowed_models"]',
+    'textarea[name="allowed_providers"]',
+    'textarea[name="allowed_endpoints"]',
+  ]) {
+    const el = document.querySelector(selector);
+    if (el) el.addEventListener("slaif:policy-manual-synced", refresh);
   }
   document.addEventListener("create-doc-mode", () => refresh());
   refresh();

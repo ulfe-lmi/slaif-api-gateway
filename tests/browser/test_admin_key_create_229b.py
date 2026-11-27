@@ -28,7 +28,11 @@ retaining the still-valid 229-b coverage in the same file:
 9. per-control plain-language help with accessible aria-describedby
    relationships for the advanced fields;
 10. no-JS honesty: the live summary is withheld rather than shown stale,
-    without regressing the no-JS create path.
+    without regressing the no-JS create path;
+11. 229-d: the PRIMARY widget path — choosing in the real available lists
+    with the Add/Remove buttons and the server-side search selection —
+    updates the submitted manual values AND the visible live summary
+    immediately (the 229-c preview missed this programmatic-sync path).
 
 Safety: only synthetic fixture values are read; session/CSRF values are
 used transiently for login and never logged or screenshotted.
@@ -1156,3 +1160,114 @@ def test_nojs_withholds_stale_live_summary(chromium, env229b) -> None:
         # defaults as a current preview.
         assert page.locator("dl.access-summary").is_hidden()  # type: ignore[attr-defined]
         assert "withheld" in _flat(page)
+
+
+# ---------------------------------------------------------------------------
+# 11) 229-d: primary widget path (real available lists + Add/Remove buttons
+#     + server-side search selection) updates the live summary immediately
+# ---------------------------------------------------------------------------
+
+
+def test_policy_selector_widgets_update_live_summary(chromium, env229b) -> None:
+    """Choosing in the ACTUAL available/selected widgets — real option
+    clicks plus the Add/Remove buttons, and the server-side search
+    selection — must update BOTH the submitted manual values and the
+    visible live summary immediately. The 229-c preview missed this path:
+    the policy selector sets the manual textareas programmatically after
+    Add/Remove/search, without any input event."""
+    env = env229b
+    with chromium.new_context(base_url=env["base_url"]) as context:  # type: ignore[attr-defined]
+        page = context.new_page()
+        _login(page, env)
+        page.goto("/admin/keys/create")
+        page.wait_for_selector("form[action='/admin/keys/create']")  # type: ignore[attr-defined]
+        _fill_identity(page, env, js_mode=True)
+        _client_box(page, "client_use_hermes").check()
+
+        def row(label: str) -> str:
+            return page.locator(  # type: ignore[attr-defined]
+                f'[data-summary-row="{label}"] dd'
+            ).inner_text()
+
+        def manual(name: str) -> str:
+            return page.locator(  # type: ignore[attr-defined]
+                f'textarea[name="{name}"]'
+            ).input_value()
+
+        def click_option(select_id: str, option_selector: str) -> None:
+            # Browsers scroll a freshly focused select into view during
+            # mousedown; Playwright's fixed-coordinate mouseup then lands on
+            # the pre-scroll position and the click gesture (and its change
+            # event) no longer completes on the option. Keep the whole
+            # select in view before the click, as a real operator would.
+            page.evaluate(  # type: ignore[attr-defined]
+                f"document.querySelector('#{select_id}').scrollIntoView({{block:'start'}})"
+            )
+            page.locator(f"#{select_id} {option_selector}").click()  # type: ignore[attr-defined]
+
+        # The Hermes preset preselected its required chat endpoint, so the
+        # model search is currently scoped to model-backed chat endpoints
+        # only; adding the responses endpoint first (a real widget Add)
+        # brings the qwen route model into the searchable scope.
+        assert _CHAT_ENDPOINT in manual("allowed_endpoints")
+        click_option('create-policy-endpoints-available', 'option[value="/v1/responses"]')
+        page.locator('button[data-policy-add="endpoints"]').click()
+        assert "/v1/responses" in manual("allowed_endpoints")
+        assert "/v1/responses" in row("Endpoints")
+        assert _CHAT_ENDPOINT in row("Endpoints")  # preset union survives
+
+        # --- models: server-side search selection (allow-all providers is
+        #     still checked, so the provider scope is unscoped) ---
+        page.locator('input[name="allow_all_models"]').uncheck()
+        assert row("Models") == "None yet"
+        page.fill(  # type: ignore[attr-defined]
+            'input[data-policy-model-search]', str(env["qwen_model"])
+        )
+        model_result = page.locator(  # type: ignore[attr-defined]
+            '[data-policy-model-search-results] li[role="option"]'
+        ).first
+        model_result.wait_for(state="visible", timeout=15000)
+        model_result.click()
+        assert manual("allowed_models") == str(env["qwen_model"])
+        assert row("Models") == str(env["qwen_model"])
+
+        # --- models: real available-list selection + Add button ---
+        click_option('create-policy-models-available', 'option[data-model-token="gpt-test"]')
+        page.locator('button[data-policy-add="models"]').click()
+        assert "gpt-test" in manual("allowed_models")
+        assert str(env["qwen_model"]) in manual("allowed_models")
+        assert "gpt-test" in row("Models")
+        assert str(env["qwen_model"]) in row("Models")
+
+        # --- models: real selected-list choice + Remove button ---
+        click_option('create-policy-models-selected', 'option[value="gpt-test"]')
+        page.locator('button[data-policy-remove="models"]').click()
+        assert "gpt-test" not in manual("allowed_models")
+        assert manual("allowed_models") == str(env["qwen_model"])
+        assert "gpt-test" not in row("Models")
+        assert row("Models") == str(env["qwen_model"])
+
+        # --- providers: real available-list selection + Add/Remove ---
+        assert row("Providers") == "All enabled providers"
+        page.locator('input[name="allow_all_providers"]').uncheck()
+        assert row("Providers") == "None selected"
+        click_option('create-policy-providers-available', f'option[value="{env["chat_provider"]}"]')
+        page.locator('button[data-policy-add="providers"]').click()
+        assert manual("allowed_providers") == str(env["chat_provider"])
+        assert row("Providers") == str(env["chat_provider"])
+        click_option('create-policy-providers-selected', f'option[value="{env["chat_provider"]}"]')
+        page.locator('button[data-policy-remove="providers"]').click()
+        assert manual("allowed_providers") == ""
+        assert row("Providers") == "None selected"
+
+        # --- endpoints: Remove around the Hermes preset union ---
+        click_option('create-policy-endpoints-selected', 'option[value="/v1/responses"]')
+        page.locator('button[data-policy-remove="endpoints"]').click()
+        assert "/v1/responses" not in manual("allowed_endpoints")
+        assert "/v1/responses" not in row("Endpoints")
+        assert _CHAT_ENDPOINT in row("Endpoints")  # ownership preserved
+
+        # The ACTUAL summary element with the current selections visible.
+        page.locator(  # type: ignore[attr-defined]
+            'section[aria-labelledby="create-access-summary-heading"]'
+        ).screenshot(path=str(SCREENSHOT_DIR / "229d-create-summary-widget-path.png"))

@@ -134,6 +134,13 @@ def test_create_form_template_includes_csrf_and_no_secret_fields(monkeypatch) ->
         "Send-now and enqueue use the owner email as the delivery channel"
         " and suppress the browser plaintext" in html
     )
+    # 229-d: recovery guidance must match the actual retry law - check
+    # the Email delivery result, retry ONLY when permitted, and rotate or
+    # reissue when delivery is ambiguous or the secret is unavailable.
+    assert "check the Email delivery result" in html
+    assert "only when it is permitted" in html
+    assert "rotate or reissue the key" in html
+    assert "the key cannot be resent" not in html
     assert "Chat Completions streaming live-burn monitoring" in html
     assert 'name="chat_streaming_live_burn_enabled" value="true" checked' in html
     assert 'name="chat_streaming_live_burn_cost_margin_eur" value="0"' in html

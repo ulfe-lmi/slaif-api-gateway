@@ -1,20 +1,26 @@
 # 2026-11-27 — Key creation uses active client profiles and explains its choices
 
-OAP objective 229 (three continuations on the same PR #403: 229-a, 229-b,
-229-c). CURRENT end state (229-c, 2026-11-27): the admin GUI key-creation
-form shows a plain-language access summary that tracks the CURRENT visible
-choices (client setup, models, providers, endpoints including the effective
-preset union, lifetime limits, validity, and the delivery effect) and is
-withheld with an explanation when scripts are disabled; the one-time secret
-and delivery text states the real show-once / copy-before-leaving / no-
-later-retrieval behavior and matches the actual email workflow; invalid
-numeric inputs pinpoint ONLY the actually invalid control with the field's
-real units and exact blank/zero/default behavior; and every editable
-advanced control has its own adjacent plain-language help with accessible
-`aria-describedby` relationships. The 229-a and 229-b sections below are
-historical continuations of this same objective, preserved as dated
-evidence; where a later continuation supersedes an earlier description, the
-latest one governs.
+OAP objective 229 (four continuations on the same PR #403: 229-a, 229-b,
+229-c, 229-d). CURRENT end state (229-d, 2026-11-27): the admin GUI
+key-creation form shows a plain-language access summary that tracks the
+CURRENT visible choices (client setup, models, providers, endpoints
+including the effective preset union, lifetime limits, validity, and the
+delivery effect) — including the primary widget path, where Add/Remove
+selections in the policy selector's real available/selected lists and the
+server-side search selection now update the summary immediately through a
+shared post-mutation notification — and is withheld with an explanation
+when scripts are disabled; the one-time secret and delivery text states
+the real show-once / copy-before-leaving / no-later-retrieval behavior and
+matches the actual email workflow, with the failed/queued-email recovery
+truth (check the Email delivery result, use the existing retry only when
+it is permitted, rotate or reissue the key if delivery is ambiguous or the
+secret is unavailable); invalid numeric inputs pinpoint ONLY the actually
+invalid control with the field's real units and exact blank/zero/default
+behavior; and every editable advanced control has its own adjacent plain-
+language help with accessible `aria-describedby` relationships. The 229-a,
+229-b, and 229-c sections below are historical continuations of this same
+objective, preserved as dated evidence; where a later continuation
+supersedes an earlier description, the latest one governs.
 
 ## Root cause
 
@@ -419,6 +425,88 @@ mail, no production `DATABASE_URL`.
 - Screenshots in the owned task directory (for root review):
   `229c-create-summary-live.png`, `229c-create-one-field-error.png`,
   `229c-create-advanced-help.png`.
+- Not run: no real provider traffic, no real email, no production DB, no
+  full 128-worker harness; this continuation makes no live-provider
+  qualification claim.
+
+## 229-d continuation (2026-11-27, same PR #403)
+
+Two bounded defects, both reproduced by root on the 229-c state:
+
+1. **Widget-path summary staleness (real browser blocker).** The policy
+   selector's primary interaction — selecting in the real available list
+   and pressing "Add selected ->", selecting in the selected list and
+   pressing "<- Remove selected", and choosing a server-side search
+   result — sets the manual textarea programmatically, and no DOM `input`
+   event fires. The 229-c live summary listened only for `input`/`change`
+   on the manual controls, so after a widget Add/Remove/search selection
+   the submitted value was correct but the visible summary stayed stale
+   (e.g. "Models: None yet" while the textarea already held the token).
+   Fix (code + template only): `policy-selector.js` now dispatches one
+   shared `slaif:policy-manual-synced` CustomEvent from
+   `syncManualFromSelected` — the single helper behind Add, Remove, and
+   the search `choose()` path — after every programmatic manual sync, and
+   the key-creation summary IIFE subscribes to that event and refreshes.
+   No observers, no polling, no framework; listeners only read form
+   state, so the event cannot recurse. Preset endpoint ownership,
+   document mode, and manual typing (real `input` events) are untouched.
+2. **Email recovery copy overstated the one-way rule.** The create-form
+   delivery warning/help and the server delivery summary texts said a
+   failed/queued email's key "cannot be resent" universally. The actual
+   law in `email_delivery_service.py`: the one-time secret is consumed
+   only after SMTP success; a failed safe attempt may still hold the
+   unconsumed secret; the existing retry-failed flow retries ONLY what
+   sendability permits (sent, sending, ambiguous, consumed, and expired
+   secrets are never retried). The copy now says: check the Email
+   delivery result, use the existing retry action only when it is
+   permitted, and rotate or reissue the key if delivery is ambiguous or
+   the secret is unavailable. Text-only; no workflow, endpoint, or
+   sendability change.
+
+A test-only finding (no source change): in the Playwright fixture, the
+browser scrolls a freshly focused multi-select into view during
+mousedown, and Playwright's fixed-coordinate mouseup then lands on the
+pre-scroll position, so the click gesture — and its `change` event — does
+not complete on the option even though the option is selected. The new
+test therefore keeps each widget select fully in view before option
+clicks, the same posture a real operator uses.
+
+Evidence (this continuation):
+- `tests/browser/test_admin_key_create_229b.py` — **13 passed** (31.47 s),
+  adding `test_policy_selector_widgets_update_live_summary`: a real
+  endpoint Add via the widgets, a server-side model search selection, a
+  model Add via the available list + Add button, a model Remove via the
+  selected list + Remove button, a provider Add/Remove cycle, and a
+  preset-endpoint Remove with Hermes ownership surviving — each step
+  asserting BOTH the submitted manual value and the visible summary row.
+  Screenshot `229d-create-summary-widget-path.png` in the owned task
+  directory.
+- Reused unchanged suites re-run once after the template/JS change, the
+  eight-file GUI/unit suite — **556 passed** (229.83 s)
+  (`test_admin_key_create_routes`, `test_key_create_client_use_presets`,
+  `test_admin_key_policy_207`, `test_admin_key_create_email_delivery_routes`,
+  `test_admin_key_create_templates`, `test_admin_gui_completion_219`,
+  `test_demo_web`, `test_admin_usability_inventory`).
+- `test_admin_key_create_routes.py` + `test_admin_key_create_templates.py`
+  — **47 passed** (19.04 s), with the new assertions that the create
+  template carries the recovery wording ("check the Email delivery
+  result", "only when it is permitted", "rotate or reissue the key") and
+  no longer claims "the key cannot be resent".
+- REUSED unchanged (not re-run): `test_admin_key_create_client_use_postgres.py`
+  13 passed, the rev16/17 GUI pin and readiness evidence, the email
+  sendability/retry integration coverage, and the security/accounting
+  suites.
+- Doc guards `test_documentation_inventory`,
+  `test_documentation_contract_drift`, `test_documentation_asof` —
+  **44 passed**; `ruff check` on all changed Python files — all checks
+  passed; `git diff --check` — clean.
+- Changed files: `app/slaif_gateway/api/admin.py` (delivery summary
+  texts), `app/slaif_gateway/web/templates/keys/create.html` (summary
+  subscription + delivery wording),
+  `app/slaif_gateway/web/static/js/policy-selector.js` (shared
+  post-mutation notification), `tests/browser/test_admin_key_create_229b.py`,
+  `tests/unit/test_admin_key_create_templates.py`, and the docs named in
+  the commit.
 - Not run: no real provider traffic, no real email, no production DB, no
   full 128-worker harness; this continuation makes no live-provider
   qualification claim.

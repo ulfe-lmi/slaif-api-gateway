@@ -409,6 +409,15 @@ existing-key migration, no behavior change for keys or requests created
 before the upgrade; rollback is the ordinary commit rollback with the same
 no-state-revert rules above.
 
+**229-d (same PR):** code and template-only changes (shared post-mutation
+notification so the live access summary tracks Add/Remove/search
+selections made in the policy selector widgets, and corrected
+email-recovery wording that matches the real retry-failed and sendability
+rules). No schema or migration, no preset-file/DATA change, no
+existing-key migration, no behavior change for keys or requests created
+before the upgrade; rollback is the ordinary commit rollback with the same
+no-state-revert rules above.
+
 ## Hermes/OpenCode Chat client profile upgrade and rollback (227-a)
 
 Chat client profiles (`hermes-0.22.5-chat-v1`, `opencode-1.19.3-chat-v1`)
